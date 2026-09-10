@@ -11,10 +11,11 @@
 import { snapshotDataUrl } from "../core/engine";
 import { newId } from "../core/types";
 import { useStore } from "../state/store";
+import { loadChat } from "../state/chatPersist";
 import { streamChatCompletion, userContent, type ToolSchema } from "./llmClient";
 import { sandbox } from "./sandbox";
 import { getTools, systemPrompt, toWireTools, type ToolContext, type ToolResult } from "./tools";
-import type { WireMessage } from "./types";
+import type { SessionEvent, WireMessage } from "./types";
 import { runMockTurn } from "./mockProvider";
 import { t } from "../i18n";
 
@@ -171,6 +172,40 @@ export function appendSnapshotFeedback(snap: { dataUrl: string; t: number; w: nu
     ],
   });
 }
+
+// --- chat persistence (survives page reloads) -----------------------------------
+
+/** Rebuild a provider-valid wire log from UI events: only user messages
+ *  (text + images) and assistant text — tool-call blocks cannot be reliably
+ *  reconstructed, and assistant text summaries keep enough context. */
+function wireFromEvents(events: SessionEvent[]): WireMessage[] {
+  const out: WireMessage[] = [];
+  for (const e of events) {
+    if (e.type === "user") out.push({ role: "user", content: userContent(e.text, e.images) });
+    else if (e.type === "assistant" && e.text.trim()) out.push({ role: "assistant", content: e.text });
+  }
+  return out;
+}
+
+/** Show a previously persisted transcript and seed the model context with it. */
+export function restoreSession(events: SessionEvent[]): void {
+  if (useStore.getState().agentState === "running") return;
+  wireLog = wireFromEvents(events);
+  useStore.setState({ session: events, agentStep: 0 });
+}
+
+// On boot, bring back the last conversation so chat history survives reloads.
+void (async () => {
+  try {
+    const events = await loadChat();
+    if (events.length > 0 && useStore.getState().session.length === 0 && useStore.getState().agentState !== "running") {
+      restoreSession(events);
+      useStore.getState().sessionPush({ id: newId("e"), type: "notice", text: t("chat.restored") });
+    }
+  } catch {
+    /* no persisted chat — start empty */
+  }
+})();
 
 function prettify(argsJson: string): string {
   try {

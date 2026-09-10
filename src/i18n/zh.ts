@@ -99,6 +99,8 @@ export const zh: Record<string, string> = {
   "inspector.background": "背景色",
   "inspector.onFrameScripts": "onFrame 脚本",
   "inspector.removeScript": "移除",
+  "inspector.hookAdd": "添加 onFrame 脚本",
+  "inspector.hookHint": "每帧运行：(t, f, state) => {…}。必须自包含 — 用 f.find(名字) 查 id、计数存到 state；外部变量刷新后会丢失。",
   "inspector.keyedBadge": "已打帧",
 
   // Export dialog
@@ -144,6 +146,10 @@ export const zh: Record<string, string> = {
   "chat.stepLimit": "已达到步数上限（{n}）— 发送消息可继续。",
   "chat.removeImage": "移除",
   "chat.dropImages": "拖拽图片到此处以附加",
+  "chat.restored": "已恢复上次的对话记录。",
+
+  // Layout
+  "layout.resize": "拖动调整大小 · 双击恢复默认",
 
   // Script console
   "script.title": "脚本控制台",

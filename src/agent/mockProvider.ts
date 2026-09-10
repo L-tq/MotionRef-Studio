@@ -30,8 +30,9 @@ api.keyframes(ball, [
   { t: 4.5, position: [3.4, 0.6, 0], scale: [1, 1, 1] },
 ]);
 
-api.onFrame((time, f) => {
-  f.update(moon, { position: [Math.cos(time * 1.2) * 3, 1.6 + Math.sin(time * 2) * 0.4, Math.sin(time * 1.2) * 3] });
+api.onFrame((time, f, state) => {
+  state.moon ??= f.find("Moon"); // hooks must be self-contained (survive reload)
+  f.update(state.moon, { position: [Math.cos(time * 1.2) * 3, 1.6 + Math.sin(time * 2) * 0.4, Math.sin(time * 1.2) * 3] });
 });
 
 api.setCamera({ position: [10, 6, 12], target: [0, 1, 0], fov: 42 });

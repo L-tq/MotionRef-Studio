@@ -99,6 +99,8 @@ export const en: Record<string, string> = {
   "inspector.background": "Background",
   "inspector.onFrameScripts": "onFrame scripts",
   "inspector.removeScript": "Remove",
+  "inspector.hookAdd": "Add onFrame hook",
+  "inspector.hookHint": "Runs every frame: (t, f, state) => {…}. Must be self-contained — ids via f.find(name), counters on state; outer variables do not survive a reload.",
   "inspector.keyedBadge": "Keyed",
 
   // Export dialog
@@ -144,6 +146,10 @@ export const en: Record<string, string> = {
   "chat.stepLimit": "Step limit ({n}) reached — send a message to continue.",
   "chat.removeImage": "Remove",
   "chat.dropImages": "Drop images to attach",
+  "chat.restored": "Previous chat restored.",
+
+  // Layout
+  "layout.resize": "Drag to resize · double-click to reset",
 
   // Script console
   "script.title": "Script console",

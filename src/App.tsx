@@ -5,12 +5,15 @@ import { Viewport } from "./ui/Viewport";
 import { Timeline } from "./ui/Timeline";
 import { Inspector } from "./ui/Inspector";
 import { ChatPanel } from "./ui/ChatPanel";
+import { Resizer } from "./ui/Resizer";
 import { SettingsDialog } from "./ui/SettingsDialog";
 import { ProjectsModal } from "./ui/ProjectsModal";
 import { ExportDialog } from "./ui/ExportDialog";
-import { useStore } from "./state/store";
+import { useStore, DEFAULT_LAYOUT } from "./state/store";
 import { isConfigured } from "./agent/types";
 import { useT } from "./i18n";
+
+const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
 
 export default function App() {
   const t = useT();
@@ -20,6 +23,8 @@ export default function App() {
   const exportOpen = useStore((s) => s.exportOpen);
   const lightbox = useStore((s) => s.lightbox);
   const toast = useStore((s) => s.toast);
+  const layout = useStore((s) => s.layout);
+  const setLayout = useStore((s) => s.setLayout);
 
   // First visit: open onboarding when the LLM is not configured.
   useEffect(() => {
@@ -89,13 +94,37 @@ export default function App() {
     <div className="app-shell">
       <TopBar />
       <div className="app-main">
-        <LeftPanel />
-        <div className="app-center">
+        <div className="region" style={{ width: layout.leftW }}>
+          <LeftPanel />
+        </div>
+        <Resizer
+          dir="col"
+          onMove={(e) => setLayout({ leftW: clamp(e.clientX, 170, 440) })}
+          onReset={() => setLayout({ leftW: DEFAULT_LAYOUT.leftW })}
+        />
+        <div className="app-center" style={{ gridTemplateRows: `1fr 5px ${layout.timelineH}px` }}>
           <Viewport />
+          <Resizer
+            dir="row"
+            onMove={(e) => setLayout({ timelineH: clamp(window.innerHeight - e.clientY, 110, window.innerHeight - 260) })}
+            onReset={() => setLayout({ timelineH: DEFAULT_LAYOUT.timelineH })}
+          />
           <Timeline />
         </div>
-        <div className="app-right">
-          <Inspector />
+        <Resizer
+          dir="col"
+          onMove={(e) => setLayout({ rightW: clamp(window.innerWidth - e.clientX, 280, 640) })}
+          onReset={() => setLayout({ rightW: DEFAULT_LAYOUT.rightW })}
+        />
+        <div className="app-right region" style={{ width: layout.rightW }}>
+          <div className="region" style={{ height: layout.inspH, flex: "0 0 auto" }}>
+            <Inspector />
+          </div>
+          <Resizer
+            dir="row"
+            onMove={(e) => setLayout({ inspH: clamp(e.clientY - 44, 100, window.innerHeight - 224) })}
+            onReset={() => setLayout({ inspH: DEFAULT_LAYOUT.inspH })}
+          />
           <ChatPanel />
         </div>
       </div>

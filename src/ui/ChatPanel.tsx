@@ -314,8 +314,9 @@ function SessionEventView({ event }: { event: SessionEvent }) {
 const SAMPLE_CODE = `// Try the sandboxed Scripting API:
 const id = api.add({ type: "torusKnot", name: "Knot", position: [0, 1.5, 0], color: "#3ddc97" });
 api.setDuration(4);
-api.onFrame((t, f) => {
-  f.update(id, { rotation: [t * 0.8, t * 1.2, 0] });
+api.onFrame((t, f, state) => {
+  state.id ??= f.find("Knot"); // hooks must be self-contained (survive reload)
+  f.update(state.id, { rotation: [t * 0.8, t * 1.2, 0] });
 });
 api.log("added", id);`;
 
@@ -326,7 +327,9 @@ api.find(name) -> id · api.params(type) · api.uniqueName(type)
 api.keyframes(id, [{t, position?, rotation?, scale?, color?, visible?, interp?}])
 api.setCamera({position?,target?,fov?})
 api.addCameraKeys([{t, position?, target?, fov?, interp?}])
-api.setDuration(s) · api.setFps(f) · api.onFrame((t, f) => {...})
+api.setDuration(s) · api.setFps(f)
+api.onFrame((t, f, state) => {...})  — must be self-contained: use state for
+  ids/counters (state.id ??= f.find("Name")); outer vars do NOT survive reload
 f.update(id, patch) / f.camera(patch) — affect the current frame only
 api.log(...) — print to the output pane`,
   zh: `api.add({type,name?,params?,position?,rotation?,scale?,color?}) -> id
@@ -335,7 +338,9 @@ api.find(name) -> id · api.params(type) · api.uniqueName(type)
 api.keyframes(id, [{t, position?, rotation?, scale?, color?, visible?, interp?}])
 api.setCamera({position?,target?,fov?})
 api.addCameraKeys([{t, position?, target?, fov?, interp?}])
-api.setDuration(s) · api.setFps(f) · api.onFrame((t, f) => {...})
+api.setDuration(s) · api.setFps(f)
+api.onFrame((t, f, state) => {...})  — 必须自包含：id/计数存到 state 上
+  （state.id ??= f.find("名字")）；外部变量在刷新后不存在
 f.update(id, patch) / f.camera(patch) — 仅影响当前帧
 api.log(...) — 打印到输出区`,
 };

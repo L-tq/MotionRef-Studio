@@ -43,13 +43,22 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; colo
   height: 100%;
 }
 .app-main {
-  display: grid;
-  grid-template-columns: 236px 1fr 384px;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+}
+/* Fixed-size region wrappers around panels; the panel fills its wrapper. */
+.region {
+  display: flex;
+  flex: 0 0 auto;
+  min-width: 0;
   min-height: 0;
 }
+.region > .panel { flex: 1; min-width: 0; min-height: 0; }
 .app-center {
   display: grid;
   grid-template-rows: 1fr 232px;
+  flex: 1;
   min-width: 0;
   min-height: 0;
   border-left: 1px solid var(--border);
@@ -60,6 +69,20 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; colo
   flex-direction: column;
   min-height: 0;
 }
+
+/* ---------- resizers ---------- */
+.resizer {
+  flex: 0 0 auto;
+  background: transparent;
+  z-index: 20;
+  transition: background 0.15s;
+}
+.resizer.col { width: 5px; cursor: col-resize; }
+.resizer.row { height: 5px; cursor: row-resize; }
+.resizer.col:hover, body.resizing-col .resizer.col { background: rgba(124, 92, 255, 0.4); }
+.resizer.row:hover, body.resizing-row .resizer.row { background: rgba(124, 92, 255, 0.4); }
+body.resizing-col { cursor: col-resize; user-select: none; }
+body.resizing-row { cursor: row-resize; user-select: none; }
 
 /* ---------- top bar ---------- */
 .topbar {

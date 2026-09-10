@@ -216,30 +216,69 @@ function SceneInspector() {
   const t = useT();
   const doc = useStore((s) => s.doc);
   const mutateDoc = useStore((s) => s.mutateDoc);
+  const [editing, setEditing] = useState<number | null>(null);
   return (
     <div className="insp-section">
-      <h4>{t("inspector.onFrameScripts")}</h4>
-      {doc.onFrameScripts.length === 0 ? (
-        <div className="hint" style={{ color: "var(--text-3)" }}>{t("common.none")}</div>
-      ) : (
-        doc.onFrameScripts.map((src, i) => (
-          <div key={i} className="insp-row">
-            <code style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--text-2)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {src.slice(0, 60)}
+      <h4>
+        {t("inspector.onFrameScripts")}
+        <span className="spacer" />
+        <button
+          className="btn small"
+          title={t("inspector.hookAdd")}
+          onClick={() =>
+            mutateDoc("add-script", (d) => {
+              d.onFrameScripts.push('(t, f, state) => {\n  \n}');
+              setEditing(d.onFrameScripts.length - 1);
+            })
+          }
+        >
+          ＋
+        </button>
+      </h4>
+      <div className="hint" style={{ color: "var(--text-3)" }}>{t("inspector.hookHint")}</div>
+      {doc.onFrameScripts.map((src, i) => (
+        <div key={i} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <div className="insp-row">
+            <span className="chip">#{i}</span>
+            <code
+              style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--text-2)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer" }}
+              onClick={() => setEditing(editing === i ? null : i)}
+              title={src}
+            >
+              {src.replace(/\s+/g, " ").slice(0, 64) || "…"}
             </code>
+            <button className="btn small" onClick={() => setEditing(editing === i ? null : i)}>
+              ✎
+            </button>
             <button
               className="btn small danger"
-              onClick={() =>
+              title={t("inspector.removeScript")}
+              onClick={() => {
                 mutateDoc("rm-script", (d) => {
                   d.onFrameScripts.splice(i, 1);
-                })
-              }
+                });
+                setEditing(null);
+              }}
             >
-              {t("inspector.removeScript")}
+              ✕
             </button>
           </div>
-        ))
-      )}
+          {editing === i && (
+            <textarea
+              className="code"
+              value={src}
+              spellCheck={false}
+              rows={4}
+              style={{ fontFamily: "var(--mono)", fontSize: 11, width: "100%", resize: "vertical" }}
+              onChange={(e) =>
+                mutateDoc("edit-script", (d) => {
+                  if (d.onFrameScripts[i] !== undefined) d.onFrameScripts[i] = e.target.value;
+                })
+              }
+            />
+          )}
+        </div>
+      ))}
       <div className="insp-row">
         <label>{t("inspector.background")}</label>
         <input

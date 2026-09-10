@@ -183,24 +183,39 @@ export interface FrameApi {
   camera(patch: Partial<CameraState>): void;
 }
 
-type HookFn = (t: number, api: FrameApi) => void;
+/** Hook signature: (t, frameApi, state). `state` is a per-hook persistent
+ *  object — hooks are stored as source text and re-created (e.g. after a
+ *  page reload), so closures over outer variables do NOT survive; anything
+ *  that must persist across frames or reloads lives on `state`. */
+type HookFn = (t: number, api: FrameApi, state: Record<string, unknown>) => void;
 
-const hookCache = new Map<string, HookFn>();
+interface CompiledHook {
+  fn: HookFn;
+  state: Record<string, unknown>;
+}
 
-export function compileHook(source: string): HookFn | null {
-  if (hookCache.has(source)) return hookCache.get(source) ?? null;
+const hookCache = new Map<string, CompiledHook>();
+
+function getHook(source: string): CompiledHook | null {
+  const cached = hookCache.get(source);
+  if (cached) return cached;
   try {
     // eslint-disable-next-line no-new-func
     const factory = new Function("return (" + source + ")") as () => HookFn;
     const fn = factory();
     if (typeof fn === "function") {
-      hookCache.set(source, fn);
-      return fn;
+      const entry: CompiledHook = { fn, state: {} };
+      hookCache.set(source, entry);
+      return entry;
     }
   } catch {
     /* fall through */
   }
   return null;
+}
+
+export function compileHook(source: string): HookFn | null {
+  return getHook(source)?.fn ?? null;
 }
 
 export interface HookError {
@@ -211,8 +226,8 @@ export interface HookError {
 function runHooks(state: EvaluatedState, doc: SceneDocument, t: number): HookError[] {
   const errors: HookError[] = [];
   doc.onFrameScripts.forEach((source, index) => {
-    const fn = compileHook(source);
-    if (!fn) {
+    const hook = getHook(source);
+    if (!hook) {
       errors.push({ index, message: "Invalid onFrame hook source" });
       return;
     }
@@ -241,9 +256,14 @@ function runHooks(state: EvaluatedState, doc: SceneDocument, t: number): HookErr
       },
     };
     try {
-      fn(t, api);
+      hook.fn(t, api, hook.state);
     } catch (err) {
-      errors.push({ index, message: err instanceof Error ? err.message : String(err) });
+      let message = err instanceof Error ? err.message : String(err);
+      if (err instanceof ReferenceError) {
+        message +=
+          " — onFrame hooks must be self-contained: outer variables (e.g. from execute_code) do not exist here. Use the 3rd arg: (t, f, state) => { state.x ??= f.find(\"Name\"); ... }";
+      }
+      errors.push({ index, message });
     }
   });
   return errors;

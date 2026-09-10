@@ -63,12 +63,28 @@ export function Timeline() {
   const tToX = useCallback((time: number) => (time / Math.max(doc.duration, 0.001)) * width, [doc.duration, width]);
   const xToT = useCallback((x: number) => (x / Math.max(width, 1)) * doc.duration, [doc.duration, width]);
 
-  const scrub = useCallback(
+  // Click-and-drag scrubbing: sets the playhead immediately, then follows
+  // pointermove anywhere until release (listeners on window so dragging
+  // outside the timeline keeps working).
+  const beginScrub = useCallback(
     (e: React.PointerEvent) => {
-      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-      setPlayhead(xToT(e.clientX - rect.left));
+      pause();
+      const area = areaRef.current;
+      if (!area) return;
+      const apply = (clientX: number) => {
+        const rect = area.getBoundingClientRect();
+        setPlayhead(Math.min(Math.max(xToT(clientX - rect.left), 0), doc.duration));
+      };
+      apply(e.clientX);
+      const move = (ev: PointerEvent) => apply(ev.clientX);
+      const up = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
     },
-    [setPlayhead, xToT],
+    [pause, setPlayhead, xToT, doc.duration],
   );
 
   // --- keyframe dragging (time-addressed, robust against re-sorting) ---
@@ -194,10 +210,7 @@ export function Timeline() {
         <div className="track-area" ref={areaRef}>
           <div
             className="tl-ruler"
-            onPointerDown={(e) => {
-              scrub(e);
-              pause();
-            }}
+            onPointerDown={beginScrub}
           >
             {Array.from({ length: ticks + 1 }, (_, i) => i).map((i) =>
               i % showEvery === 0 ? (
@@ -211,10 +224,7 @@ export function Timeline() {
             <div
               key={row.key}
               className="tl-row"
-              onPointerDown={(e) => {
-                scrub(e);
-                pause();
-              }}
+              onPointerDown={beginScrub}
             >
               {row.keys.map((key, index) => {
                 const target: KeyTarget = row.camera ? { camera: true } : { objectId: row.objectId! };

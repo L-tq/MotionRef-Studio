@@ -21,6 +21,12 @@ export function Viewport() {
   const objects = doc.objects.length;
   const cameraPreview = useStore((s) => s.cameraPreview);
 
+  // Any document edit may have fixed (or removed) the offending hook; the
+  // engine re-reports within 2s if the error persists.
+  useEffect(() => {
+    setHookError(null);
+  }, [doc]);
+
   useEffect(() => {
     if (!canvasRef.current) return;
     const store = useStore;
@@ -35,7 +41,8 @@ export function Viewport() {
         if (s.playing) s.setPlayhead(time);
       },
       onHookErrors: (errors) => {
-        setHookError(errors.map((e) => `#${e.index}: ${e.message}`).join("; "));
+        const msg = errors.map((e) => `#${e.index}: ${e.message}`).join("; ");
+        setHookError((prev) => (prev === msg ? prev : msg));
       },
     });
     engine.setSource(() => {

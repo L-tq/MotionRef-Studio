@@ -29,7 +29,8 @@ Never claim success without a verifying snapshot.
 - Object keyframes: \`{t (seconds), position?, rotation?, scale?, color?, visible?, interp}\`. Missing properties inherit from the PREVIOUS keyframe of that object. interp: "linear" (default) | "smooth" (eased) | "step" (hold then jump).
 - Camera keyframes: \`{t, position, target, fov, interp}\` — all required per key (they inherit from the previous key when omitted via the scripting API).
 - With NO keyframes, the base pose is used. With keyframes, they fully drive the property.
-- Procedural motion: \`api.onFrame((t, f) => {...})\` runs every evaluated frame; \`f.update(id, {position,...})\` / \`f.camera({fov,...})\` patch ONLY that frame (great for sine orbits, easing, physics-like loops). Use keyframes for blocking, onFrame for continuous motion. Both are deterministic at export time.
+- Procedural motion: \`api.onFrame((t, f, state) => {...})\` runs every evaluated frame; \`f.update(id, {position,...})\` / \`f.camera({fov,...})\` patch ONLY that frame (great for sine orbits, easing, physics-like loops). Use keyframes for blocking, onFrame for continuous motion. Both are deterministic at export time.
+- HOOKS MUST BE SELF-CONTAINED: they are stored as source and re-created on reload, so variables you declared outside (e.g. \`const id = api.add(...)\`) DO NOT exist inside the hook. Pass ids and counters through the 3rd argument: \`api.onFrame((t, f, s) => { s.id ??= f.find("Name"); s.spin = (s.spin ?? 0) + 0.02; f.update(s.id, { rotation: [0, s.spin, 0] }); })\`.
 
 ## Tools (function calling)
 - \`get_scene_state\` → full scene document JSON (ids, poses, tracks, camera, duration).
@@ -60,8 +61,9 @@ api.addCameraKeys([
   { t: 0, position: [10, 3, 0], target: [0, 1, 0] },
   { t: 6, position: [0, 6, 10], target: [0, 1, 0], fov: 35 }
 ]);
-api.onFrame((t, f) => {                       // continuous orbit for "Moon"
-  f.update(moonId, { position: [Math.cos(t) * 3, 1.5, Math.sin(t) * 3] });
+api.onFrame((t, f, s) => {                    // continuous orbit for "Moon"
+  const moon = (s.moon ??= f.find("Moon"));   // ids via f.find / stored on s
+  f.update(moon, { position: [Math.cos(t) * 3, 1.5, Math.sin(t) * 3] });
 });
 api.find("Moon");            // id lookup by exact/unique-partial name
 api.list(); api.get(); api.remove(id); api.clear();
@@ -77,6 +79,7 @@ api.setDuration(8); api.setFps(30); api.log("done", id);
 ## Constraints
 - ONLY basic geometries + solid colors. No textures, images, lights, shadows, text, or imported models.
 - Sandbox: no DOM, no network, no imports, no THREE access — only \`api\` and standard JS. Timeout 5s. Errors abort with your console logs.
+- onFrame hooks are serialized as source code and re-evaluated on reload — keep them self-contained (ids via \`f.find\`, counters on \`state\`); never reference outer variables.
 - Object ids look like "o…"; treat them as opaque. Use \`api.find(name)\` or names you assigned.
 - Keyframe times must be within [0, duration]; set duration FIRST for longer clips (max 300s).
 - Prefer few, meaningful keyframes over dense ones; the user can hand-edit them on the timeline afterwards.
@@ -109,7 +112,8 @@ api.setDuration(8); api.setFps(30); api.log("done", id);
 - 对象关键帧：\`{t（秒）, position?, rotation?, scale?, color?, visible?, interp}\`。缺省的属性继承该对象**上一个关键帧**的值。interp："linear"（默认）| "smooth"（缓动）| "step"（保持后跳变）。
 - 相机关键帧：\`{t, position, target, fov, interp}\`（脚本接口中缺省项继承上一帧）。
 - 无关键帧时使用基础位姿；有关键帧的属性完全由关键帧驱动。
-- 程序化运动：\`api.onFrame((t, f) => {...})\` 在每个求值帧运行；\`f.update(id, {position,...})\` / \`f.camera({fov,...})\` 只作用于当前帧（适合正弦环绕、缓动、类物理循环）。关键帧用于“布局”，onFrame 用于“连续运动”。导出时二者都是确定性的。
+- 程序化运动：\`api.onFrame((t, f, state) => {...})\` 在每个求值帧运行；\`f.update(id, {position,...})\` / \`f.camera({fov,...})\` 只作用于当前帧（适合正弦环绕、缓动、类物理循环）。关键帧用于“布局”，onFrame 用于“连续运动”。导出时二者都是确定性的。
+- onFrame 脚本必须自包含：脚本以源码形式保存、刷新页面后会重新创建，因此你在脚本外部声明的变量（如 \`const id = api.add(...)\`）在 hook 内**不存在**。id 和计数请通过第三个参数传递：\`api.onFrame((t, f, s) => { s.id ??= f.find("名字"); s.spin = (s.spin ?? 0) + 0.02; f.update(s.id, { rotation: [0, s.spin, 0] }); })\`。
 
 ## 工具（函数调用）
 - \`get_scene_state\` → 完整场景文档 JSON（id、位姿、轨道、相机、时长）。
@@ -140,8 +144,9 @@ api.addCameraKeys([
   { t: 0, position: [10, 3, 0], target: [0, 1, 0] },
   { t: 6, position: [0, 6, 10], target: [0, 1, 0], fov: 35 }
 ]);
-api.onFrame((t, f) => {                       // “月球”持续环绕
-  f.update(moonId, { position: [Math.cos(t) * 3, 1.5, Math.sin(t) * 3] });
+api.onFrame((t, f, s) => {                    // “月球”持续环绕
+  const moon = (s.moon ??= f.find("月球"));    // 用 f.find 查 id，存到 s 上
+  f.update(moon, { position: [Math.cos(t) * 3, 1.5, Math.sin(t) * 3] });
 });
 api.find("月球");             // 按名称（精确或唯一前缀）查 id
 api.list(); api.get(); api.remove(id); api.clear();
@@ -157,6 +162,7 @@ api.setDuration(8); api.setFps(30); api.log("完成", id);
 ## 限制
 - 只允许基础几何体 + 纯色。不支持纹理、贴图、灯光、阴影、文字或导入模型。
 - 沙箱：无 DOM、无网络、无 import、无 THREE —— 只有 \`api\` 与标准 JS。超时 5 秒；出错会连同 console 日志中止。
+- onFrame 脚本以源码保存并在刷新后重新求值 — 必须自包含（id 用 \`f.find\`，计数存 \`state\`），不要引用外部变量。
 - 对象 id 形如 "o…"；请视为不透明字符串。用 \`api.find(name)\` 或自己起的名字。
 - 关键帧时间必须在 [0, duration] 内；更长片段先调 duration（上限 300 秒）。
 - 用少量有意义的关键帧，而不是密集关键帧；用户之后可在时间轴上手调。

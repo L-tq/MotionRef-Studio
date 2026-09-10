@@ -14,6 +14,7 @@ import {
 import { evaluate } from "../core/animation";
 import type { GizmoMode } from "../core/engine";
 import { validateSceneDocument } from "../core/validate";
+import { saveChat } from "./chatPersist";
 import {
   DEFAULT_LLM_SETTINGS,
   isConfigured,
@@ -29,8 +30,19 @@ export interface ProjectEntry {
   doc: SceneDocument;
 }
 
+/** User-resizable panel geometry (px). */
+export interface LayoutState {
+  leftW: number;
+  rightW: number;
+  timelineH: number;
+  inspH: number;
+}
+
+export const DEFAULT_LAYOUT: LayoutState = { leftW: 236, rightW: 384, timelineH: 232, inspH: 320 };
+
 const SETTINGS_KEY = "mrs.settings";
 const PROJECTS_KEY = "mrs.projects";
+const LAYOUT_KEY = "mrs.layout";
 
 function loadSettings(): LlmSettings {
   try {
@@ -53,6 +65,16 @@ function loadProjects(): ProjectEntry[] {
     /* ignore */
   }
   return [];
+}
+
+function loadLayout(): LayoutState {
+  try {
+    const raw = localStorage.getItem(LAYOUT_KEY);
+    if (raw) return { ...DEFAULT_LAYOUT, ...(JSON.parse(raw) as Partial<LayoutState>) };
+  } catch {
+    /* ignore */
+  }
+  return { ...DEFAULT_LAYOUT };
 }
 
 export interface AppState {
@@ -80,6 +102,7 @@ export interface AppState {
   lightbox: string | null;
   rightTab: "chat" | "script";
   toast: string | null;
+  layout: LayoutState;
 
   // Config
   settings: LlmSettings;
@@ -124,6 +147,7 @@ export interface AppActions {
   select(id: string | null, additive: boolean): void;
   setGizmo(mode: GizmoMode): void;
   setUi<K extends keyof AppState>(key: K, value: AppState[K]): void;
+  setLayout(patch: Partial<LayoutState>): void;
 
   // Settings
   saveSettings(patch: Partial<LlmSettings>): void;
@@ -172,6 +196,7 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
   lightbox: null,
   rightTab: "chat",
   toast: null,
+  layout: loadLayout(),
 
   settings: loadSettings(),
   projects: loadProjects(),
@@ -492,6 +517,16 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     set({ [key]: value } as Partial<AppState>);
   },
 
+  setLayout(patch) {
+    const layout = { ...get().layout, ...patch };
+    set({ layout });
+    try {
+      localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout));
+    } catch {
+      /* ignore */
+    }
+  },
+
   // --- settings ------------------------------------------------------------------
 
   saveSettings(patch) {
@@ -615,4 +650,13 @@ useStore.subscribe((state, prev) => {
       /* storage full — manual Save/Export still work */
     }
   }, 800);
+});
+
+// --- chat transcript autosave (IndexedDB; images are too big for localStorage) ---
+
+let chatSaveTimer: number | undefined;
+useStore.subscribe((state, prev) => {
+  if (state.session === prev.session) return;
+  window.clearTimeout(chatSaveTimer);
+  chatSaveTimer = window.setTimeout(() => void saveChat(state.session), 600);
 });
