@@ -845,3 +845,10 @@ export class Engine {
     this.renderer.dispose();
   }
 }
+
+// Dev-only guard: this module cannot be hot-swapped in isolation. The render
+// engine captures the store once at mount, so a hot update that replaces only
+// one side would split the app across two instances (UI reading the new store,
+// engine still rendering the old one — "cleared hierarchy but models still
+// visible"). A full reload keeps them consistent. Stripped from production.
+if (import.meta.hot) import.meta.hot.accept(() => window.location.reload());
