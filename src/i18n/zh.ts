@@ -191,6 +191,9 @@ export const zh: Record<string, string> = {
 
   // Layout
   "layout.resize": "拖动调整大小 · 双击恢复默认",
+  "layout.toggleLeft": "显示 / 隐藏左侧面板",
+  "layout.toggleRight": "显示 / 隐藏右侧面板",
+  "layout.toggleTimeline": "显示 / 隐藏时间线",
 
   // Message center
   "messages.title": "消息中心",

@@ -40,12 +40,17 @@ export interface TaskMeta {
   updatedAt: number;
 }
 
-/** User-resizable panel geometry (px) + timeline zoom. */
+/** User-resizable panel geometry (px) + timeline zoom + panel visibility. */
 export interface LayoutState {
   leftW: number;
   rightW: number;
   timelineH: number;
   inspH: number;
+  /** Left / right / bottom panels can be collapsed via the viewport's
+   *  triangle tabs; sizes are kept so reopening restores the layout. */
+  leftOpen: boolean;
+  rightOpen: boolean;
+  timelineOpen: boolean;
   /** Timeline pixels per second. Null until the user zooms; the timeline
    *  then starts fitted to the current width. */
   timelineZoom: number | null;
@@ -53,7 +58,16 @@ export interface LayoutState {
   timelineMode?: "tracks" | "graph";
 }
 
-export const DEFAULT_LAYOUT: LayoutState = { leftW: 236, rightW: 384, timelineH: 232, inspH: 320, timelineZoom: null };
+export const DEFAULT_LAYOUT: LayoutState = {
+  leftW: 236,
+  rightW: 384,
+  timelineH: 232,
+  inspH: 320,
+  leftOpen: true,
+  rightOpen: true,
+  timelineOpen: true,
+  timelineZoom: null,
+};
 
 const SETTINGS_KEY = "mrs.settings";
 const PROJECTS_KEY = "mrs.projects";

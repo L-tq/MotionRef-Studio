@@ -26,6 +26,9 @@ export default function App() {
   const toast = useStore((s) => s.toast);
   const layout = useStore((s) => s.layout);
   const setLayout = useStore((s) => s.setLayout);
+  const leftOpen = layout.leftOpen;
+  const rightOpen = layout.rightOpen;
+  const timelineOpen = layout.timelineOpen;
 
   // First visit: open onboarding when the LLM is not configured.
   useEffect(() => {
@@ -101,39 +104,59 @@ export default function App() {
     <div className="app-shell">
       <TopBar />
       <div className="app-main">
-        <div className="region" style={{ width: layout.leftW }}>
-          <LeftPanel />
-        </div>
-        <Resizer
-          dir="col"
-          onMove={(e) => setLayout({ leftW: clamp(e.clientX, 170, 440) })}
-          onReset={() => setLayout({ leftW: DEFAULT_LAYOUT.leftW })}
-        />
-        <div className="app-center" style={{ gridTemplateRows: `1fr 5px ${layout.timelineH}px` }}>
-          <Viewport />
-          <Resizer
-            dir="row"
-            onMove={(e) => setLayout({ timelineH: clamp(window.innerHeight - e.clientY, 110, window.innerHeight - 260) })}
-            onReset={() => setLayout({ timelineH: DEFAULT_LAYOUT.timelineH })}
-          />
-          <Timeline />
-        </div>
-        <Resizer
-          dir="col"
-          onMove={(e) => setLayout({ rightW: clamp(window.innerWidth - e.clientX, 280, 640) })}
-          onReset={() => setLayout({ rightW: DEFAULT_LAYOUT.rightW })}
-        />
-        <div className="app-right region" style={{ width: layout.rightW }}>
-          <div className="region" style={{ height: layout.inspH, flex: "0 0 auto" }}>
-            <Inspector />
+        {leftOpen && (
+          <>
+            <div className="region" style={{ width: layout.leftW }}>
+              <LeftPanel />
+            </div>
+            <Resizer
+              dir="col"
+              onMove={(e) => setLayout({ leftW: clamp(e.clientX, 170, 440) })}
+              onReset={() => setLayout({ leftW: DEFAULT_LAYOUT.leftW })}
+            />
+          </>
+        )}
+        <div
+          className="app-center"
+          style={{ gridTemplateRows: timelineOpen ? `1fr 5px ${layout.timelineH}px` : "1fr" }}
+        >
+          <div className="viewport-slot">
+            <Viewport />
+            <PanelTab side="left" open={leftOpen} title={t("layout.toggleLeft")} onClick={() => setLayout({ leftOpen: !leftOpen })} />
+            <PanelTab side="right" open={rightOpen} title={t("layout.toggleRight")} onClick={() => setLayout({ rightOpen: !rightOpen })} />
+            <PanelTab side="bottom" open={timelineOpen} title={t("layout.toggleTimeline")} onClick={() => setLayout({ timelineOpen: !timelineOpen })} />
           </div>
-          <Resizer
-            dir="row"
-            onMove={(e) => setLayout({ inspH: clamp(e.clientY - 44, 100, window.innerHeight - 224) })}
-            onReset={() => setLayout({ inspH: DEFAULT_LAYOUT.inspH })}
-          />
-          <ChatPanel />
+          {timelineOpen && (
+            <>
+              <Resizer
+                dir="row"
+                onMove={(e) => setLayout({ timelineH: clamp(window.innerHeight - e.clientY, 110, window.innerHeight - 260) })}
+                onReset={() => setLayout({ timelineH: DEFAULT_LAYOUT.timelineH })}
+              />
+              <Timeline />
+            </>
+          )}
         </div>
+        {rightOpen && (
+          <>
+            <Resizer
+              dir="col"
+              onMove={(e) => setLayout({ rightW: clamp(window.innerWidth - e.clientX, 280, 640) })}
+              onReset={() => setLayout({ rightW: DEFAULT_LAYOUT.rightW })}
+            />
+            <div className="app-right region" style={{ width: layout.rightW }}>
+              <div className="region" style={{ height: layout.inspH, flex: "0 0 auto" }}>
+                <Inspector />
+              </div>
+              <Resizer
+                dir="row"
+                onMove={(e) => setLayout({ inspH: clamp(e.clientY - 44, 100, window.innerHeight - 224) })}
+                onReset={() => setLayout({ inspH: DEFAULT_LAYOUT.inspH })}
+              />
+              <ChatPanel />
+            </div>
+          </>
+        )}
       </div>
 
       {settingsOpen && <SettingsDialog onboarding={onboarding} />}
@@ -153,4 +176,16 @@ export default function App() {
 function Toast({ message }: { message: string }) {
   const t = useT();
   return <div className="toast">{translateMessage(message, t)}</div>;
+}
+
+/** Small triangle tab on the viewport edge that toggles a panel (Blender-style).
+ *  The arrow points toward the panel: outward when open ("collapse me"),
+ *  inward when closed ("expand me"). */
+function PanelTab({ side, open, title, onClick }: { side: "left" | "right" | "bottom"; open: boolean; title: string; onClick: () => void }) {
+  const arrow = side === "left" ? (open ? "◂" : "▸") : side === "right" ? (open ? "▸" : "◂") : open ? "▾" : "▴";
+  return (
+    <button type="button" className={`panel-tab ${side}`} title={title} aria-label={title} aria-expanded={open} onClick={onClick}>
+      {arrow}
+    </button>
+  );
 }

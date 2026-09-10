@@ -191,6 +191,9 @@ export const en: Record<string, string> = {
 
   // Layout
   "layout.resize": "Drag to resize · double-click to reset",
+  "layout.toggleLeft": "Toggle left panel",
+  "layout.toggleRight": "Toggle right panel",
+  "layout.toggleTimeline": "Toggle timeline",
 
   // Message center
   "messages.title": "Messages",

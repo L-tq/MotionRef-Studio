@@ -19,6 +19,8 @@ and override everything it does.
   **多模态智能体对话** —— 描述场景、附加草图/照片（文件、粘贴、拖拽或“附加当前画面”）；快照实时回流；可继续用文字或图片迭代。
 - 🧱 **Manual 3D editing** — add/remove/rename 13 basic geometries, gizmos (move/rotate/scale), inspector for transforms, geometry params and colors, hierarchy panel, undo/redo.
   **手动 3D 编辑** —— 13 种基础几何体的增删改、变换手柄、属性检查器、层级面板、撤销/重做。
+- 🪟 **Collapsible layout** — small triangle tabs on the viewport edges toggle the left, right, and timeline panels; panel sizes and visibility are remembered.
+  **可折叠布局** —— 视口边缘的小三角形按钮可收起/展开左、右面板与时间线，面板尺寸与可见性会自动记忆。
 - 🎥 **Camera control** — FOV ↔ 35mm focal-length conversion, position/target, camera keyframes on the timeline, live "scene camera preview" (exact export framing).
   **相机控制** —— FOV 与 35mm 焦距换算、位置/注视点、时间轴上的相机关键帧、实时取景预览。
 - ⏱ **Timeline** — per-object keyframes (position/rotation/scale/color/visibility, linear/smooth/step interpolation), draggable keys, playhead scrubbing, auto-key.
