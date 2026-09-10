@@ -29,6 +29,37 @@ export interface EngineCallbacks {
   onGizmoDragEnd(): void;
   onTimeAdvance(t: number): void;
   onHookErrors(errors: HookError[]): void;
+  onWalkChange?(active: boolean, speedPct: number): void;
+  onWalkSpeed?(speedPct: number): void;
+}
+
+export type ViewAxis = "px" | "nx" | "py" | "ny" | "pz" | "nz";
+
+const WALK_BASE_SPEED = 2.5;
+const WALK_SPEED_MIN = 0.1;
+const WALK_SPEED_MAX = 20;
+const WALK_LOOK_SENSITIVITY = 0.0022;
+const PITCH_LIMIT = Math.PI / 2 - 0.02;
+
+interface WalkState {
+  keys: Set<string>;
+  yaw: number;
+  pitch: number;
+  /** Speed multiplier; 1 = 100% of WALK_BASE_SPEED. */
+  mult: number;
+  locked: boolean;
+  /** Mouse-look fallback when pointer lock is unavailable: rotate while dragging. */
+  dragLook: boolean;
+  /** Orbit distance captured at entry, restored on exit so orbiting continues. */
+  dist0: number;
+}
+
+// Lets the app-level keyboard router yield to walk mode (WASD/QE must not
+// trigger the W/E/R/Q gizmo shortcuts while walking).
+let walkEngine: Engine | null = null;
+
+export function isWalkActive(): boolean {
+  return walkEngine !== null;
 }
 
 const FLAT_SHADING = new Set(["tetrahedron", "octahedron", "dodecahedron", "icosahedron"]);
@@ -249,6 +280,8 @@ export class Engine {
   private disposed = false;
   private lastHookErrorAt = 0;
   private resizeObserver: ResizeObserver | null = null;
+  private walk: WalkState | null = null;
+  private viewTween: { from: THREE.Vector3; to: THREE.Vector3; fromQ: THREE.Quaternion; toQ: THREE.Quaternion; start: number; dur: number } | null = null;
 
   constructor(private canvas: HTMLCanvasElement, private callbacks: EngineCallbacks) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
@@ -263,7 +296,9 @@ export class Engine {
     this.orbit.target.set(0, 1, 0);
     this.orbit.enableDamping = true;
     this.orbit.dampingFactor = 0.12;
-    this.orbit.maxPolarAngle = Math.PI * 0.55;
+    // Full orbit (like Blender): the nav gizmo offers top/bottom views and walk
+    // mode is free-flight, so the camera may go below the ground plane.
+    this.orbit.maxPolarAngle = Math.PI;
 
     this.transform = new TransformControls(this.editorCamera, canvas);
     this.transform.setSize(0.85);
@@ -338,7 +373,11 @@ export class Engine {
       this.updateSelectionBox(frame);
       this.updateGizmoAttachment(frame);
 
-      this.orbit.update();
+      if (this.walk) this.updateWalk(dt);
+      else if (this.viewTween) this.updateViewTween();
+      // OrbitControls.update() re-derives its pose from the camera position,
+      // so it re-syncs after walk mode or a view tween hands control back.
+      else this.orbit.update();
       // The scene camera always carries the document's framing aspect so the
       // editor frustum helper shows the real export framing.
       const aspect = docAspect(frame.doc);
@@ -421,7 +460,7 @@ export class Engine {
   };
 
   private onPointerUp = (e: PointerEvent): void => {
-    if (e.button !== 0 || this.dragging) return;
+    if (this.walk || e.button !== 0 || this.dragging) return;
     const dx = e.clientX - this.downPos.x;
     const dy = e.clientY - this.downPos.y;
     if (dx * dx + dy * dy > 25) return;
@@ -478,8 +517,216 @@ export class Engine {
     return snapshotDataUrl(frame.doc, frame.time, width, height);
   }
 
+  // --- walk navigation (Blender-style) -----------------------------------------
+  // Modal first-person mode: mouse look (pointer lock), WASD to move on the
+  // ground plane, Q/E to move down/up, Shift to slow, wheel or +/- to change
+  // speed while moving. Escape exits (the browser releases the pointer lock).
+
+  getEditorCamera(): THREE.PerspectiveCamera {
+    return this.editorCamera;
+  }
+
+  isWalking(): boolean {
+    return this.walk !== null;
+  }
+
+  /** Enter walk mode; false when the scene camera preview owns the viewport. */
+  beginWalk(): boolean {
+    if (this.walk) return true;
+    if (this.source()?.cameraPreview) return false;
+    const dir = this.editorCamera.getWorldDirection(new THREE.Vector3());
+    this.editorCamera.rotation.order = "YXZ";
+    this.walk = {
+      keys: new Set(),
+      yaw: Math.atan2(-dir.x, -dir.z),
+      pitch: Math.asin(THREE.MathUtils.clamp(dir.y, -1, 1)),
+      mult: 1,
+      locked: false,
+      dragLook: false,
+      dist0: this.editorCamera.position.distanceTo(this.orbit.target),
+    };
+    this.viewTween = null;
+    this.orbit.enabled = false;
+    this.transform.enabled = false;
+    window.addEventListener("keydown", this.onWalkKeyDown);
+    window.addEventListener("keyup", this.onWalkKeyUp);
+    window.addEventListener("wheel", this.onWalkWheel, { passive: false });
+    window.addEventListener("blur", this.onWalkBlur);
+    document.addEventListener("mousemove", this.onWalkMouseMove);
+    document.addEventListener("pointerlockchange", this.onPointerLockChange);
+    this.canvas.addEventListener("pointerdown", this.onWalkPointerDown);
+    this.canvas.addEventListener("pointerup", this.onWalkPointerUp);
+    try {
+      const p = this.canvas.requestPointerLock() as unknown;
+      if (p instanceof Promise) p.catch(() => undefined);
+    } catch {
+      /* pointer lock unavailable — drag-to-look still works */
+    }
+    walkEngine = this;
+    this.callbacks.onWalkChange?.(true, 100);
+    return true;
+  }
+
+  endWalk(): void {
+    const walk = this.walk;
+    if (!walk) return;
+    this.walk = null;
+    walkEngine = null;
+    window.removeEventListener("keydown", this.onWalkKeyDown);
+    window.removeEventListener("keyup", this.onWalkKeyUp);
+    window.removeEventListener("wheel", this.onWalkWheel);
+    window.removeEventListener("blur", this.onWalkBlur);
+    document.removeEventListener("mousemove", this.onWalkMouseMove);
+    document.removeEventListener("pointerlockchange", this.onPointerLockChange);
+    this.canvas.removeEventListener("pointerdown", this.onWalkPointerDown);
+    this.canvas.removeEventListener("pointerup", this.onWalkPointerUp);
+    if (document.pointerLockElement === this.canvas) document.exitPointerLock();
+    // Re-arm the orbit around a point straight ahead at the old distance so a
+    // subsequent orbit continues naturally from wherever the walk ended.
+    const dir = this.editorCamera.getWorldDirection(new THREE.Vector3());
+    this.orbit.target.copy(this.editorCamera.position).addScaledVector(dir, walk.dist0);
+    this.orbit.enabled = true;
+    this.transform.enabled = true;
+    this.orbit.update();
+    this.callbacks.onWalkChange?.(false, 100);
+  }
+
+  private updateWalk(dt: number): void {
+    const w = this.walk;
+    if (!w) return;
+    this.editorCamera.rotation.set(w.pitch, w.yaw, 0);
+    const slow = w.keys.has("shift") ? 0.25 : 1;
+    const step = WALK_BASE_SPEED * w.mult * slow * dt;
+    const f = (w.keys.has("w") ? 1 : 0) - (w.keys.has("s") ? 1 : 0);
+    const r = (w.keys.has("d") ? 1 : 0) - (w.keys.has("a") ? 1 : 0);
+    const u = (w.keys.has("e") ? 1 : 0) - (w.keys.has("q") ? 1 : 0);
+    if (f !== 0 || r !== 0 || u !== 0) {
+      const fwd = new THREE.Vector3(-Math.sin(w.yaw), 0, -Math.cos(w.yaw));
+      const right = new THREE.Vector3(Math.cos(w.yaw), 0, -Math.sin(w.yaw));
+      this.editorCamera.position.addScaledVector(fwd, f * step).addScaledVector(right, r * step);
+      this.editorCamera.position.y += u * step;
+    }
+  }
+
+  private setWalkMult(next: number): void {
+    const w = this.walk;
+    if (!w) return;
+    w.mult = THREE.MathUtils.clamp(next, WALK_SPEED_MIN, WALK_SPEED_MAX);
+    this.callbacks.onWalkSpeed?.(Math.round(w.mult * 100));
+  }
+
+  private onWalkKeyDown = (e: KeyboardEvent): void => {
+    const w = this.walk;
+    if (!w) return;
+    const key = e.key.toLowerCase();
+    if (key === "escape") {
+      e.preventDefault();
+      this.endWalk();
+      return;
+    }
+    if (key === "+" || key === "=") {
+      e.preventDefault();
+      if (!e.repeat) this.setWalkMult(w.mult * 1.15);
+      return;
+    }
+    if (key === "-" || key === "_") {
+      e.preventDefault();
+      if (!e.repeat) this.setWalkMult(w.mult / 1.15);
+      return;
+    }
+    if (["w", "a", "s", "d", "q", "e", "shift"].includes(key)) {
+      e.preventDefault();
+      w.keys.add(key);
+    }
+  };
+
+  private onWalkKeyUp = (e: KeyboardEvent): void => {
+    this.walk?.keys.delete(e.key.toLowerCase());
+  };
+
+  private onWalkWheel = (e: WheelEvent): void => {
+    const w = this.walk;
+    if (!w) return;
+    e.preventDefault();
+    this.setWalkMult(e.deltaY < 0 ? w.mult * 1.15 : w.mult / 1.15);
+  };
+
+  private onWalkBlur = (): void => {
+    if (this.walk) this.walk.keys.clear();
+  };
+
+  private onWalkMouseMove = (e: MouseEvent): void => {
+    const w = this.walk;
+    if (!w) return;
+    if (document.pointerLockElement !== this.canvas && !w.dragLook) return;
+    w.yaw -= e.movementX * WALK_LOOK_SENSITIVITY;
+    w.pitch = THREE.MathUtils.clamp(w.pitch - e.movementY * WALK_LOOK_SENSITIVITY, -PITCH_LIMIT, PITCH_LIMIT);
+  };
+
+  private onWalkPointerDown = (e: PointerEvent): void => {
+    const w = this.walk;
+    if (!w || document.pointerLockElement === this.canvas) return;
+    w.dragLook = true;
+    this.canvas.setPointerCapture?.(e.pointerId);
+  };
+
+  private onWalkPointerUp = (): void => {
+    if (this.walk) this.walk.dragLook = false;
+  };
+
+  private onPointerLockChange = (): void => {
+    const w = this.walk;
+    if (!w) return;
+    if (document.pointerLockElement === this.canvas) w.locked = true;
+    else if (w.locked) this.endWalk(); // Escape was pressed: the browser ate the keydown
+  };
+
+  // --- axis view snapping (navigation gizmo) -----------------------------------
+
+  setEditorView(axis: ViewAxis): void {
+    if (this.walk) return;
+    // Pole views are nudged ~3° toward +Z: an exact ±Y camera makes OrbitControls'
+    // lookAt degenerate (view direction parallel to the up vector). The offset is
+    // far too small to notice but keeps the pose numerically safe.
+    const dirs: Record<ViewAxis, [number, number, number]> = {
+      px: [1, 0, 0], nx: [-1, 0, 0],
+      py: [0, 1, 0.05], ny: [0, -1, 0.05],
+      pz: [0, 0, 1], nz: [0, 0, -1],
+    };
+    const dist = this.editorCamera.position.distanceTo(this.orbit.target);
+    const dir = new THREE.Vector3(...dirs[axis]).normalize();
+    const to = this.orbit.target.clone().addScaledVector(dir, dist);
+    const aim = new THREE.PerspectiveCamera();
+    aim.position.copy(to);
+    aim.lookAt(this.orbit.target);
+    this.viewTween = {
+      from: this.editorCamera.position.clone(),
+      to,
+      fromQ: this.editorCamera.quaternion.clone(),
+      toQ: aim.quaternion.clone(),
+      start: performance.now(),
+      dur: 260,
+    };
+    this.orbit.enabled = false;
+  }
+
+  private updateViewTween(): void {
+    const tw = this.viewTween;
+    if (!tw) return;
+    const k = Math.min(1, (performance.now() - tw.start) / tw.dur);
+    const s = k * k * (3 - 2 * k);
+    this.editorCamera.position.lerpVectors(tw.from, tw.to, s);
+    this.editorCamera.quaternion.slerpQuaternions(tw.fromQ, tw.toQ, s);
+    if (k >= 1) {
+      this.viewTween = null;
+      this.orbit.enabled = true;
+      this.orbit.update();
+    }
+  }
+
   dispose(): void {
     this.disposed = true;
+    if (this.walk) this.endWalk();
     cancelAnimationFrame(this.raf);
     this.resizeObserver?.disconnect();
     this.canvas.removeEventListener("pointerdown", this.onPointerDown);

@@ -91,9 +91,12 @@ Tools: `get_scene_state`, `set_scene`, `add_object`, `update_object`,
 | `K` | set object keyframe at playhead |
 | `C` | set camera keyframe at playhead |
 | `F` | frame selection |
+| `Shift+F` | walk mode (Blender-style first-person navigation) |
 | `Delete` | delete selected object / selected keyframe |
 | `Ctrl+Z` / `Ctrl+Shift+Z` | undo / redo |
 | `Ctrl+Enter` (script console) | run code |
+
+Walk mode: `W/A/S/D` move on the ground plane, `Q/E` move down/up, mouse looks around (pointer lock), `Shift` slows down, scroll wheel or `+/−` changes speed while moving, `Esc` exits. The viewport also has a Blender-style navigation gizmo (top-right): hover an axis dot for its name, click to snap to that view (e.g. the dim green dot for bottom).
 
 ## Notes / 说明
 

@@ -57,10 +57,25 @@ export const en: Record<string, string> = {
   "viewport.snapshot": "Snapshot PNG",
   "viewport.resetView": "Reset view",
   "viewport.frame": "Frame selection (F)",
+  "viewport.walk": "Walk mode (Shift+F)",
   "viewport.previewBanner": "Scene camera preview — this is the export framing",
   "viewport.emptyHint": "Nothing here yet",
   "viewport.emptyHint2": "Add geometries from the left panel, or describe your animation in the agent chat.",
   "viewport.hookError": "onFrame script error(s): {msg}",
+
+  // Walk navigation
+  "walk.title": "Walk",
+  "walk.hud": "W/A/S/D move · mouse look · Q/E down/up · Shift slow · wheel or +/− speed · Esc exit",
+  "walk.speed": "Speed {pct}%",
+  "walk.previewOn": "Exit the scene camera preview first — walk mode drives the editor view.",
+
+  // Navigation gizmo
+  "gizmo.px": "Right (+X)",
+  "gizmo.nx": "Left (−X)",
+  "gizmo.py": "Top (+Y)",
+  "gizmo.ny": "Bottom (−Y)",
+  "gizmo.pz": "Front (+Z)",
+  "gizmo.nz": "Back (−Z)",
 
   // Timeline
   "timeline.play": "Play (Space)",

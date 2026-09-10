@@ -11,6 +11,7 @@ import { ProjectsModal } from "./ui/ProjectsModal";
 import { ExportDialog } from "./ui/ExportDialog";
 import { useStore, DEFAULT_LAYOUT } from "./state/store";
 import { isConfigured } from "./agent/types";
+import { isWalkActive } from "./core/engine";
 import { useT } from "./i18n";
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
@@ -46,6 +47,11 @@ export default function App() {
         else s.undo();
         return;
       }
+      // Walk mode owns the keyboard: WASD/QE move, +/- change speed, etc.
+      if (isWalkActive()) {
+        if (e.key !== "Shift") e.preventDefault();
+        return;
+      }
       if (typing) return;
 
       switch (e.key.toLowerCase()) {
@@ -73,7 +79,8 @@ export default function App() {
           s.setCameraKeyAtPlayhead();
           break;
         case "f":
-          window.dispatchEvent(new CustomEvent("mrs:frame-selection"));
+          // Shift+F is walk mode (handled in Viewport), plain F frames selection.
+          if (!e.shiftKey) window.dispatchEvent(new CustomEvent("mrs:frame-selection"));
           break;
         case "delete":
         case "backspace":

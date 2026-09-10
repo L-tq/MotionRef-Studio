@@ -57,10 +57,25 @@ export const zh: Record<string, string> = {
   "viewport.snapshot": "截图 PNG",
   "viewport.resetView": "重置视角",
   "viewport.frame": "聚焦所选 (F)",
+  "viewport.walk": "行走模式 (Shift+F)",
   "viewport.previewBanner": "场景相机预览 — 即导出视频的取景",
   "viewport.emptyHint": "这里还什么都没有",
   "viewport.emptyHint2": "从左侧面板添加几何体，或在智能体对话中描述你想要的动画。",
   "viewport.hookError": "onFrame 脚本出错：{msg}",
+
+  // 行走导航
+  "walk.title": "行走",
+  "walk.hud": "W/A/S/D 移动 · 鼠标转向 · Q/E 下/上 · Shift 减速 · 滚轮或 +/− 调速 · Esc 退出",
+  "walk.speed": "速度 {pct}%",
+  "walk.previewOn": "请先退出场景相机预览——行走模式作用于编辑器视角。",
+
+  // 导向器（视图球）
+  "gizmo.px": "右 (+X)",
+  "gizmo.nx": "左 (−X)",
+  "gizmo.py": "顶 (+Y)",
+  "gizmo.ny": "底 (−Y)",
+  "gizmo.pz": "前 (+Z)",
+  "gizmo.nz": "后 (−Z)",
 
   // Timeline
   "timeline.play": "播放 (空格)",

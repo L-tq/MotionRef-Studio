@@ -405,6 +405,63 @@ input[type="checkbox"] { accent-color: var(--accent); }
   color: rgba(255, 255, 255, 0.55);
 }
 
+/* ---------- navigation gizmo (Blender-style view ball) ---------- */
+.nav-gizmo {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 88px;
+  height: 88px;
+  z-index: 4;
+  pointer-events: none; /* only the axis dots are interactive */
+}
+.nav-gizmo svg { display: block; overflow: visible; }
+.nav-gizmo-dot { pointer-events: auto; cursor: pointer; }
+.nav-gizmo-dot:hover { stroke: #fff; stroke-width: 1.6; }
+.nav-gizmo-tip {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  padding: 2px 8px;
+  background: rgba(20, 20, 26, 0.92);
+  border: 1px solid var(--border-2);
+  border-radius: 4px;
+  color: var(--text-2);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* ---------- walk-mode HUD ---------- */
+.walk-hud {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 24px);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  background: rgba(20, 20, 26, 0.92);
+  border: 1px solid var(--border-2);
+  border-radius: 999px;
+  color: var(--text-2);
+  font-size: 11.5px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 5;
+}
+.walk-hud-title {
+  color: var(--accent-2);
+  font-weight: 600;
+}
+.walk-hud-speed {
+  color: var(--accent-2);
+  font-family: var(--mono);
+  font-weight: 600;
+}
+
 .track-label {
   height: 26px;
   display: flex;

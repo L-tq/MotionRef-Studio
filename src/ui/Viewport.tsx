@@ -5,6 +5,7 @@ import { aspectDims, aspectLabel } from "../core/cameraMath";
 import { docAspect } from "../core/types";
 import { useStore } from "../state/store";
 import { useT } from "../i18n";
+import { NavGizmo } from "./NavGizmo";
 
 const GIZMO_BUTTONS: Array<{ mode: GizmoMode; icon: string; labelKey: string }> = [
   { mode: "select", icon: "▭", labelKey: "viewport.select" },
@@ -51,6 +52,8 @@ export function Viewport() {
   const t = useT();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<Engine | null>(null);
+  const [engine, setEngine] = useState<Engine | null>(null);
+  const [walk, setWalk] = useState<{ active: boolean; speed: number }>({ active: false, speed: 100 });
 
   const doc = useStore((s) => s.doc);
   const objects = doc.objects.length;
@@ -75,6 +78,8 @@ export function Viewport() {
         const msg = errors.map((e) => `#${e.index}: ${e.message}`).join("; ");
         store.getState().pushMessage("error", t("viewport.hookError", { msg }), { toast: true });
       },
+      onWalkChange: (active, speedPct) => setWalk({ active, speed: speedPct }),
+      onWalkSpeed: (speedPct) => setWalk((w) => (w.speed === speedPct ? w : { ...w, speed: speedPct })),
     });
     engine.setSource(() => {
       const s = store.getState();
@@ -91,16 +96,44 @@ export function Viewport() {
     });
     engine.start();
     engineRef.current = engine;
+    setEngine(engine);
+    // Debug/testing handle (also lets power users script view tweaks from the console).
+    (window as unknown as Record<string, unknown>).__mrsEngine = engine;
     return () => {
       engine.dispose();
       engineRef.current = null;
+      setEngine(null);
+      delete (window as unknown as Record<string, unknown>).__mrsEngine;
     };
+  }, []);
+
+  // Shift+F enters/exits walk mode (mirrors the toolbar button).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.repeat || !e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key.toLowerCase() !== "f") return;
+      const s = useStore.getState();
+      if (s.settingsOpen || s.projectsOpen || s.exportOpen || s.lightbox) return;
+      const eng = engineRef.current;
+      if (!eng) return;
+      if (eng.isWalking()) eng.endWalk();
+      else if (!eng.beginWalk()) s.showToast("walk.previewOn");
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
   const gizmo = useStore((s) => s.gizmo);
   const showGrid = useStore((s) => s.showGrid);
   const setGizmo = useStore((s) => s.setGizmo);
   const setUi = useStore((s) => s.setUi);
+
+  const toggleWalk = () => {
+    const eng = engineRef.current;
+    if (!eng) return;
+    if (eng.isWalking()) eng.endWalk();
+    else if (!eng.beginWalk()) useStore.getState().showToast("walk.previewOn");
+  };
 
   const snapshotNow = () => {
     const s = useStore.getState();
@@ -145,6 +178,13 @@ export function Viewport() {
         <button className="icon-btn" title={t("viewport.frame")} onClick={() => engineRef.current?.frameSelection()}>
           ⛶
         </button>
+        <button
+          className={`icon-btn ${walk.active ? "active" : ""}`}
+          title={t("viewport.walk")}
+          onClick={toggleWalk}
+        >
+          🚶
+        </button>
         <button className="icon-btn" title={t("viewport.resetView")} onClick={() => engineRef.current?.resetView()}>
           ⟲
         </button>
@@ -152,6 +192,14 @@ export function Viewport() {
           📷
         </button>
       </div>
+      {engine && !cameraPreview && <NavGizmo engine={engine} />}
+      {walk.active && (
+        <div className="walk-hud">
+          <span className="walk-hud-title">{t("walk.title")}</span>
+          <span>{t("walk.hud")}</span>
+          <span className="walk-hud-speed">{t("walk.speed", { pct: walk.speed })}</span>
+        </div>
+      )}
       {cameraPreview && <div className="viewport-banner">{t("viewport.previewBanner")}</div>}
       {cameraPreview && <CameraFrame aspect={docAspect(doc)} />}
       {objects === 0 && (
