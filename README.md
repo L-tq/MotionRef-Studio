@@ -104,4 +104,4 @@ Tools: `get_scene_state`, `set_scene`, `add_object`, `update_object`,
 
 ## License
 
-MIT
+AGPL-3.0 — see [LICENSE](./LICENSE).
