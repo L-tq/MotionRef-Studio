@@ -83,7 +83,7 @@ export const DEFAULT_LLM_SETTINGS: LlmSettings = {
   model: "",
   connection: "proxy",
   maxImages: 8,
-  maxSteps: 24,
+  maxSteps: 100,
 };
 
 export function isConfigured(s: LlmSettings): boolean {

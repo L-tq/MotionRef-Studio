@@ -1,12 +1,14 @@
 /** The agent loop (lightweight deepseek-harness-inspired harness):
  *
+ *  - task  = one named chat thread bound to the current project; each has its
+ *            own transcript (store.taskEvents) and provider wire log
  *  - step  = one model request + the tools it calls
  *  - turn  = user input → steps until the model stops calling tools
- *  - wire log = append-only OpenAI-format history (projected to the model)
- *  - session events = UI mirror of everything that happened
  *  - guarded tool execution: unknown tool / bad args / timeout / thrown
  *    errors all normalize to isError results fed back to the model
  *  - cancellation via AbortController (fetch abort + between-step checks)
+ *  - a turn always keeps writing into ITS task, so the user can switch to
+ *    another task (or project) and back while it is still running
  */
 import { snapshotDataUrl } from "../core/engine";
 import { newId } from "../core/types";
@@ -31,11 +33,27 @@ import { t } from "../i18n";
 
 // --- module state -------------------------------------------------------------
 
-let wireLog: WireMessage[] = [];
-let abortController: AbortController | null = null;
+/** Per-task provider context: the OpenAI-format history and the abort handle
+ *  of a possibly still-running turn. */
+export interface TaskRuntime {
+  wireLog: WireMessage[];
+  abort: AbortController | null;
+}
+const runtimes = new Map<string, TaskRuntime>();
 
-export function stopAgentTurn(): void {
-  abortController?.abort();
+/** The task the currently executing turn writes to (mock provider included). */
+let turnTaskId: string | null = null;
+
+export function stopAgentTurn(taskId?: string): void {
+  const id = taskId ?? useStore.getState().activeTaskId;
+  if (id) runtimes.get(id)?.abort?.abort();
+}
+
+function runningTaskIds(): string[] {
+  const s = useStore.getState();
+  return Object.entries(s.taskStates)
+    .filter(([, st]) => st === "running")
+    .map(([id]) => id);
 }
 
 // --- tool execution pipeline ----------------------------------------------------
@@ -72,7 +90,7 @@ function makeContext(): ToolContext {
       const s = useStore.getState();
       const time2 = clamp(time ?? s.playhead, 0, s.doc.duration);
       // Defaults follow the scene aspect ratio so agent-visible snapshots
-      // match the export framing (16:9 → 1024x576, 9:16 → 324x576, …).
+      // match the export framing (16:9 → 1024x576, 9:16 → 576x1024, …).
       const dims = aspectDims(s.doc.aspect ?? 16 / 9, 1024);
       const w = Math.round(clamp(width ?? dims.w, 64, 2048));
       const h = Math.round(clamp(height ?? dims.h, 64, 2048));
@@ -92,48 +110,73 @@ export interface AgentInput {
 
 export async function runAgentTurn(input: AgentInput): Promise<void> {
   const store = useStore.getState();
-  if (store.agentState === "running") return;
+  const taskId = store.activeTaskId;
+  if (!taskId || store.taskStates[taskId] === "running") return;
 
-  abortController = new AbortController();
-  useStore.setState({ agentState: "running", agentStep: 0 });
+  const rt = runtimeFor(taskId);
+  rt.abort = new AbortController();
+  turnTaskId = taskId;
+  store.setTaskState(taskId, "running");
+  store.setTaskStep(taskId, 0);
 
   // Record the user turn.
-  useStore.getState().sessionPush({
+  store.taskPush(taskId, {
     id: newId("e"),
     type: "user",
     text: input.text,
     images: input.images,
   });
-  wireLog.push({ role: "user", content: userContent(input.text, input.images) });
+  rt.wireLog.push({ role: "user", content: userContent(input.text, input.images) });
 
   try {
     if (store.settings.provider === "mock") {
-      await runMockTurn(input, makeContext(), executeToolWithEvents);
+      await runMockTurn(input, makeContext(), executeToolWithEvents, rt);
     } else {
-      await runRealTurn(store.settings.model, store.settings.maxSteps, abortController.signal);
+      await runRealTurn(taskId, rt, store.settings.model, store.settings.maxSteps, rt.abort.signal);
     }
-    useStore.setState({ agentState: "idle" });
+    useStore.getState().setTaskState(taskId, "idle");
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
-      useStore.getState().sessionPush({ id: newId("e"), type: "notice", text: t("chat.stopped") });
-      useStore.setState({ agentState: "idle" });
+      useStore.getState().taskPush(taskId, { id: newId("e"), type: "notice", text: t("chat.stopped") });
+      useStore.getState().setTaskState(taskId, "idle");
     } else {
-      useStore.getState().sessionPush({
+      useStore.getState().taskPush(taskId, {
         id: newId("e"),
         type: "error",
         message: err instanceof Error ? err.message : String(err),
       });
-      useStore.setState({ agentState: "error" });
+      useStore.getState().setTaskState(taskId, "error");
     }
   } finally {
-    abortController = null;
+    rt.abort = null;
+    if (turnTaskId === taskId) turnTaskId = null;
   }
+}
+
+function runtimeFor(taskId: string): TaskRuntime {
+  let rt = runtimes.get(taskId);
+  if (!rt) {
+    // Seed the provider history from the persisted transcript.
+    rt = { wireLog: wireFromEvents(useStore.getState().taskEvents[taskId] ?? []), abort: null };
+    runtimes.set(taskId, rt);
+  }
+  return rt;
+}
+
+/** Event plumbing shared by the real loop and the mock provider: everything
+ *  goes to the task the current turn belongs to. */
+export function turnTaskPush(event: SessionEvent): void {
+  if (turnTaskId) useStore.getState().taskPush(turnTaskId, event);
+}
+
+export function turnTaskPatch(eventId: string, patch: Partial<SessionEvent>): void {
+  if (turnTaskId) useStore.getState().taskPatch(turnTaskId, eventId, patch);
 }
 
 /** Exported for the mock provider so it shares the same event plumbing. */
 export async function executeToolWithEvents(name: string, argsJson: string, ctx: ToolContext): Promise<ToolResult> {
   const eventId = newId("e");
-  useStore.getState().sessionPush({
+  turnTaskPush({
     id: eventId,
     type: "tool_call",
     callId: newId("c"),
@@ -143,7 +186,7 @@ export async function executeToolWithEvents(name: string, argsJson: string, ctx:
   });
   const t0 = performance.now();
   const result = await executeTool(name, argsJson, ctx);
-  useStore.getState().sessionPatch(eventId, {
+  turnTaskPatch(eventId, {
     status: result.isError ? "error" : "ok",
     resultText: result.text,
     durationMs: Math.round(performance.now() - t0),
@@ -151,7 +194,7 @@ export async function executeToolWithEvents(name: string, argsJson: string, ctx:
 
   if (result.snapshot) {
     const snap = result.snapshot;
-    useStore.getState().sessionPush({
+    turnTaskPush({
       id: newId("e"),
       type: "snapshot",
       dataUrl: snap.dataUrl,
@@ -166,8 +209,8 @@ export async function executeToolWithEvents(name: string, argsJson: string, ctx:
 /** Snapshot feedback must be appended to the wire log only AFTER every tool
  *  message of the current assistant message — providers require tool replies
  *  to be contiguous. Callers drain collected snapshots here. */
-export function appendSnapshotFeedback(snap: { dataUrl: string; t: number; w: number; h: number }): void {
-  wireLog.push({
+export function appendSnapshotFeedback(rt: TaskRuntime, snap: { dataUrl: string; t: number; w: number; h: number }): void {
+  rt.wireLog.push({
     role: "user",
     content: [
       {
@@ -179,11 +222,12 @@ export function appendSnapshotFeedback(snap: { dataUrl: string; t: number; w: nu
   });
 }
 
-// --- chat session management -----------------------------------------------------
+// --- chat task management ----------------------------------------------------------
 //
-// Sessions are persisted per-chat (IndexedDB, see state/chatPersist.ts) and the
-// provider wire log is rebuilt from the transcript whenever a session is
-// restored: only user messages (text + images) and assistant text survive —
+// Tasks are chat threads bound to a project (IndexedDB, see
+// state/chatPersist.ts). Each task's provider wire log lives in its runtime
+// and is rebuilt from the transcript when a turn starts in a task that has no
+// runtime yet: only user messages (text + images) and assistant text survive —
 // tool-call blocks cannot be reliably reconstructed, and assistant text
 // summaries keep enough context.
 
@@ -196,141 +240,114 @@ function wireFromEvents(events: SessionEvent[]): WireMessage[] {
   return out;
 }
 
-function running(): boolean {
-  return useStore.getState().agentState === "running";
+function metaOf(record: ChatSessionRecord) {
+  return { id: record.id, name: record.name, projectId: record.projectId, createdAt: record.createdAt, updatedAt: record.updatedAt };
 }
 
-/** Load a transcript into the UI + seed the model context from it. */
-function loadTranscript(events: SessionEvent[]): void {
-  wireLog = wireFromEvents(events);
-  useStore.setState({ session: events, agentStep: 0 });
+/** Load (or create) the task list of one project and make it visible. Safe to
+ *  call while other tasks are running — their runtimes keep streaming. */
+export async function loadProjectTasks(projectId: string | null): Promise<void> {
+  let records = await listSessions(projectId);
+  if (records.length === 0) {
+    const now = Date.now();
+    const fresh: ChatSessionRecord = { id: newId("s"), name: "", projectId, createdAt: now, updatedAt: now, events: [] };
+    await putSession(fresh);
+    records = [fresh];
+  }
+  records.forEach((r) => useStore.getState().registerTaskProject(r.id, projectId));
+  const events: Record<string, SessionEvent[]> = {};
+  const prevEvents = useStore.getState().taskEvents;
+  for (const r of records) {
+    // A still-running turn keeps appending to its in-memory transcript — never
+    // clobber it with the (older) persisted snapshot.
+    events[r.id] = runtimes.get(r.id)?.abort ? (prevEvents[r.id] ?? r.events) : r.events;
+  }
+  const lastActive = loadCurrentSessionId();
+  const active = records.find((r) => r.id === lastActive) ?? records[0];
+  // A task that is still running keeps its running state across the switch.
+  const states: Record<string, "running"> = {};
+  for (const r of records) if (runtimes.get(r.id)?.abort) states[r.id] = "running";
+  useStore.setState({ tasks: records.map(metaOf), taskEvents: events, activeTaskId: active.id, taskStates: states });
+  saveCurrentSessionId(active.id);
 }
 
-/** Write the active transcript (and its metadata) to IndexedDB. */
-function persistActiveChat(): void {
+/** Start a fresh task in the current project. Running turns elsewhere are
+ *  untouched; the user can switch back to them at any time. */
+export function newTask(): boolean {
   const s = useStore.getState();
-  const id = s.activeSessionId;
-  if (!id) return;
-  const meta = s.sessions.find((m) => m.id === id);
-  const record: ChatSessionRecord = {
-    id,
-    name: meta?.name ?? "",
-    createdAt: meta?.createdAt ?? Date.now(),
-    updatedAt: Date.now(),
-    events: s.session,
-  };
-  void putSession(record);
-  // Keep the sidebar ordering fresh without waiting for the next reload.
-  useStore.setState((st) => ({
-    sessions: [
-      { id, name: record.name, createdAt: record.createdAt, updatedAt: record.updatedAt },
-      ...st.sessions.filter((m) => m.id !== id),
-    ],
-  }));
-}
-
-// Autosave: any transcript change rewrites the active session (debounced).
-let chatSaveTimer: number | undefined;
-useStore.subscribe((state, prev) => {
-  if (state.session === prev.session) return;
-  window.clearTimeout(chatSaveTimer);
-  chatSaveTimer = window.setTimeout(persistActiveChat, 600);
-});
-
-/** Start a fresh session. The previous one is archived and remains switchable
- *  from the session manager — nothing is destroyed. */
-export function newSession(): boolean {
-  if (running()) return false;
-  persistActiveChat();
+  const projectId = s.projectId;
   const now = Date.now();
   const id = newId("s");
-  const meta = { id, name: "", createdAt: now, updatedAt: now };
-  void putSession({ id, name: "", createdAt: now, updatedAt: now, events: [] });
+  useStore.getState().registerTaskProject(id, projectId);
+  void putSession({ id, name: "", projectId, createdAt: now, updatedAt: now, events: [] });
   saveCurrentSessionId(id);
-  wireLog = [];
-  useStore.setState({
-    session: [],
-    sessions: [meta, ...useStore.getState().sessions],
-    activeSessionId: id,
-    agentStep: 0,
-  });
+  useStore.setState((st) => ({
+    tasks: [{ id, name: "", projectId, createdAt: now, updatedAt: now }, ...st.tasks],
+    taskEvents: { ...st.taskEvents, [id]: [] },
+    activeTaskId: id,
+  }));
   return true;
 }
 
-/** Switch to another persisted session. */
-export async function switchSession(id: string): Promise<boolean> {
-  if (running()) return false;
-  if (id === useStore.getState().activeSessionId) return true;
-  persistActiveChat();
-  const record = await getSession(id);
-  if (!record) return false;
+/** Switch the visible task. Pure view switch — always allowed, even while
+ *  other tasks are running. */
+export function switchTask(id: string): void {
+  const s = useStore.getState();
+  if (!s.tasks.some((m) => m.id === id)) return;
   saveCurrentSessionId(id);
-  loadTranscript(record.events);
-  useStore.setState({ activeSessionId: id });
-  return true;
+  useStore.setState({ activeTaskId: id });
 }
 
-export async function renameSession(id: string, name: string): Promise<void> {
+export async function renameTask(id: string, name: string): Promise<void> {
   const clean = name.trim().slice(0, 80);
   const s = useStore.getState();
-  useStore.setState({
-    sessions: s.sessions.map((m) => (m.id === id ? { ...m, name: clean } : m)),
-  });
-  if (id === s.activeSessionId) {
-    persistActiveChat();
-  } else {
-    const record = await getSession(id);
-    if (record) await putSession({ ...record, name: clean });
+  useStore.setState({ tasks: s.tasks.map((m) => (m.id === id ? { ...m, name: clean } : m)) });
+  const events = s.taskEvents[id];
+  if (events) {
+    const meta = s.tasks.find((m) => m.id === id);
+    await putSession({
+      id,
+      name: clean,
+      projectId: meta?.projectId ?? null,
+      createdAt: meta?.createdAt ?? Date.now(),
+      updatedAt: Date.now(),
+      events,
+    });
   }
 }
 
-/** Delete a session record. Deleting the active one activates the most recent
- *  remaining session (or starts a fresh one). */
-export async function deleteSessionById(id: string): Promise<boolean> {
-  if (running()) return false;
-  await deleteSessionRecord(id);
+/** Delete a task record. A running task cannot be deleted; deleting the
+ *  active one activates the most recent remaining task (or starts fresh). */
+export async function deleteTaskById(id: string): Promise<boolean> {
   const s = useStore.getState();
-  const remaining = s.sessions.filter((m) => m.id !== id);
-  if (id === s.activeSessionId) {
+  if (s.taskStates[id] === "running") return false;
+  await deleteSessionRecord(id);
+  runtimes.delete(id);
+  const remaining = s.tasks.filter((m) => m.id !== id);
+  if (id === s.activeTaskId) {
     if (remaining.length > 0) {
       const next = remaining[0];
-      const record = await getSession(next.id);
       saveCurrentSessionId(next.id);
-      useStore.setState({ sessions: remaining, activeSessionId: next.id });
-      loadTranscript(record?.events ?? []);
+      useStore.setState({ tasks: remaining, activeTaskId: next.id });
     } else {
-      useStore.setState({ sessions: remaining });
-      newSession();
+      useStore.setState({ tasks: remaining });
+      newTask();
     }
   } else {
-    useStore.setState({ sessions: remaining });
+    useStore.setState({ tasks: remaining });
   }
   return true;
 }
 
-// On boot, restore the last active conversation so chat history survives
-// reloads, and migrate any pre-multi-session transcript.
+// On boot, restore the current project's tasks so chat history survives
+// reloads, and migrate any pre-task-era transcript.
 void (async () => {
   try {
     await migrateLegacyChat();
-    let records = await listSessions();
-    const currentId = loadCurrentSessionId();
-    let active = records.find((r) => r.id === currentId) ?? records[0] ?? null;
-    if (!active) {
-      const now = Date.now();
-      active = { id: newId("s"), name: "", createdAt: now, updatedAt: now, events: [] };
-      await putSession(active);
-      records = [active];
-    }
-    saveCurrentSessionId(active.id);
-    useStore.setState({
-      sessions: records.map((r) => ({ id: r.id, name: r.name, createdAt: r.createdAt, updatedAt: r.updatedAt })),
-      activeSessionId: active.id,
+    await loadProjectTasks(useStore.getState().projectId);
+    useStore.subscribe((state, prev) => {
+      if (state.projectId !== prev.projectId) void loadProjectTasks(state.projectId);
     });
-    if (active.events.length > 0 && useStore.getState().session.length === 0 && !running()) {
-      loadTranscript(active.events);
-      useStore.getState().sessionPush({ id: newId("e"), type: "notice", text: t("chat.restored") });
-    }
   } catch {
     /* no persisted chat — start empty */
   }
@@ -346,16 +363,22 @@ function prettify(argsJson: string): string {
 
 // --- real provider turn -------------------------------------------------------------
 
-async function runRealTurn(model: string, maxSteps: number, signal: AbortSignal): Promise<void> {
+async function runRealTurn(
+  taskId: string,
+  rt: TaskRuntime,
+  model: string,
+  maxSteps: number,
+  signal: AbortSignal,
+): Promise<void> {
   const ctx = makeContext();
   const tools: ToolSchema[] = toWireTools();
 
   for (let step = 1; step <= maxSteps; step++) {
     if (signal.aborted) throw new DOMException("aborted", "AbortError");
-    useStore.setState({ agentStep: step });
+    useStore.getState().setTaskStep(taskId, step);
 
     const assistantEventId = newId("e");
-    useStore.getState().sessionPush({ id: assistantEventId, type: "assistant", text: "", step });
+    useStore.getState().taskPush(taskId, { id: assistantEventId, type: "assistant", text: "", step });
     const reasoningEventId = newId("e");
     let reasoningPushed = false;
 
@@ -366,21 +389,21 @@ async function runRealTurn(model: string, maxSteps: number, signal: AbortSignal)
       const now = performance.now();
       if (!force && now - lastFlush < 90) return;
       lastFlush = now;
-      useStore.getState().sessionPatch(assistantEventId, { text: streamedText } as never);
-      if (reasoningPushed) useStore.getState().sessionPatch(reasoningEventId, { text: streamedReasoning } as never);
+      useStore.getState().taskPatch(taskId, assistantEventId, { text: streamedText } as never);
+      if (reasoningPushed) useStore.getState().taskPatch(taskId, reasoningEventId, { text: streamedReasoning } as never);
     };
 
     const result = await streamChatCompletion({
       settings: useStore.getState().settings,
       model,
-      messages: [{ role: "system", content: systemPrompt() }, ...wireLog],
+      messages: [{ role: "system", content: systemPrompt() }, ...rt.wireLog],
       tools,
       signal,
       onDelta: (d) => {
         if (d.reasoning) {
           if (!reasoningPushed) {
             reasoningPushed = true;
-            useStore.getState().sessionPush({ id: reasoningEventId, type: "reasoning", text: "" });
+            useStore.getState().taskPush(taskId, { id: reasoningEventId, type: "reasoning", text: "" });
           }
           streamedReasoning += d.reasoning;
         }
@@ -391,12 +414,12 @@ async function runRealTurn(model: string, maxSteps: number, signal: AbortSignal)
     flush(true);
 
     if (!result.toolCalls.length) {
-      wireLog.push({ role: "assistant", content: result.content || "(done)" });
-      if (step >= maxSteps) useStore.setState({ agentStep: 0 });
+      rt.wireLog.push({ role: "assistant", content: result.content || "(done)" });
+      if (step >= maxSteps) useStore.getState().setTaskStep(taskId, 0);
       return;
     }
 
-    wireLog.push({
+    rt.wireLog.push({
       role: "assistant",
       content: result.content || null,
       tool_calls: result.toolCalls,
@@ -406,16 +429,16 @@ async function runRealTurn(model: string, maxSteps: number, signal: AbortSignal)
     for (const call of result.toolCalls) {
       if (signal.aborted) throw new DOMException("aborted", "AbortError");
       const toolResult = await executeToolWithEvents(call.function.name, call.function.arguments, ctx);
-      wireLog.push({ role: "tool", tool_call_id: call.id, name: call.function.name, content: toolResult.text });
+      rt.wireLog.push({ role: "tool", tool_call_id: call.id, name: call.function.name, content: toolResult.text });
       if (toolResult.snapshot) snapshots.push(toolResult.snapshot);
     }
     // Feedback images go after ALL tool replies to keep the tool block contiguous.
-    for (const snap of snapshots) appendSnapshotFeedback(snap);
+    for (const snap of snapshots) appendSnapshotFeedback(rt, snap);
   }
 
-  useStore.getState().sessionPush({
+  useStore.getState().taskPush(taskId, {
     id: newId("e"),
     type: "notice",
-    text: t("chat.stepLimit", { n: useStore.getState().settings.maxSteps }),
+    text: t("chat.stepLimit", { n: maxSteps }),
   });
 }

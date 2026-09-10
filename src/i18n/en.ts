@@ -82,6 +82,9 @@ export const en: Record<string, string> = {
   "timeline.zoomOut": "Zoom out (Ctrl + wheel)",
   "timeline.zoomFit": "Fit the whole duration",
   "timeline.zoomFitShort": "Fit",
+  "timeline.mode": "Editor type",
+  "timeline.modeTracks": "Keyframe tracks",
+  "timeline.modeGraph": "Curve graph editor",
 
   // Inspector
   "inspector.noSelection": "Nothing selected. Click an object in the viewport.",
@@ -155,14 +158,21 @@ export const en: Record<string, string> = {
   "chat.dropImages": "Drop images to attach",
   "chat.restored": "Previous chat restored.",
 
-  // Chat sessions
-  "session.title": "Sessions",
-  "session.new": "New session",
-  "session.untitled": "Untitled session",
-  "session.switch": "Switch to this session",
-  "session.confirmDelete": "Delete session “{name}”? Its chat history will be removed.",
-  "session.runningBlock": "Stop the agent before managing sessions.",
-  "session.empty": "No sessions yet.",
+  // Chat tasks (per project)
+  "task.title": "Tasks",
+  "task.new": "New task",
+  "task.untitled": "Untitled task",
+  "task.switch": "Switch to this task",
+  "task.confirmDelete": "Delete task “{name}”? Its chat history will be removed.",
+  "task.runningDelete": "This task is still running — stop it before deleting.",
+  "task.empty": "No tasks yet.",
+  "task.hint": "Tasks belong to this project and are saved with it. You can switch tasks while one is still running.",
+
+  // Graph editor
+  "graph.objectTarget": "Selected object",
+  "graph.noObject": "No object selected",
+  "graph.toggleChannel": "Show / hide channel",
+  "graph.hint": "Drag points to edit keys (vertical = value, horizontal = time). Double-click to insert a key. Delete removes the selected key.",
 
   // Layout
   "layout.resize": "Drag to resize · double-click to reset",

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { useStore } from "../state/store";
 import { useT } from "../i18n";
 import type { SceneDocument } from "../core/types";
+import { GraphEditor } from "./GraphEditor";
 
 interface TrackRow {
   key: string;
@@ -46,6 +47,7 @@ export function Timeline() {
   const autoKey = useStore((s) => s.autoKey);
   const storedZoom = useStore((s) => s.layout.timelineZoom);
   const zoom = storedZoom ?? 140;
+  const mode = useStore((s) => s.layout.timelineMode ?? "tracks");
   const play = useStore((s) => s.play);
   const pause = useStore((s) => s.pause);
   const stop = useStore((s) => s.stop);
@@ -80,7 +82,7 @@ export function Timeline() {
     ro.observe(el);
     measure();
     return () => ro.disconnect();
-  }, [doc.duration]);
+  }, [doc.duration, mode]);
 
   // Zoomable time axis: pixels per second. The content is at least as wide as
   // the viewport; zooming in makes it scrollable.
@@ -102,18 +104,26 @@ export function Timeline() {
     const el = areaRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
-      e.preventDefault();
-      const rect = el.getBoundingClientRect();
-      const pxInView = e.clientX - rect.left;
-      const time = (pxInView + el.scrollLeft) / Math.max(zoom, 0.001);
-      zoomAnchor.current = { pxInView, time };
-      const factor = e.deltaY < 0 ? 1.2 : 1 / 1.2;
-      setLayout({ timelineZoom: clampZoom(zoom * factor) });
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const rect = el.getBoundingClientRect();
+        const pxInView = e.clientX - rect.left;
+        const time = (pxInView + el.scrollLeft) / Math.max(zoom, 0.001);
+        zoomAnchor.current = { pxInView, time };
+        const factor = e.deltaY < 0 ? 1.2 : 1 / 1.2;
+        setLayout({ timelineZoom: clampZoom(zoom * factor) });
+        return;
+      }
+      // Zoomed in: vertical wheel / trackpad swipe pans the timeline.
+      const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      if (el.scrollWidth > el.clientWidth && delta !== 0) {
+        e.preventDefault();
+        el.scrollLeft += delta;
+      }
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [zoom, setLayout]);
+  }, [zoom, setLayout, mode]);
 
   // Keep the playhead visible while playing on a zoomed timeline.
   useEffect(() => {
@@ -243,6 +253,22 @@ export function Timeline() {
           🎥◆ {t("timeline.setCameraKey")}
         </button>
         <span className="spacer" />
+        <span className="tl-mode" role="group" aria-label={t("timeline.mode")}>
+          <button
+            className={`btn small ${mode === "tracks" ? "active" : ""}`}
+            title={t("timeline.modeTracks")}
+            onClick={() => setLayout({ timelineMode: "tracks" })}
+          >
+            ▤
+          </button>
+          <button
+            className={`btn small ${mode === "graph" ? "active" : ""}`}
+            title={t("timeline.modeGraph")}
+            onClick={() => setLayout({ timelineMode: "graph" })}
+          >
+            ∿
+          </button>
+        </span>
         <span className="tl-zoom" role="group" aria-label={t("timeline.zoom")}>
           <button className="btn small" title={t("timeline.zoomOut")} onClick={() => zoomBy(1 / 1.5)}>
             －
@@ -257,70 +283,76 @@ export function Timeline() {
       </div>
 
       <div className="timeline-body">
-        <div className="track-labels">
-          <div className="tl-ruler" />
-          <div className="tlabels-inner">
-            {rows.map((row) => (
-              <div
-                key={row.key}
-                className={`track-label ${row.camera ? "camera" : ""}`}
-                onClick={() => {
-                  if (row.objectId) select(row.objectId, false);
-                }}
-              >
-                {!row.camera && (
-                  <span
-                    style={{ width: 8, height: 8, borderRadius: 2, background: row.color, flexShrink: 0 }}
-                  />
+        {mode === "graph" ? (
+          <GraphEditor />
+        ) : (
+          <>
+            <div className="track-labels">
+              <div className="tl-ruler" />
+              <div className="tlabels-inner">
+                {rows.map((row) => (
+                  <div
+                    key={row.key}
+                    className={`track-label ${row.camera ? "camera" : ""}`}
+                    onClick={() => {
+                      if (row.objectId) select(row.objectId, false);
+                    }}
+                  >
+                    {!row.camera && (
+                      <span
+                        style={{ width: 8, height: 8, borderRadius: 2, background: row.color, flexShrink: 0 }}
+                      />
+                    )}
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{row.label}</span>
+                    <span style={{ flex: 1 }} />
+                    <span className="kbadge">{row.keys.length}</span>
+                  </div>
+                ))}
+                {doc.cameraKeys.length === 0 && Object.keys(doc.tracks).length === 0 && (
+                  <div className="empty-note">{t("timeline.noTracks")}</div>
                 )}
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{row.label}</span>
-                <span style={{ flex: 1 }} />
-                <span className="kbadge">{row.keys.length}</span>
               </div>
-            ))}
-            {doc.cameraKeys.length === 0 && Object.keys(doc.tracks).length === 0 && (
-              <div className="empty-note">{t("timeline.noTracks")}</div>
-            )}
-          </div>
-        </div>
-
-        <div className="track-area" ref={areaRef}>
-          <div className="tl-content" ref={contentRef} style={{ width: contentWidth }}>
-            <div
-              className="tl-ruler"
-              onPointerDown={beginScrub}
-            >
-              {Array.from({ length: tickCount + 1 }, (_, i) => i).map((i) => (
-                <div key={i} className="tl-tick" style={{ left: `${tToX(i * step)}px` }}>
-                  {tickLabel(i)}
-                </div>
-              ))}
             </div>
-            {rows.map((row) => (
-              <div
-                key={row.key}
-                className="tl-row"
-                onPointerDown={beginScrub}
-              >
-                {row.keys.map((key, index) => {
-                  const target: KeyTarget = row.camera ? { camera: true } : { objectId: row.objectId! };
-                  const rowKey = row.camera ? "__camera" : row.objectId!;
-                  const isSelected = selectedKey?.rowKey === rowKey && Math.abs(selectedKey.t - key.t) < 1e-4;
-                  return (
-                    <div
-                      key={`${key.t}-${index}`}
-                      className={`keyframe ${row.camera ? "camera-key" : ""} ${isSelected ? "selected-key" : ""}`}
-                      style={{ left: `${tToX(key.t)}px` }}
-                      title={t("timeline.deleteKey")}
-                      onPointerDown={(e) => beginKeyDrag(e, target, key.t)}
-                    />
-                  );
-                })}
+
+            <div className="track-area" ref={areaRef}>
+              <div className="tl-content" ref={contentRef} style={{ width: contentWidth }}>
+                <div
+                  className="tl-ruler"
+                  onPointerDown={beginScrub}
+                >
+                  {Array.from({ length: tickCount + 1 }, (_, i) => i).map((i) => (
+                    <div key={i} className="tl-tick" style={{ left: `${tToX(i * step)}px` }}>
+                      {tickLabel(i)}
+                    </div>
+                  ))}
+                </div>
+                {rows.map((row) => (
+                  <div
+                    key={row.key}
+                    className="tl-row"
+                    onPointerDown={beginScrub}
+                  >
+                    {row.keys.map((key, index) => {
+                      const target: KeyTarget = row.camera ? { camera: true } : { objectId: row.objectId! };
+                      const rowKey = row.camera ? "__camera" : row.objectId!;
+                      const isSelected = selectedKey?.rowKey === rowKey && Math.abs(selectedKey.t - key.t) < 1e-4;
+                      return (
+                        <div
+                          key={`${key.t}-${index}`}
+                          className={`keyframe ${row.camera ? "camera-key" : ""} ${isSelected ? "selected-key" : ""}`}
+                          style={{ left: `${tToX(key.t)}px` }}
+                          title={t("timeline.deleteKey")}
+                          onPointerDown={(e) => beginKeyDrag(e, target, key.t)}
+                        />
+                      );
+                    })}
+                  </div>
+                ))}
+                <Playhead duration={doc.duration} tToX={tToX} />
               </div>
-            ))}
-            <Playhead duration={doc.duration} tToX={tToX} />
-          </div>
-        </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

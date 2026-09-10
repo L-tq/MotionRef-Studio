@@ -48,6 +48,8 @@ export function TopBar() {
       Object.assign(draft, createEmptyDocument());
     });
     useStore.setState({ selection: [], playhead: 0, playing: false });
+    // The fresh scene is unbound; its tasks live in the scratch space.
+    useStore.getState().setProjectId(null);
   };
 
   const loadDemo = () => {
@@ -55,6 +57,7 @@ export function TopBar() {
       Object.assign(draft, demoDocument());
     });
     useStore.setState({ selection: [], playhead: 0, playing: false });
+    useStore.getState().setProjectId(null);
     showToast("notice.demoLoaded");
   };
 

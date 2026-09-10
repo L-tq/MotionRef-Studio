@@ -1,10 +1,8 @@
 /** Offline mock provider: exercises the full harness (tool registry, sandbox,
  *  snapshots, chat events) without any network — used for testing and demos. */
-import { useStore } from "../state/store";
-import { newId } from "../core/types";
-import { appendSnapshotFeedback, type AgentInput } from "./agentLoop";
+import { appendSnapshotFeedback, turnTaskPatch, turnTaskPush, type AgentInput } from "./agentLoop";
+import type { TaskRuntime } from "./agentLoop";
 import type { ToolContext, ToolResult } from "./tools";
-import { t } from "../i18n";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -17,6 +15,7 @@ api.add({ type: "cylinder", name: "Pillar", params: { radiusTop: 0.35, radiusBot
 api.add({ type: "cylinder", name: "Pillar 2", params: { radiusTop: 0.35, radiusBottom: 0.35, height: 1.6 }, position: [5.2, 0.8, -4], color: "#3ddc97" });
 api.setDuration(6);
 api.setFps(30);
+api.setAspect(16 / 9);
 
 api.keyframes(ball, [
   { t: 0,   position: [-4, 4, 0], interp: "linear" },
@@ -47,30 +46,32 @@ export async function runMockTurn(
   input: AgentInput,
   ctx: ToolContext,
   execute: (name: string, argsJson: string, ctx: ToolContext) => Promise<ToolResult>,
+  rt: TaskRuntime,
 ): Promise<void> {
   const sawImages = input.images.length > 0;
 
   // Stream a little opening text for realism.
-  const eventId = newId("e");
-  useStore.getState().sessionPush({ id: eventId, type: "assistant", text: "", step: 1 });
+  const eventId = `e${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
+  turnTaskPush({ id: eventId, type: "assistant", text: "", step: 1 });
   const opener = sawImages
     ? `Thanks — I see ${input.images.length} reference image(s). Running the offline mock pipeline: I'll build a demo scene with a bouncing ball, an orbiting moon and a moving camera.`
     : `Running the offline mock pipeline: I'll build a demo scene with a bouncing ball, an orbiting moon and a moving camera.`;
+  let streamed = "";
   for (const chunk of opener.match(/.{1,24}/gs) ?? []) {
-    const current = useStore.getState().session.find((e) => e.id === eventId);
-    useStore.getState().sessionPatch(eventId, { text: ((current as { text?: string })?.text ?? "") + chunk } as never);
+    streamed += chunk;
+    turnTaskPatch(eventId, { text: streamed } as never);
     await sleep(24);
   }
 
   await execute("execute_code", JSON.stringify({ code: DEMO_CODE }), ctx);
   const snap1 = await execute("snapshot", JSON.stringify({ time: 0 }), ctx);
-  if (snap1.snapshot) appendSnapshotFeedback(snap1.snapshot);
+  if (snap1.snapshot) appendSnapshotFeedback(rt, snap1.snapshot);
   await sleep(150);
   const snap2 = await execute("snapshot", JSON.stringify({ time: 3 }), ctx);
-  if (snap2.snapshot) appendSnapshotFeedback(snap2.snapshot);
+  if (snap2.snapshot) appendSnapshotFeedback(rt, snap2.snapshot);
 
-  useStore.getState().sessionPush({
-    id: newId("e"),
+  turnTaskPush({
+    id: `${eventId}f`,
     type: "assistant",
     text:
       "Demo scene is ready (mock provider — no LLM was contacted):\n" +
@@ -80,5 +81,4 @@ export async function runMockTurn(
       "Press Play to preview, or connect a real multimodal model in Settings for actual prompt-driven generation.",
     step: 2,
   });
-  void t;
 }

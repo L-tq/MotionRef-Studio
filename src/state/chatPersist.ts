@@ -21,6 +21,8 @@ export interface ChatSessionRecord {
   id: string;
   /** Display name; empty string → UI shows a localized default. */
   name: string;
+  /** Owning project id; null = scratch space (unsaved/new projects). */
+  projectId: string | null;
   createdAt: number;
   updatedAt: number;
   events: SessionEvent[];
@@ -53,8 +55,10 @@ function txDone(tx: IDBTransaction): Promise<void> {
   });
 }
 
-/** All session records, most recently updated first. */
-export async function listSessions(): Promise<ChatSessionRecord[]> {
+/** All session records of one project (or the scratch space), most recently
+ *  updated first. Omit `projectId` to list every record. Records saved before
+ *  projects existed count as scratch. */
+export async function listSessions(projectId?: string | null): Promise<ChatSessionRecord[]> {
   const db = await openDb();
   if (!db) return [];
   return new Promise((resolve) => {
@@ -65,7 +69,8 @@ export async function listSessions(): Promise<ChatSessionRecord[]> {
         resolve(
           rows
             .filter((r) => r && typeof r.id === "string" && Array.isArray(r.events))
-            .map((r) => ({ ...r, events: r.events.slice(-MAX_EVENTS) }))
+            .filter((r) => projectId === undefined || (r.projectId ?? null) === projectId)
+            .map((r) => ({ ...r, projectId: r.projectId ?? null, events: r.events.slice(-MAX_EVENTS) }))
             .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)),
         );
       };
@@ -153,7 +158,7 @@ export async function migrateLegacyChat(): Promise<void> {
     });
     if (legacy.length > 0) {
       const now = Date.now();
-      await putSession({ id: newId("s"), name: "", createdAt: now, updatedAt: now, events: legacy });
+      await putSession({ id: newId("s"), name: "", projectId: null, createdAt: now, updatedAt: now, events: legacy });
     }
   } catch {
     /* migration is best-effort */

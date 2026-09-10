@@ -3,12 +3,12 @@ import { useStore } from "../state/store";
 import { getLocale, useT } from "../i18n";
 import { isConfigured } from "../agent/types";
 import {
-  deleteSessionById,
-  newSession,
-  renameSession,
+  deleteTaskById,
+  newTask,
+  renameTask,
   runAgentTurn,
   stopAgentTurn,
-  switchSession,
+  switchTask,
 } from "../agent/agentLoop";
 import { sandbox } from "../agent/sandbox";
 import { snapshotDataUrl } from "../core/engine";
@@ -47,9 +47,9 @@ async function fileToDataUrl(file: File, maxEdge = 1024): Promise<string> {
 export function ChatPanel() {
   const t = useT();
   const rightTab = useStore((s) => s.rightTab);
-  const agentState = useStore((s) => s.agentState);
+  const anyRunning = useStore((s) => Object.values(s.taskStates).some((st) => st === "running"));
   const setUi = useStore((s) => s.setUi);
-  const [sessionsOpen, setSessionsOpen] = useState(false);
+  const [tasksOpen, setTasksOpen] = useState(false);
 
   return (
     <div className="panel" style={{ flex: 1, minHeight: 0, position: "relative" }}>
@@ -59,7 +59,7 @@ export function ChatPanel() {
           onClick={() => setUi("rightTab", "chat")}
         >
           🤖 {t("chat.title")}
-          {agentState === "running" && <span className="running-dot" />}
+          {anyRunning && <span className="running-dot" />}
         </button>
         <button
           className={rightTab === "script" ? "active" : ""}
@@ -68,40 +68,39 @@ export function ChatPanel() {
           ⌨ {t("chat.script")}
         </button>
         <button
-          title={t("session.title")}
-          className={sessionsOpen ? "active" : ""}
-          onClick={() => setSessionsOpen(!sessionsOpen)}
+          title={t("task.title")}
+          className={tasksOpen ? "active" : ""}
+          onClick={() => setTasksOpen(!tasksOpen)}
           style={{ flex: "0 0 auto", padding: "0 12px" }}
         >
           ☰
         </button>
       </div>
-      {sessionsOpen && <SessionsPopover onClose={() => setSessionsOpen(false)} />}
+      {tasksOpen && <TasksPopover onClose={() => setTasksOpen(false)} />}
       {rightTab === "chat" ? <ChatTab /> : <ScriptTab />}
     </div>
   );
 }
 
-// --- session manager -----------------------------------------------------------------
+// --- task manager --------------------------------------------------------------------
 
-function SessionsPopover({ onClose }: { onClose: () => void }) {
+function TasksPopover({ onClose }: { onClose: () => void }) {
   const t = useT();
-  const sessions = useStore((s) => s.sessions);
-  const activeId = useStore((s) => s.activeSessionId);
-  const agentState = useStore((s) => s.agentState);
+  const tasks = useStore((s) => s.tasks);
+  const activeId = useStore((s) => s.activeTaskId);
+  const taskStates = useStore((s) => s.taskStates);
+  const projectId = useStore((s) => s.projectId);
+  const projects = useStore((s) => s.projects);
   const showToast = useStore((s) => s.showToast);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameText, setRenameText] = useState("");
 
-  const blocked = () => showToast(t("session.runningBlock"));
+  const projectName = projectId ? projects.find((p) => p.id === projectId)?.name : null;
 
-  const onNew = async () => {
-    if (agentState === "running") return blocked();
-    newSession();
-  };
-  const onSwitch = async (id: string) => {
-    if (agentState === "running") return blocked();
-    if (!(await switchSession(id))) return;
+  const onNew = () => newTask();
+  const onSwitch = (id: string) => {
+    // Pure view switch — allowed even while this or other tasks are running.
+    switchTask(id);
     onClose();
   };
   const onRenameStart = (id: string, current: string) => {
@@ -109,36 +108,37 @@ function SessionsPopover({ onClose }: { onClose: () => void }) {
     setRenameText(current);
   };
   const onRenameCommit = async () => {
-    if (renamingId) await renameSession(renamingId, renameText);
+    if (renamingId) await renameTask(renamingId, renameText);
     setRenamingId(null);
   };
   const onDelete = async (id: string, name: string) => {
-    if (agentState === "running") return blocked();
-    if (!window.confirm(t("session.confirmDelete", { name: name || t("session.untitled") }))) return;
-    await deleteSessionById(id);
+    if (taskStates[id] === "running") return showToast(t("task.runningDelete"));
+    if (!window.confirm(t("task.confirmDelete", { name: name || t("task.untitled") }))) return;
+    await deleteTaskById(id);
   };
 
   return (
     <div className="session-pop">
       <div className="session-pop-header">
-        <span>{t("session.title")}</span>
+        <span>{t("task.title")}</span>
+        {projectName && <span className="task-project">{projectName}</span>}
         <span className="spacer" />
-        <button className="btn small" title={t("session.new")} onClick={() => void onNew()}>
-          ＋ {t("session.new")}
+        <button className="btn small" title={t("task.new")} onClick={onNew}>
+          ＋ {t("task.new")}
         </button>
         <button className="btn small" title={t("common.close")} onClick={onClose}>
           ✕
         </button>
       </div>
       <div className="session-pop-list">
-        {sessions.length === 0 && <div className="empty-note">{t("session.empty")}</div>}
-        {sessions.map((meta) => (
+        {tasks.length === 0 && <div className="empty-note">{t("task.empty")}</div>}
+        {tasks.map((meta) => (
           <div key={meta.id} className={`session-row ${meta.id === activeId ? "active" : ""}`}>
             {renamingId === meta.id ? (
               <input
                 autoFocus
                 value={renameText}
-                placeholder={t("session.untitled")}
+                placeholder={t("task.untitled")}
                 onChange={(e) => setRenameText(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") void onRenameCommit();
@@ -149,10 +149,13 @@ function SessionsPopover({ onClose }: { onClose: () => void }) {
             ) : (
               <button
                 className="session-main"
-                title={t("session.switch")}
-                onClick={() => void onSwitch(meta.id)}
+                title={t("task.switch")}
+                onClick={() => onSwitch(meta.id)}
               >
-                <span className="session-name">{meta.name || t("session.untitled")}</span>
+                <span className="session-name">
+                  {taskStates[meta.id] === "running" && <span className="running-dot" />}
+                  {meta.name || t("task.untitled")}
+                </span>
                 <span className="session-time">{new Date(meta.updatedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
               </button>
             )}
@@ -177,17 +180,21 @@ function SessionsPopover({ onClose }: { onClose: () => void }) {
           </div>
         ))}
       </div>
+      <div className="session-pop-hint">{t("task.hint")}</div>
     </div>
   );
 }
 
 // --- chat tab ----------------------------------------------------------------------
 
+const EMPTY_EVENTS: SessionEvent[] = [];
+
 function ChatTab() {
   const t = useT();
-  const session = useStore((s) => s.session);
-  const agentState = useStore((s) => s.agentState);
-  const agentStep = useStore((s) => s.agentStep);
+  const activeTaskId = useStore((s) => s.activeTaskId);
+  const events = useStore((s) => (s.activeTaskId ? s.taskEvents[s.activeTaskId] : undefined)) ?? EMPTY_EVENTS;
+  const agentState = useStore((s) => (s.activeTaskId ? s.taskStates[s.activeTaskId] : undefined)) ?? "idle";
+  const agentStep = useStore((s) => (s.activeTaskId ? s.taskSteps[s.activeTaskId] : 0)) ?? 0;
   const settings = useStore((s) => s.settings);
   const showToast = useStore((s) => s.showToast);
 
@@ -201,7 +208,7 @@ function ChatTab() {
   useEffect(() => {
     const el = logRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [session]);
+  }, [events]);
 
   const addImages = useCallback(
     async (files: File[]) => {
@@ -258,12 +265,12 @@ function ChatTab() {
       style={{ position: "relative" }}
     >
       <div className="chat-log" ref={logRef}>
-        {session.length === 0 && configured && (
+        {events.length === 0 && configured && (
           <div className="msg notice" style={{ textAlign: "left" }}>
             {t("chat.placeholder")}
           </div>
         )}
-        {session.map((event) => (
+        {events.map((event) => (
           <SessionEventView key={event.id} event={event} />
         ))}
         {agentState === "running" && (
@@ -338,7 +345,7 @@ function ChatTab() {
             <span className="spacer" />
             {settings.provider === "mock" && <span className="chip">{t("chat.mockBadge")}</span>}
             {agentState === "running" ? (
-              <button className="btn danger small" onClick={stopAgentTurn}>
+              <button className="btn danger small" onClick={() => stopAgentTurn()}>
                 ⏹ {t("chat.stop")}
               </button>
             ) : (

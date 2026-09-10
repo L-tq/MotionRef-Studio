@@ -11,10 +11,11 @@ import {
   type SceneDocument,
   type TransformKey,
 } from "../core/types";
-import { evaluate } from "../core/animation";
+import { evaluate, evalCamera } from "../core/animation";
 import type { GizmoMode } from "../core/engine";
 import { validateSceneDocument } from "../core/validate";
 import { clampAspect } from "../core/cameraMath";
+import { putSession } from "./chatPersist";
 import {
   DEFAULT_LLM_SETTINGS,
   isConfigured,
@@ -30,10 +31,11 @@ export interface ProjectEntry {
   doc: SceneDocument;
 }
 
-/** Lightweight session metadata (transcripts live in IndexedDB, see chatPersist). */
-export interface SessionMeta {
+/** Lightweight task metadata (transcripts live in IndexedDB, see chatPersist). */
+export interface TaskMeta {
   id: string;
   name: string;
+  projectId: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -47,9 +49,24 @@ export interface LayoutState {
   /** Timeline pixels per second. Null until the user zooms; the timeline
    *  then starts fitted to the current width. */
   timelineZoom: number | null;
+  /** Bottom-panel editor type: keyframe rows or the curve graph editor. */
+  timelineMode?: "tracks" | "graph";
 }
 
 export const DEFAULT_LAYOUT: LayoutState = { leftW: 236, rightW: 384, timelineH: 232, inspH: 320, timelineZoom: null };
+
+const SETTINGS_KEY = "mrs.settings";
+const PROJECTS_KEY = "mrs.projects";
+const LAYOUT_KEY = "mrs.layout";
+const CURRENT_PROJECT_KEY = "mrs.currentProject";
+
+function loadCurrentProjectId(): string | null {
+  try {
+    return localStorage.getItem(CURRENT_PROJECT_KEY);
+  } catch {
+    return null;
+  }
+}
 
 /** One entry in the message center (toasts + background errors are logged). */
 export interface AppMessage {
@@ -61,14 +78,16 @@ export interface AppMessage {
   count: number;
 }
 
-const SETTINGS_KEY = "mrs.settings";
-const PROJECTS_KEY = "mrs.projects";
-const LAYOUT_KEY = "mrs.layout";
-
 function loadSettings(): LlmSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (raw) return { ...DEFAULT_LLM_SETTINGS, ...(JSON.parse(raw) as Partial<LlmSettings>) };
+    if (raw) {
+      const parsed = { ...DEFAULT_LLM_SETTINGS, ...(JSON.parse(raw) as Partial<LlmSettings>) };
+      // Migration: 24 was the old default; users who never touched it get the
+      // new default of 100.
+      if (parsed.maxSteps === 24) parsed.maxSteps = DEFAULT_LLM_SETTINGS.maxSteps;
+      return parsed;
+    }
   } catch {
     /* ignore */
   }
@@ -133,15 +152,15 @@ export interface AppState {
 
   // Projects
   projects: ProjectEntry[];
+  /** Project the working scene is bound to; null = unsaved/scratch. */
+  projectId: string | null;
 
-  // Agent session
-  session: SessionEvent[];
-  /** Known chat sessions (metadata only; most recent first). */
-  sessions: SessionMeta[];
-  /** Active chat session id; null until sessions finish loading. */
-  activeSessionId: string | null;
-  agentState: AgentState;
-  agentStep: number;
+  // Agent tasks (per project; transcripts in taskEvents, chat UI reads the active one)
+  tasks: TaskMeta[];
+  taskEvents: Record<string, SessionEvent[]>;
+  activeTaskId: string | null;
+  taskStates: Record<string, AgentState>;
+  taskSteps: Record<string, number>;
 }
 
 export interface AppActions {
@@ -159,6 +178,14 @@ export interface AppActions {
   setCameraKeyAtPlayhead(): void;
   retimeKey(target: { objectId: string } | { camera: true }, fromT: number, toT: number): void;
   deleteKey(target: { objectId: string } | { camera: true }, atT: number): void;
+  /** Graph-editor edits: change channel values stored on one key. */
+  setKeyValues(
+    target: { objectId: string } | { camera: true },
+    atT: number,
+    patch: { position?: [number, number, number]; rotation?: [number, number, number]; scale?: [number, number, number]; target?: [number, number, number]; fov?: number },
+  ): void;
+  /** Insert a full keyframe (evaluated pose at t) into an object track or the camera. */
+  insertKeyAt(target: { objectId: string } | { camera: true }, t: number): void;
   clearTrack(objectId: string): void;
   applyDoc(doc: SceneDocument, label: string): void;
 
@@ -190,17 +217,55 @@ export interface AppActions {
   saveProject(): void;
   loadProject(id: string): void;
   deleteProject(id: string): void;
+  /** Bind the working scene to a project (or none) and swap the task view. */
+  setProjectId(id: string | null): void;
 
-  // Session log
-  sessionPush(event: SessionEvent): void;
-  sessionPatch(id: string, patch: Partial<SessionEvent>): void;
-  setAgentState(state: AgentState): void;
-  setAgentStep(step: number): void;
+  // Agent tasks
+  /** Append an event to one task's transcript. */
+  taskPush(taskId: string, event: SessionEvent): void;
+  /** Patch one event inside a task's transcript. */
+  taskPatch(taskId: string, eventId: string, patch: Partial<SessionEvent>): void;
+  setActiveTask(taskId: string): void;
+  setTaskState(taskId: string, state: AgentState): void;
+  setTaskStep(taskId: string, step: number): void;
+  /** Remember which project owns a task (used by persistence). */
+  registerTaskProject(taskId: string, projectId: string | null): void;
   showToast(message: string): void;
 }
 
 const HISTORY_LIMIT = 60;
 const COALESCE_MS = 700;
+
+/** Owning project per task id — persistence must not depend on which project
+ *  is currently open when the debounced save fires. */
+const taskProjectOf = new Map<string, string | null>();
+
+const taskSaveTimers = new Map<string, number>();
+
+function scheduleTaskSave(taskId: string): void {
+  window.clearTimeout(taskSaveTimers.get(taskId));
+  taskSaveTimers.set(
+    taskId,
+    window.setTimeout(() => {
+      taskSaveTimers.delete(taskId);
+      const s = useStore.getState();
+      const meta = s.tasks.find((m) => m.id === taskId);
+      void putSession({
+        id: taskId,
+        name: meta?.name ?? "",
+        projectId: taskProjectOf.get(taskId) ?? null,
+        createdAt: meta?.createdAt ?? Date.now(),
+        updatedAt: Date.now(),
+        events: s.taskEvents[taskId] ?? [],
+      });
+      if (taskId === s.activeTaskId) {
+        useStore.setState((st) => ({
+          tasks: st.tasks.map((m) => (m.id === taskId ? { ...m, updatedAt: Date.now() } : m)),
+        }));
+      }
+    }, 600),
+  );
+}
 
 function eventById(e: SessionEvent, id: string): boolean {
   return e.id === id;
@@ -235,12 +300,13 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
 
   settings: loadSettings(),
   projects: loadProjects(),
+  projectId: loadCurrentProjectId(),
 
-  session: [],
-  sessions: [],
-  activeSessionId: null,
-  agentState: "idle",
-  agentStep: 0,
+  tasks: [],
+  taskEvents: {},
+  activeTaskId: null,
+  taskStates: {},
+  taskSteps: {},
 
   // --- history ---------------------------------------------------------------
 
@@ -458,6 +524,54 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     });
   },
 
+  setKeyValues(target, atT, patch) {
+    get().mutateDoc("edit-key", (draft) => {
+      if ("camera" in target) {
+        const key = draft.cameraKeys.find((k) => Math.abs(k.t - atT) < 1e-4);
+        if (!key) return;
+        if (patch.target) key.target = [...patch.target];
+        if (patch.fov !== undefined) key.fov = patch.fov;
+      } else {
+        const key = draft.tracks[target.objectId]?.find((k) => Math.abs(k.t - atT) < 1e-4);
+        if (!key) return;
+        if (patch.position) key.position = [...patch.position];
+        if (patch.rotation) key.rotation = [...patch.rotation];
+        if (patch.scale) key.scale = [...patch.scale];
+      }
+    });
+  },
+
+  insertKeyAt(target, t) {
+    const state = get();
+    const time = Math.min(Math.max(t, 0), state.doc.duration);
+    state.mutateDoc("insert-key", (draft) => {
+      if ("camera" in target) {
+        const cam = evalCamera(draft, time);
+        const existing = draft.cameraKeys.find((k) => Math.abs(k.t - time) < 1e-4);
+        if (existing) return;
+        draft.cameraKeys.push({ t: +time.toFixed(4), position: cam.position, target: cam.target, fov: cam.fov, interp: "linear" });
+        draft.cameraKeys.sort((a, b) => a.t - b.t);
+      } else {
+        const obj = draft.objects.find((o) => o.id === target.objectId);
+        if (!obj) return;
+        const pose = evaluate(draft, time).objects.get(target.objectId);
+        const existing = (draft.tracks[target.objectId] ?? []).find((k) => Math.abs(k.t - time) < 1e-4);
+        if (existing || !pose) return;
+        const keys = (draft.tracks[target.objectId] ??= []);
+        keys.push({
+          t: +time.toFixed(4),
+          position: [...pose.position],
+          rotation: [...pose.rotation],
+          scale: [...pose.scale],
+          color: pose.color,
+          visible: pose.visible,
+          interp: "linear",
+        });
+        keys.sort((a, b) => a.t - b.t);
+      }
+    });
+  },
+
   applyDoc(doc, label) {
     const result = validateSceneDocument(doc);
     if ("error" in result) {
@@ -617,20 +731,48 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
 
   saveProject() {
     const state = get();
+    // Save updates the bound project in place; a new/unsaved scene gets an id
+    // and becomes bound so later saves keep updating the same project (and its
+    // task list stays attached).
+    const id = state.projectId ?? newId("p");
     const entry: ProjectEntry = {
-      id: newId("p"),
+      id,
       name: state.doc.name || "Untitled",
       savedAt: Date.now(),
       doc: cloneDoc(state.doc),
     };
-    const projects = [entry, ...state.projects].slice(0, 50);
+    const projects = [entry, ...state.projects.filter((p) => p.id !== id)].slice(0, 50);
     try {
       localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
     } catch {
       state.showToast("localStorage full — export JSON instead");
       return;
     }
-    set({ projects });
+    set({ projects, projectId: id });
+    try {
+      localStorage.setItem(CURRENT_PROJECT_KEY, id);
+    } catch {
+      /* ignore */
+    }
+    // First save of an unsaved scene: adopt its scratch tasks into the new
+    // project so the task context is saved (and later loaded) with it.
+    if (!state.projectId) {
+      const s2 = get();
+      for (const meta of s2.tasks) {
+        s2.registerTaskProject(meta.id, id);
+        void putSession({
+          id: meta.id,
+          name: meta.name,
+          projectId: id,
+          createdAt: meta.createdAt,
+          updatedAt: meta.updatedAt,
+          events: s2.taskEvents[meta.id] ?? [],
+        });
+      }
+      if (s2.tasks.length > 0) {
+        set((st) => ({ tasks: st.tasks.map((m) => ({ ...m, projectId: id })) }));
+      }
+    }
     get().showToast("notice.projectSaved");
   },
 
@@ -641,6 +783,7 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
       Object.assign(draft, cloneDoc(entry.doc));
     });
     set({ playhead: 0, playing: false, selection: [], projectsOpen: false });
+    get().setProjectId(id);
   },
 
   deleteProject(id) {
@@ -651,26 +794,51 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
       /* ignore */
     }
     set({ projects });
+    // If the deleted project is bound, fall back to the scratch space.
+    if (get().projectId === id) get().setProjectId(null);
   },
 
-  // --- session log ------------------------------------------------------------------
-
-  sessionPush(event) {
-    set((s) => ({ session: [...s.session, event] }));
+  setProjectId(id) {
+    set({ projectId: id, tasks: [], activeTaskId: null, taskEvents: {}, taskStates: {}, taskSteps: {} });
+    try {
+      if (id === null) localStorage.removeItem(CURRENT_PROJECT_KEY);
+      else localStorage.setItem(CURRENT_PROJECT_KEY, id);
+    } catch {
+      /* ignore */
+    }
   },
 
-  sessionPatch(id, patch) {
+  // --- agent tasks ------------------------------------------------------------------
+
+  taskPush(taskId, event) {
+    set((s) => ({ taskEvents: { ...s.taskEvents, [taskId]: [...(s.taskEvents[taskId] ?? []), event] } }));
+    scheduleTaskSave(taskId);
+  },
+
+  taskPatch(taskId, eventId, patch) {
     set((s) => ({
-      session: s.session.map((e) => (eventById(e, id) ? ({ ...e, ...patch } as SessionEvent) : e)),
+      taskEvents: {
+        ...s.taskEvents,
+        [taskId]: (s.taskEvents[taskId] ?? []).map((e) => (eventById(e, eventId) ? ({ ...e, ...patch } as SessionEvent) : e)),
+      },
     }));
+    scheduleTaskSave(taskId);
   },
 
-  setAgentState(agentState) {
-    set({ agentState });
+  setActiveTask(taskId) {
+    set({ activeTaskId: taskId });
   },
 
-  setAgentStep(agentStep) {
-    set({ agentStep });
+  setTaskState(taskId, state) {
+    set((s) => ({ taskStates: { ...s.taskStates, [taskId]: state } }));
+  },
+
+  setTaskStep(taskId, step) {
+    set((s) => ({ taskSteps: { ...s.taskSteps, [taskId]: step } }));
+  },
+
+  registerTaskProject(taskId, projectId) {
+    taskProjectOf.set(taskId, projectId);
   },
 
   showToast(message) {

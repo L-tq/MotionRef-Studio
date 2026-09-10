@@ -82,6 +82,9 @@ export const zh: Record<string, string> = {
   "timeline.zoomOut": "缩小 (Ctrl + 滚轮)",
   "timeline.zoomFit": "完整显示整个时长",
   "timeline.zoomFitShort": "适应",
+  "timeline.mode": "编辑器类型",
+  "timeline.modeTracks": "关键帧轨道",
+  "timeline.modeGraph": "曲线图表编辑器",
 
   // Inspector
   "inspector.noSelection": "未选中对象。点击视口中的物体。",
@@ -155,14 +158,21 @@ export const zh: Record<string, string> = {
   "chat.dropImages": "拖拽图片到此处以附加",
   "chat.restored": "已恢复上次的对话记录。",
 
-  // 会话管理
-  "session.title": "会话管理",
-  "session.new": "新建会话",
-  "session.untitled": "未命名会话",
-  "session.switch": "切换到此会话",
-  "session.confirmDelete": "删除会话“{name}”？聊天记录将被移除。",
-  "session.runningBlock": "请先停止正在运行的任务，再管理会话。",
-  "session.empty": "暂无会话。",
+  // 任务管理（按项目）
+  "task.title": "任务",
+  "task.new": "新建任务",
+  "task.untitled": "未命名任务",
+  "task.switch": "切换到此任务",
+  "task.confirmDelete": "删除任务“{name}”？聊天记录将被移除。",
+  "task.runningDelete": "该任务仍在运行 — 请先停止再删除。",
+  "task.empty": "暂无任务。",
+  "task.hint": "任务属于当前项目并随项目保存。某个任务运行时也可以切换到其他任务。",
+
+  // 图表编辑器
+  "graph.objectTarget": "所选对象",
+  "graph.noObject": "未选中对象",
+  "graph.toggleChannel": "显示 / 隐藏通道",
+  "graph.hint": "拖动关键点编辑（竖向改数值，横向改时间）。双击插入关键帧，Delete 删除选中的关键帧。",
 
   // Layout
   "layout.resize": "拖动调整大小 · 双击恢复默认",

@@ -1,7 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Engine, snapshotDataUrl, type FrameSource, type GizmoMode } from "../core/engine";
 import { downloadBlob } from "../core/videoExport";
-import { aspectDims } from "../core/cameraMath";
+import { aspectDims, aspectLabel } from "../core/cameraMath";
 import { docAspect } from "../core/types";
 import { useStore } from "../state/store";
 import { useT } from "../i18n";
@@ -12,6 +12,40 @@ const GIZMO_BUTTONS: Array<{ mode: GizmoMode; icon: string; labelKey: string }> 
   { mode: "rotate", icon: "⟳", labelKey: "viewport.rotate" },
   { mode: "scale", icon: "⤢", labelKey: "viewport.scale" },
 ];
+
+/** Blender-style camera passepartout: a framed rectangle matching the scene
+ *  camera's aspect; everything outside the frame is dimmed. The engine renders
+ *  the camera view letterboxed to the same rect, so the border sits exactly on
+ *  the render edge. */
+function CameraFrame({ aspect }: { aspect: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    const wrap = el?.parentElement;
+    if (!wrap) return;
+    const measure = () => {
+      const W = wrap.clientWidth;
+      const H = wrap.clientHeight;
+      if (W === 0 || H === 0) return;
+      const canvasAspect = W / H;
+      const w = canvasAspect > aspect ? H * aspect : W;
+      const h = canvasAspect > aspect ? H : W / aspect;
+      setSize({ w, h });
+    };
+    const ro = new ResizeObserver(measure);
+    ro.observe(wrap);
+    measure();
+    return () => ro.disconnect();
+  }, [aspect]);
+
+  return (
+    <div ref={ref} className="camera-frame" style={size ? { width: size.w, height: size.h } : undefined}>
+      {size && <span className="camera-frame-label">{aspectLabel(aspect)}</span>}
+    </div>
+  );
+}
 
 export function Viewport() {
   const t = useT();
@@ -119,6 +153,7 @@ export function Viewport() {
         </button>
       </div>
       {cameraPreview && <div className="viewport-banner">{t("viewport.previewBanner")}</div>}
+      {cameraPreview && <CameraFrame aspect={docAspect(doc)} />}
       {objects === 0 && (
         <div className="viewport-empty">
           <b>{t("viewport.emptyHint")}</b>
