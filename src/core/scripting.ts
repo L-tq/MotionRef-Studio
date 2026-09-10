@@ -199,8 +199,8 @@ export function createScriptingAPI(target: ScriptTarget, log: (...args: unknown[
      *  frameApi.update(id, patch) / frameApi.camera(patch) affect the current
      *  frame only; the persistent document is not modified. The hook is stored
      *  as source text and re-created on reload, so it must be self-contained:
-     *  keep ids/counters on the `state` object, never reference outer
-     *  variables. */
+     *  resolve ids fresh each frame via frameApi.find, keep counters on the
+     *  `state` object, never reference outer variables. */
     onFrame(fn: (t: number, frameApi: unknown, state: Record<string, unknown>) => void): void {
       if (typeof fn !== "function") throw new Error("api.onFrame expects a function");
       target.addOnFrame(fn.toString());

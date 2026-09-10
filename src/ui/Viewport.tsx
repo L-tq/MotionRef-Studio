@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { Engine, snapshotDataUrl, type FrameSource, type GizmoMode } from "../core/engine";
 import { downloadBlob } from "../core/videoExport";
 import { useStore } from "../state/store";
@@ -15,17 +15,10 @@ export function Viewport() {
   const t = useT();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<Engine | null>(null);
-  const [hookError, setHookError] = useState<string | null>(null);
 
   const doc = useStore((s) => s.doc);
   const objects = doc.objects.length;
   const cameraPreview = useStore((s) => s.cameraPreview);
-
-  // Any document edit may have fixed (or removed) the offending hook; the
-  // engine re-reports within 2s if the error persists.
-  useEffect(() => {
-    setHookError(null);
-  }, [doc]);
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -41,8 +34,10 @@ export function Viewport() {
         if (s.playing) s.setPlayhead(time);
       },
       onHookErrors: (errors) => {
+        // Archive in the message center (repeats collapse into one entry);
+        // only the first occurrence also pops a transient toast.
         const msg = errors.map((e) => `#${e.index}: ${e.message}`).join("; ");
-        setHookError((prev) => (prev === msg ? prev : msg));
+        store.getState().pushMessage("error", t("viewport.hookError", { msg }), { toast: true });
       },
     });
     engine.setSource(() => {
@@ -128,16 +123,6 @@ export function Viewport() {
         </div>
       )}
       <PlayheadStatus />
-      {hookError && (
-        <div
-          className="viewport-banner"
-          style={{ background: "rgba(255,92,124,0.15)", borderColor: "rgba(255,92,124,0.5)", color: "#ffb3c2", top: 44 }}
-          title={hookError}
-          onClick={() => setHookError(null)}
-        >
-          {t("viewport.hookError", { msg: hookError.slice(0, 80) })}
-        </div>
-      )}
     </div>
   );
 }

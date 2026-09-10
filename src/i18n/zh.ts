@@ -151,6 +151,11 @@ export const zh: Record<string, string> = {
   // Layout
   "layout.resize": "拖动调整大小 · 双击恢复默认",
 
+  // Message center
+  "messages.title": "消息中心",
+  "messages.empty": "暂无消息。",
+  "messages.clear": "清空",
+
   // Script console
   "script.title": "脚本控制台",
   "script.run": "运行",

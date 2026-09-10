@@ -40,6 +40,16 @@ export interface LayoutState {
 
 export const DEFAULT_LAYOUT: LayoutState = { leftW: 236, rightW: 384, timelineH: 232, inspH: 320 };
 
+/** One entry in the message center (toasts + background errors are logged). */
+export interface AppMessage {
+  id: string;
+  kind: "info" | "warn" | "error";
+  text: string;
+  time: number;
+  /** How many times this consecutive message repeated. */
+  count: number;
+}
+
 const SETTINGS_KEY = "mrs.settings";
 const PROJECTS_KEY = "mrs.projects";
 const LAYOUT_KEY = "mrs.layout";
@@ -103,6 +113,9 @@ export interface AppState {
   rightTab: "chat" | "script";
   toast: string | null;
   layout: LayoutState;
+  messages: AppMessage[];
+  unreadMessages: number;
+  messagesOpen: boolean;
 
   // Config
   settings: LlmSettings;
@@ -148,6 +161,10 @@ export interface AppActions {
   setGizmo(mode: GizmoMode): void;
   setUi<K extends keyof AppState>(key: K, value: AppState[K]): void;
   setLayout(patch: Partial<LayoutState>): void;
+  /** Log a message; returns true when it is a NEW entry (repeats only bump
+   *  the counter). opts.toast also shows it as a transient toast. */
+  pushMessage(kind: AppMessage["kind"], text: string, opts?: { toast?: boolean }): boolean;
+  clearMessages(): void;
 
   // Settings
   saveSettings(patch: Partial<LlmSettings>): void;
@@ -197,6 +214,9 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
   rightTab: "chat",
   toast: null,
   layout: loadLayout(),
+  messages: [],
+  unreadMessages: 0,
+  messagesOpen: false,
 
   settings: loadSettings(),
   projects: loadProjects(),
@@ -527,6 +547,32 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     }
   },
 
+  pushMessage(kind, text, opts) {
+    const msgs = get().messages;
+    const [last, ...rest] = msgs;
+    if (last && last.kind === kind && last.text === text) {
+      set({ messages: [{ ...last, count: last.count + 1, time: Date.now() }, ...rest] });
+      return false;
+    }
+    const s = get();
+    const entry: AppMessage = { id: newId("m"), kind, text, time: Date.now(), count: 1 };
+    set({
+      messages: [entry, ...msgs].slice(0, 100),
+      unreadMessages: s.messagesOpen ? s.unreadMessages : s.unreadMessages + 1,
+    });
+    if (opts?.toast) {
+      set({ toast: text });
+      setTimeout(() => {
+        if (get().toast === text) set({ toast: null });
+      }, 2600);
+    }
+    return true;
+  },
+
+  clearMessages() {
+    set({ messages: [], unreadMessages: 0 });
+  },
+
   // --- settings ------------------------------------------------------------------
 
   saveSettings(patch) {
@@ -608,10 +654,9 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
   },
 
   showToast(message) {
-    set({ toast: message });
-    setTimeout(() => {
-      if (get().toast === message) set({ toast: null });
-    }, 2600);
+    // Every toast is also archived in the message center.
+    const kind: AppMessage["kind"] = message.startsWith("error.") ? "error" : "info";
+    get().pushMessage(kind, message, { toast: true });
   },
 }));
 

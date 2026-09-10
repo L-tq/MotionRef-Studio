@@ -30,7 +30,7 @@ Never claim success without a verifying snapshot.
 - Camera keyframes: \`{t, position, target, fov, interp}\` — all required per key (they inherit from the previous key when omitted via the scripting API).
 - With NO keyframes, the base pose is used. With keyframes, they fully drive the property.
 - Procedural motion: \`api.onFrame((t, f, state) => {...})\` runs every evaluated frame; \`f.update(id, {position,...})\` / \`f.camera({fov,...})\` patch ONLY that frame (great for sine orbits, easing, physics-like loops). Use keyframes for blocking, onFrame for continuous motion. Both are deterministic at export time.
-- HOOKS MUST BE SELF-CONTAINED: they are stored as source and re-created on reload, so variables you declared outside (e.g. \`const id = api.add(...)\`) DO NOT exist inside the hook. Pass ids and counters through the 3rd argument: \`api.onFrame((t, f, s) => { s.id ??= f.find("Name"); s.spin = (s.spin ?? 0) + 0.02; f.update(s.id, { rotation: [0, s.spin, 0] }); })\`.
+- HOOKS MUST BE SELF-CONTAINED: they are stored as source and re-created on reload, so variables you declared outside (e.g. \`const id = api.add(...)\`) DO NOT exist inside the hook. Look ids up fresh every frame and guard: \`api.onFrame((t, f) => { const id = f.find("Name"); if (id) f.update(id, { rotation: [0, t, 0] }); })\`. Keep counters/accumulators on the 3rd argument: \`api.onFrame((t, f, s) => { s.spin = (s.spin ?? 0) + 0.02; ... })\`. \`f.update\` with an unknown id is a safe no-op, so deleted objects never crash a hook.
 
 ## Tools (function calling)
 - \`get_scene_state\` → full scene document JSON (ids, poses, tracks, camera, duration).
@@ -61,9 +61,9 @@ api.addCameraKeys([
   { t: 0, position: [10, 3, 0], target: [0, 1, 0] },
   { t: 6, position: [0, 6, 10], target: [0, 1, 0], fov: 35 }
 ]);
-api.onFrame((t, f, s) => {                    // continuous orbit for "Moon"
-  const moon = (s.moon ??= f.find("Moon"));   // ids via f.find / stored on s
-  f.update(moon, { position: [Math.cos(t) * 3, 1.5, Math.sin(t) * 3] });
+api.onFrame((t, f) => {                       // continuous orbit for "Moon"
+  const moon = f.find("Moon");                // ids: look up fresh each frame
+  if (moon) f.update(moon, { position: [Math.cos(t) * 3, 1.5, Math.sin(t) * 3] });
 });
 api.find("Moon");            // id lookup by exact/unique-partial name
 api.list(); api.get(); api.remove(id); api.clear();
@@ -113,7 +113,7 @@ api.setDuration(8); api.setFps(30); api.log("done", id);
 - 相机关键帧：\`{t, position, target, fov, interp}\`（脚本接口中缺省项继承上一帧）。
 - 无关键帧时使用基础位姿；有关键帧的属性完全由关键帧驱动。
 - 程序化运动：\`api.onFrame((t, f, state) => {...})\` 在每个求值帧运行；\`f.update(id, {position,...})\` / \`f.camera({fov,...})\` 只作用于当前帧（适合正弦环绕、缓动、类物理循环）。关键帧用于“布局”，onFrame 用于“连续运动”。导出时二者都是确定性的。
-- onFrame 脚本必须自包含：脚本以源码形式保存、刷新页面后会重新创建，因此你在脚本外部声明的变量（如 \`const id = api.add(...)\`）在 hook 内**不存在**。id 和计数请通过第三个参数传递：\`api.onFrame((t, f, s) => { s.id ??= f.find("名字"); s.spin = (s.spin ?? 0) + 0.02; f.update(s.id, { rotation: [0, s.spin, 0] }); })\`。
+- onFrame 脚本必须自包含：脚本以源码形式保存、刷新页面后会重新创建，因此你在脚本外部声明的变量（如 \`const id = api.add(...)\`）在 hook 内**不存在**。id 请每帧重新查找并判空：\`api.onFrame((t, f) => { const id = f.find("名字"); if (id) f.update(id, { rotation: [0, t, 0] }); })\`；计数器/累加值存到第三个参数：\`api.onFrame((t, f, s) => { s.spin = (s.spin ?? 0) + 0.02; ... })\`。对未知 id \`f.update\` 会静默跳过，删除对象不会导致 hook 报错。
 
 ## 工具（函数调用）
 - \`get_scene_state\` → 完整场景文档 JSON（id、位姿、轨道、相机、时长）。
@@ -144,9 +144,9 @@ api.addCameraKeys([
   { t: 0, position: [10, 3, 0], target: [0, 1, 0] },
   { t: 6, position: [0, 6, 10], target: [0, 1, 0], fov: 35 }
 ]);
-api.onFrame((t, f, s) => {                    // “月球”持续环绕
-  const moon = (s.moon ??= f.find("月球"));    // 用 f.find 查 id，存到 s 上
-  f.update(moon, { position: [Math.cos(t) * 3, 1.5, Math.sin(t) * 3] });
+api.onFrame((t, f) => {                       // “月球”持续环绕
+  const moon = f.find("月球");                 // id 每帧重新查找
+  if (moon) f.update(moon, { position: [Math.cos(t) * 3, 1.5, Math.sin(t) * 3] });
 });
 api.find("月球");             // 按名称（精确或唯一前缀）查 id
 api.list(); api.get(); api.remove(id); api.clear();

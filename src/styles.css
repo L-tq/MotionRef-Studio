@@ -738,6 +738,77 @@ details.docs pre {
   transition: width 0.15s;
 }
 
+/* ---------- message center ---------- */
+.badge {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  margin-left: 5px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 10px;
+  line-height: 16px;
+  display: inline-block;
+  font-weight: 700;
+  text-align: center;
+}
+.msglog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+}
+.msglog {
+  position: fixed;
+  top: 46px;
+  right: 8px;
+  width: 400px;
+  max-width: calc(100vw - 16px);
+  max-height: min(480px, calc(100vh - 60px));
+  background: var(--bg-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  z-index: 95;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.msglog-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 700;
+  font-size: 12.5px;
+}
+.msglog-list { overflow-y: auto; display: flex; flex-direction: column; }
+.msglog-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.msglog-row:last-child { border-bottom: none; }
+.msglog-row .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 4px;
+  flex-shrink: 0;
+  background: var(--text-3);
+}
+.msglog-row.info .dot { background: var(--accent-2); }
+.msglog-row.warn .dot { background: var(--warn); }
+.msglog-row.error .dot { background: var(--danger); }
+.msglog-row.error .text { color: #ffb3c2; }
+.msglog-row .text { flex: 1; word-break: break-word; white-space: pre-wrap; }
+.msglog-row time { color: var(--text-3); font-size: 10.5px; font-family: var(--mono); flex-shrink: 0; }
+
 /* lightbox / toast */
 .lightbox {
   position: fixed; inset: 0;

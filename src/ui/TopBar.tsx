@@ -5,6 +5,7 @@ import { validateSceneDocument } from "../core/validate";
 import { cloneDoc, createEmptyDocument } from "../core/types";
 import { downloadBlob } from "../core/videoExport";
 import { demoDocument } from "../core/demoScene";
+import { MessagesPanel } from "./MessagesPanel";
 
 export function TopBar() {
   const t = useT();
@@ -13,6 +14,8 @@ export function TopBar() {
   const setUi = useStore((s) => s.setUi);
   const mutateDoc = useStore((s) => s.mutateDoc);
   const showToast = useStore((s) => s.showToast);
+  const unreadMessages = useStore((s) => s.unreadMessages);
+  const messagesOpen = useStore((s) => s.messagesOpen);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const exportJson = () => {
@@ -56,8 +59,9 @@ export function TopBar() {
   };
 
   return (
-    <div className="topbar">
-      <div className="brand">
+    <>
+      <div className="topbar">
+        <div className="brand">
         <b>MotionRef</b>
         <span>{t("app.subtitle")}</span>
       </div>
@@ -101,6 +105,13 @@ export function TopBar() {
         }}
       />
       <div className="spacer" />
+      <button
+        className={`btn small ${messagesOpen ? "active" : ""}`}
+        title={t("messages.title")}
+        onClick={() => useStore.setState({ messagesOpen: !messagesOpen, unreadMessages: 0 })}
+      >
+        🔔{unreadMessages > 0 && <span className="badge">{unreadMessages > 99 ? "99+" : unreadMessages}</span>}
+      </button>
       <button className="btn primary small" onClick={() => setUi("exportOpen", true)}>
         🎬 {t("topbar.exportVideo")}
       </button>
@@ -118,6 +129,8 @@ export function TopBar() {
       >
         {t("topbar.language")}
       </button>
-    </div>
+      </div>
+      {messagesOpen && <MessagesPanel />}
+    </>
   );
 }

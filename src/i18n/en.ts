@@ -151,6 +151,11 @@ export const en: Record<string, string> = {
   // Layout
   "layout.resize": "Drag to resize · double-click to reset",
 
+  // Message center
+  "messages.title": "Messages",
+  "messages.empty": "No messages yet.",
+  "messages.clear": "Clear",
+
   // Script console
   "script.title": "Script console",
   "script.run": "Run",

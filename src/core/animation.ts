@@ -242,7 +242,9 @@ function runHooks(state: EvaluatedState, doc: SceneDocument, t: number): HookErr
       },
       update: (id, patch) => {
         const o = state.objects.get(id);
-        if (!o) throw new Error(`onFrame: unknown object id "${id}"`);
+        // Unknown id (object deleted, stale reference) — frame overlays are
+        // best-effort; a missing target is a silent no-op, never a crash.
+        if (!o) return;
         if (patch.position) o.position = [...patch.position] as Vec3;
         if (patch.rotation) o.rotation = [...patch.rotation] as Vec3;
         if (patch.scale) o.scale = [...patch.scale] as Vec3;
