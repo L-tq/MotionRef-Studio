@@ -23,8 +23,8 @@ and override everything it does.
   **可折叠布局** —— 视口边缘的小三角形按钮可收起/展开左、右面板与时间线，面板尺寸与可见性会自动记忆。
 - 🎥 **Camera control** — FOV ↔ 35mm focal-length conversion, position/target, camera keyframes on the timeline, live "scene camera preview" (exact export framing).
   **相机控制** —— FOV 与 35mm 焦距换算、位置/注视点、时间轴上的相机关键帧、实时取景预览。
-- ⏱ **Timeline** — per-object keyframes (position/rotation/scale/color/visibility, linear/smooth/step interpolation), draggable keys, playhead scrubbing, auto-key.
-  **时间轴** —— 每对象关键帧（位置/旋转/缩放/颜色/可见性，linear/smooth/step 插值）、可拖动关键帧、播放头擦洗、自动关键帧。
+- ⏱ **Timeline** — per-object keyframes (position/rotation/scale/color/visibility, linear/smooth/step interpolation), draggable keys, playhead scrubbing, auto-key recording (● Add & Replace / Replace modes: transform an object while the timeline plays and every swept frame gets a key; a recording pass stops at the end instead of looping).
+  **时间轴** —— 每对象关键帧（位置/旋转/缩放/颜色/可见性，linear/smooth/step 插值）、可拖动关键帧、播放头擦洗、自动关键帧录制（● 添加并替换 / 仅替换：播放中直接拖动物体即可逐帧录制关键帧；录制播放到末尾自动停止，不循环）。
 - ⌨ **Sandboxed scripting** — the agent and you share one Scripting API (`api.add(...)`, `api.keyframes(...)`, `api.onFrame((t, f) => ...)`) running in a Web Worker sandbox (no DOM/network, 5s timeout).
   **沙箱脚本** —— 智能体与你共用一套脚本 API，运行于 Web Worker 沙箱（无 DOM/网络，5 秒超时）。
 - 🎬 **Deterministic video export** — frame-by-frame offscreen rendering at fixed timestep → MP4 (H.264 when supported) or WebM fallback; 16:9 / 9:16 / 1:1 presets.

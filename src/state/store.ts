@@ -144,6 +144,9 @@ export interface AppState {
   playhead: number;
   playing: boolean;
   autoKey: boolean;
+  /** Auto-key recording mode (Blender-style): "addReplace" inserts new keys
+   *  on unkeyed playhead frames, "replace" only overwrites existing keys. */
+  autoKeyMode: "addReplace" | "replace";
   gizmo: GizmoMode;
   showGrid: boolean;
   cameraPreview: boolean;
@@ -296,6 +299,7 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
   playhead: 0,
   playing: false,
   autoKey: true,
+  autoKeyMode: "addReplace",
   gizmo: "select",
   showGrid: true,
   cameraPreview: false,
@@ -418,10 +422,14 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     if (!obj) return;
     const track = state.doc.tracks[id];
     const hasTrack = !!track?.length;
-    if (hasTrack || state.autoKey) {
+    const t = +state.playhead.toFixed(4);
+    const hasKeyAtT = !!track?.some((k) => Math.abs(k.t - t) < 1e-4);
+    // "Replace" mode only overwrites keys that already exist at the playhead;
+    // "Add & Replace" (and plain keyed objects) may also insert new ones.
+    const replaceOnly = state.autoKey && state.autoKeyMode === "replace";
+    if (hasKeyAtT || (!replaceOnly && (hasTrack || state.autoKey))) {
       state.mutateDoc("pose", (draft) => {
         const keys = (draft.tracks[id] ??= []);
-        const t = +state.playhead.toFixed(4);
         const existing = keys.find((k) => Math.abs(k.t - t) < 1e-4);
         const basePose = {
           position: [...obj.position] as [number, number, number],
@@ -600,9 +608,11 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
   commitCamera(patch) {
     const state = get();
     const hasKeys = state.doc.cameraKeys.length > 0;
-    if (hasKeys || state.autoKey) {
+    const t = +state.playhead.toFixed(4);
+    const hasKeyAtT = state.doc.cameraKeys.some((k) => Math.abs(k.t - t) < 1e-4);
+    const replaceOnly = state.autoKey && state.autoKeyMode === "replace";
+    if (hasKeyAtT || (!replaceOnly && (hasKeys || state.autoKey))) {
       state.mutateDoc("camera", (draft) => {
-        const t = +state.playhead.toFixed(4);
         const cam = evaluate(draft, t).camera;
         const existing = draft.cameraKeys.find((k) => Math.abs(k.t - t) < 1e-4);
         const entry = {

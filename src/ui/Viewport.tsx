@@ -72,6 +72,15 @@ export function Viewport() {
         const s = store.getState();
         if (s.playing) s.setPlayhead(time);
       },
+      onPlaybackEnd: () => {
+        // Auto-key recording pass reached the end: rest at the last frame
+        // instead of looping (pressing play again restarts from 0).
+        const s = store.getState();
+        if (s.playing) {
+          s.pause();
+          s.pushMessage("info", "timeline.recordingDone", { toast: true });
+        }
+      },
       onHookErrors: (errors) => {
         // Archive in the message center (repeats collapse into one entry);
         // only the first occurrence also pops a transient toast.
@@ -88,6 +97,7 @@ export function Viewport() {
         doc: s.doc,
         time: s.playhead,
         playing: s.playing,
+        autoKey: s.autoKey,
         selection: s.selection,
         gizmo: s.gizmo,
         showGrid: s.showGrid,

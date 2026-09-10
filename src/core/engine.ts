@@ -17,6 +17,9 @@ export interface FrameSource {
   doc: SceneDocument;
   time: number;
   playing: boolean;
+  /** Auto-key recording active: playback keeps running during gizmo drags
+   *  and stops at the end of the timeline instead of looping. */
+  autoKey: boolean;
   selection: string[];
   gizmo: GizmoMode;
   showGrid: boolean;
@@ -28,6 +31,8 @@ export interface EngineCallbacks {
   onGizmoEdit(id: string, pose: { position: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number] }): void;
   onGizmoDragEnd(): void;
   onTimeAdvance(t: number): void;
+  /** Playback clamped at the end of the timeline (auto-key recording pass). */
+  onPlaybackEnd(): void;
   onHookErrors(errors: HookError[]): void;
   onWalkChange?(active: boolean, speedPct: number, cameraMode: boolean): void;
   onWalkSpeed?(speedPct: number): void;
@@ -131,7 +136,9 @@ export class DocScene {
     this.sync(doc, evaluate(doc, 0));
   }
 
-  sync(doc: SceneDocument, state: EvaluatedState): void {
+  /** skipId keeps one object's mesh untouched (a gizmo drag holds it), while
+   *  the rest of the scene still animates during a recording pass. */
+  sync(doc: SceneDocument, state: EvaluatedState, skipId?: string): void {
     this.scene.background = new THREE.Color(doc.background);
 
     const alive = new Set<string>();
@@ -173,6 +180,7 @@ export class DocScene {
 
     // Apply evaluated poses.
     for (const obj of doc.objects) {
+      if (obj.id === skipId) continue;
       const mesh = this.meshes.get(obj.id);
       const ev = state.objects.get(obj.id);
       if (!mesh || !ev) continue;
@@ -364,10 +372,36 @@ export class Engine {
       const frame = this.source();
       if (!frame) return;
 
-      if (frame.playing && !this.dragging) {
+      // Auto-key recording pass: playback keeps running while a gizmo drag is
+      // held (that is the point — keys are recorded as the playhead sweeps)
+      // and stops at the end of the timeline instead of looping.
+      if (frame.playing && (!this.dragging || frame.autoKey)) {
         let t = frame.time + dt;
-        if (t > frame.doc.duration) t = 0;
+        let ended = false;
+        if (t > frame.doc.duration) {
+          if (frame.autoKey) {
+            t = frame.doc.duration;
+            ended = true;
+          } else {
+            t = 0;
+          }
+        }
         this.callbacks.onTimeAdvance(t);
+        if (ended) this.callbacks.onPlaybackEnd();
+      }
+
+      // While a drag is held during a recording pass, commit the held pose
+      // every tick so each swept frame inserts/updates a key, even when the
+      // mouse is motionless (commitPose dedupes by playhead time).
+      if (this.dragging && frame.playing && frame.autoKey) {
+        const mesh = this.transform.object as THREE.Mesh | null;
+        if (mesh?.userData.id) {
+          this.callbacks.onGizmoEdit(mesh.userData.id as string, {
+            position: [mesh.position.x, mesh.position.y, mesh.position.z],
+            rotation: [mesh.rotation.x, mesh.rotation.y, mesh.rotation.z],
+            scale: [mesh.scale.x, mesh.scale.y, mesh.scale.z],
+          });
+        }
       }
 
       const errors: HookError[] = [];
@@ -377,7 +411,10 @@ export class Engine {
         this.callbacks.onHookErrors(errors);
       }
 
-      if (!this.dragging) this.docScene.sync(frame.doc, state);
+      const heldId = this.dragging
+        ? ((this.transform.object as THREE.Mesh | null)?.userData.id as string | undefined)
+        : undefined;
+      this.docScene.sync(frame.doc, state, heldId);
 
       this.grid.visible = frame.showGrid;
       this.axes.visible = frame.showGrid;

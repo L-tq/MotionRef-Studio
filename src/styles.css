@@ -367,6 +367,15 @@ input[type="checkbox"] { accent-color: var(--accent); }
   text-align: center;
 }
 .timeline-bar label { color: var(--text-3); font-size: 11px; display: flex; align-items: center; gap: 4px; }
+/* Auto-key record dot: dim when off, red when recording (Blender-style). */
+.rec-dot { font-size: 13px; color: #6b3640; padding: 2px 7px; }
+.rec-dot.on {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: rgba(255, 92, 124, 0.14);
+}
+.ak-mode { font-size: 11px; color: var(--text-2); background: var(--bg-3); border: 1px solid var(--border-2); border-radius: var(--radius-s); padding: 2px 4px; }
+.ak-mode:disabled { opacity: 0.45; }
 .tl-zoom { display: inline-flex; gap: 4px; align-items: center; }
 .timeline-body { display: grid; grid-template-columns: 168px 1fr; min-height: 0; overflow: hidden; }
 .track-labels { border-right: 1px solid var(--border); overflow: hidden; }

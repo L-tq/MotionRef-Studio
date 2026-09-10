@@ -45,6 +45,7 @@ export function Timeline() {
   const playing = useStore((s) => s.playing);
   const playhead = useStore((s) => s.playhead);
   const autoKey = useStore((s) => s.autoKey);
+  const autoKeyMode = useStore((s) => s.autoKeyMode);
   const storedZoom = useStore((s) => s.layout.timelineZoom);
   const zoom = storedZoom ?? 140;
   const mode = useStore((s) => s.layout.timelineMode ?? "tracks");
@@ -242,10 +243,29 @@ export function Timeline() {
             ))}
           </select>
         </label>
-        <label title={t("timeline.autoKey")}>
-          <input type="checkbox" checked={autoKey} onChange={(e) => setUi("autoKey", e.target.checked)} />
-          {t("timeline.autoKey")}
-        </label>
+        {/* Auto-key recording (Blender-style): record dot + mode menu. While
+         *  recording, playback keeps running during gizmo drags and stops at
+         *  the end of the timeline instead of looping. */}
+        <button
+          type="button"
+          className={`btn small rec-dot${autoKey ? " on" : ""}`}
+          title={t("timeline.autoKey")}
+          aria-pressed={autoKey}
+          onClick={() => setUi("autoKey", !autoKey)}
+        >
+          ●
+        </button>
+        <select
+          className="ak-mode"
+          value={autoKeyMode}
+          disabled={!autoKey}
+          title={t("timeline.autoKeyMode")}
+          aria-label={t("timeline.autoKeyMode")}
+          onChange={(e) => setUi("autoKeyMode", e.target.value as "addReplace" | "replace")}
+        >
+          <option value="addReplace">{t("timeline.akAddReplace")}</option>
+          <option value="replace">{t("timeline.akReplace")}</option>
+        </select>
         <button className="btn small" onClick={() => setKeyAtPlayhead()} disabled={selection.length === 0}>
           ◆ {t("timeline.setKey")}
         </button>
