@@ -37,6 +37,7 @@ async function fileToDataUrl(file: File, maxEdge = 1024): Promise<string> {
 // --- component -------------------------------------------------------------------
 
 export function ChatPanel() {
+  const t = useT();
   const rightTab = useStore((s) => s.rightTab);
   const agentState = useStore((s) => s.agentState);
   const setUi = useStore((s) => s.setUi);
@@ -48,17 +49,17 @@ export function ChatPanel() {
           className={rightTab === "chat" ? "active" : ""}
           onClick={() => setUi("rightTab", "chat")}
         >
-          🤖 Agent
+          🤖 {t("chat.title")}
           {agentState === "running" && <span className="running-dot" />}
         </button>
         <button
           className={rightTab === "script" ? "active" : ""}
           onClick={() => setUi("rightTab", "script")}
         >
-          ⌨ Script
+          ⌨ {t("chat.script")}
         </button>
         <button
-          title="New session"
+          title={t("chat.newSession")}
           onClick={() => {
             if (agentState === "running") return;
             resetSession();
@@ -117,7 +118,8 @@ function ChatTab() {
       showToast(`chat.tooManyImages|${limit}`);
       return;
     }
-    const dataUrl = snapshotDataUrl(s.doc, s.playhead, 1280, 720);
+    // JPEG keeps the payload small and is accepted by every vision endpoint.
+    const dataUrl = snapshotDataUrl(s.doc, s.playhead, 1280, 720, "jpeg");
     setImages((prev) => [...prev, dataUrl]);
   };
 

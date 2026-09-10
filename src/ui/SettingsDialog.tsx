@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useStore } from "../state/store";
 import { useT } from "../i18n";
-import { listModels } from "../agent/llmClient";
+import { testConnection } from "../agent/llmClient";
 import { AGENT_SKILL_GUIDE } from "../agent/guide";
 import { getLocale } from "../i18n";
 
@@ -40,10 +40,10 @@ export function SettingsDialog({ onboarding }: { onboarding?: boolean }) {
     setTesting(true);
     setTestResult(null);
     try {
-      const models = await listModels({ baseUrl, apiKey, model, provider, connection, maxImages, maxSteps });
-      setTestResult(models.length ? t("settings.testOk") : t("settings.testFailNoModels"));
+      const result = await testConnection({ baseUrl, apiKey, model, provider, connection, maxImages, maxSteps });
+      setTestResult((result.ok ? "✓ " : "✗ ") + result.detail);
     } catch (err) {
-      setTestResult(t("settings.testFail", { msg: err instanceof Error ? err.message : String(err) }));
+      setTestResult("✗ " + (err instanceof Error ? err.message : String(err)));
     } finally {
       setTesting(false);
     }
@@ -125,7 +125,11 @@ export function SettingsDialog({ onboarding }: { onboarding?: boolean }) {
                 <button className="btn" disabled={testing || !baseUrl.trim()} onClick={test}>
                   {testing ? t("settings.testing") : t("settings.test")}
                 </button>
-                {testResult && <span style={{ color: testResult.startsWith("✓") || testResult.includes("OK") || testResult.includes("成功") ? "var(--accent-2)" : "var(--danger)", fontSize: 12 }}>{testResult}</span>}
+                {testResult && (
+                  <span style={{ color: testResult.startsWith("✓") ? "var(--accent-2)" : "var(--danger)", fontSize: 12 }}>
+                    {testResult}
+                  </span>
+                )}
               </div>
             </>
           )}

@@ -69,7 +69,8 @@ function makeContext(): ToolContext {
       const time2 = clamp(time ?? s.playhead, 0, s.doc.duration);
       const w = Math.round(clamp(width ?? 1024, 64, 2048));
       const h = Math.round(clamp(height ?? 576, 64, 2048));
-      return { dataUrl: snapshotDataUrl(s.doc, time2, w, h), t: time2, w, h };
+      // JPEG: universally accepted by vision APIs and much smaller on the wire.
+      return { dataUrl: snapshotDataUrl(s.doc, time2, w, h, "jpeg"), t: time2, w, h };
     },
     runSandbox: (code) => sandbox.run(code, useStore.getState().doc),
   };
@@ -151,18 +152,24 @@ export async function executeToolWithEvents(name: string, argsJson: string, ctx:
       width: snap.w,
       height: snap.h,
     });
-    wireLog.push({
-      role: "user",
-      content: [
-        {
-          type: "text",
-          text: `[SNAPSHOT t=${snap.t.toFixed(2)}s] Rendered from the scene camera (export framing). Verify composition, framing, colors and motion blocking.`,
-        },
-        { type: "image_url", image_url: { url: snap.dataUrl } },
-      ],
-    });
   }
   return result;
+}
+
+/** Snapshot feedback must be appended to the wire log only AFTER every tool
+ *  message of the current assistant message — providers require tool replies
+ *  to be contiguous. Callers drain collected snapshots here. */
+export function appendSnapshotFeedback(snap: { dataUrl: string; t: number; w: number; h: number }): void {
+  wireLog.push({
+    role: "user",
+    content: [
+      {
+        type: "text",
+        text: `[SNAPSHOT t=${snap.t.toFixed(2)}s] Rendered from the scene camera (export framing). Verify composition, framing, colors and motion blocking.`,
+      },
+      { type: "image_url", image_url: { url: snap.dataUrl } },
+    ],
+  });
 }
 
 function prettify(argsJson: string): string {
@@ -231,11 +238,15 @@ async function runRealTurn(model: string, maxSteps: number, signal: AbortSignal)
       tool_calls: result.toolCalls,
     });
 
+    const snapshots: Array<{ dataUrl: string; t: number; w: number; h: number }> = [];
     for (const call of result.toolCalls) {
       if (signal.aborted) throw new DOMException("aborted", "AbortError");
       const toolResult = await executeToolWithEvents(call.function.name, call.function.arguments, ctx);
       wireLog.push({ role: "tool", tool_call_id: call.id, name: call.function.name, content: toolResult.text });
+      if (toolResult.snapshot) snapshots.push(toolResult.snapshot);
     }
+    // Feedback images go after ALL tool replies to keep the tool block contiguous.
+    for (const snap of snapshots) appendSnapshotFeedback(snap);
   }
 
   useStore.getState().sessionPush({

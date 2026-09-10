@@ -2,7 +2,7 @@
  *  snapshots, chat events) without any network — used for testing and demos. */
 import { useStore } from "../state/store";
 import { newId } from "../core/types";
-import type { AgentInput } from "./agentLoop";
+import { appendSnapshotFeedback, type AgentInput } from "./agentLoop";
 import type { ToolContext, ToolResult } from "./tools";
 import { t } from "../i18n";
 
@@ -62,9 +62,11 @@ export async function runMockTurn(
   }
 
   await execute("execute_code", JSON.stringify({ code: DEMO_CODE }), ctx);
-  await execute("snapshot", JSON.stringify({ time: 0 }), ctx);
+  const snap1 = await execute("snapshot", JSON.stringify({ time: 0 }), ctx);
+  if (snap1.snapshot) appendSnapshotFeedback(snap1.snapshot);
   await sleep(150);
-  await execute("snapshot", JSON.stringify({ time: 3 }), ctx);
+  const snap2 = await execute("snapshot", JSON.stringify({ time: 3 }), ctx);
+  if (snap2.snapshot) appendSnapshotFeedback(snap2.snapshot);
 
   useStore.getState().sessionPush({
     id: newId("e"),

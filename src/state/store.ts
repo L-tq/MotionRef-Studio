@@ -584,3 +584,35 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
 export function llmReady(): boolean {
   return isConfigured(useStore.getState().settings);
 }
+
+// --- working-scene autosave ---------------------------------------------------
+// A reload/crash should never silently destroy the user's scene: persist the
+// current document (debounced) and restore it on boot.
+
+const AUTOSAVE_KEY = "mrs.autosave";
+
+(function restoreAutosave(): void {
+  try {
+    const raw = localStorage.getItem(AUTOSAVE_KEY);
+    if (!raw) return;
+    const result = validateSceneDocument(JSON.parse(raw) as unknown);
+    if ("doc" in result && result.doc.objects.length > 0) {
+      useStore.setState({ doc: result.doc });
+    }
+  } catch {
+    /* corrupt autosave — start fresh */
+  }
+})();
+
+let autosaveTimer: number | undefined;
+useStore.subscribe((state, prev) => {
+  if (state.doc === prev.doc) return;
+  window.clearTimeout(autosaveTimer);
+  autosaveTimer = window.setTimeout(() => {
+    try {
+      localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(state.doc));
+    } catch {
+      /* storage full — manual Save/Export still work */
+    }
+  }, 800);
+});

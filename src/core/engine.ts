@@ -213,9 +213,17 @@ export function renderDocFrame(
   return renderer.domElement;
 }
 
-export function snapshotDataUrl(doc: SceneDocument, time: number, width = 1024, height = 576): string {
+export function snapshotDataUrl(
+  doc: SceneDocument,
+  time: number,
+  width = 1024,
+  height = 576,
+  format: "png" | "jpeg" = "png",
+): string {
   const canvas = renderDocFrame(doc, time, width, height);
-  return canvas.toDataURL("image/png");
+  return format === "jpeg"
+    ? canvas.toDataURL("image/jpeg", 0.92)
+    : canvas.toDataURL("image/png");
 }
 
 // ---------------------------------------------------------------------------

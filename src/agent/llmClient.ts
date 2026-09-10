@@ -42,10 +42,6 @@ function chatPath(base: string): string {
   return /\/v\d+$/.test(base) ? "/chat/completions" : "/v1/chat/completions";
 }
 
-function modelsPath(base: string): string {
-  return /\/v\d+$/.test(base) ? "/models" : "/v1/models";
-}
-
 interface Transport {
   url: string;
   init: RequestInit;
@@ -118,7 +114,8 @@ export async function streamChatCompletion(opts: {
   }
 
   if (!res.ok) {
-    throw new LlmError(`HTTP ${res.status} ${res.statusText}`, res.status, await readError(res));
+    const detail = await readError(res);
+    throw new LlmError(`HTTP ${res.status} ${res.statusText}${detail ? ` — ${detail}` : ""}`, res.status, detail);
   }
 
   const contentType = res.headers.get("content-type") ?? "";
@@ -227,13 +224,42 @@ export async function streamChatCompletion(opts: {
   return { content, toolCalls, finishReason, usage };
 }
 
-/** Fetch /models to verify connectivity; returns model id list. */
-export async function listModels(settings: LlmSettings, signal?: AbortSignal): Promise<string[]> {
-  const transport = buildTransport(settings, modelsPath(normalizeBase(settings.baseUrl)), {}, signal);
-  const res = await fetch(transport.url, { ...transport.init, method: "POST" });
-  if (!res.ok) throw new LlmError(`HTTP ${res.status} ${res.statusText}`, res.status, await readError(res));
-  const json = (await res.json()) as { data?: Array<{ id?: string }> };
-  return (json.data ?? []).map((m) => m.id ?? "").filter(Boolean);
+/** Connectivity check: a tiny non-streaming chat completion against the same
+ *  endpoint the agent uses (more meaningful than /models, which many
+ *  gateways implement differently). */
+export async function testConnection(
+  settings: LlmSettings,
+  signal?: AbortSignal,
+): Promise<{ ok: boolean; detail: string }> {
+  const payload = {
+    model: settings.model.trim(),
+    messages: [{ role: "user", content: "ping" }],
+    max_tokens: 1,
+    stream: false,
+  };
+  const transport = buildTransport(settings, chatPath(normalizeBase(settings.baseUrl)), payload, signal);
+  let res: Response;
+  try {
+    res = await fetch(transport.url, transport.init);
+  } catch (err) {
+    return {
+      ok: false,
+      detail:
+        settings.connection === "direct"
+          ? `Network error (direct mode may need CORS): ${String(err)}`
+          : `Network error via proxy: ${String(err)}`,
+    };
+  }
+  if (!res.ok) return { ok: false, detail: `HTTP ${res.status} ${res.statusText}. ${await readError(res)}` };
+  try {
+    const json = (await res.json()) as { choices?: unknown[]; error?: { message?: string } };
+    if (json.error) return { ok: false, detail: json.error.message ?? "Provider returned an error" };
+    return json.choices?.length
+      ? { ok: true, detail: "chat/completions responded" }
+      : { ok: false, detail: "Unexpected response shape (no choices)" };
+  } catch {
+    return { ok: false, detail: "Response was not valid JSON" };
+  }
 }
 
 /** Build multimodal user content parts from text + data-URL images. */
