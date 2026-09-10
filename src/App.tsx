@@ -12,7 +12,7 @@ import { ExportDialog } from "./ui/ExportDialog";
 import { useStore, DEFAULT_LAYOUT } from "./state/store";
 import { isConfigured } from "./agent/types";
 import { isWalkActive } from "./core/engine";
-import { useT } from "./i18n";
+import { useT, translateMessage } from "./i18n";
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
 
@@ -152,11 +152,5 @@ export default function App() {
 /** Renders "key|arg1|arg2…" toast strings through i18n. */
 function Toast({ message }: { message: string }) {
   const t = useT();
-  const [key, ...args] = message.split("|");
-  let text: string;
-  if (key === "export.done") text = t("export.done", { ext: args[0] ?? "", frames: args[1] ?? "" });
-  else if (key === "error.invalidJson") text = t("error.invalidJson", { msg: args[0] ?? "" });
-  else if (key === "viewport.hookError") text = t("viewport.hookError", { msg: args[0] ?? "" });
-  else text = t(key);
-  return <div className="toast">{text}</div>;
+  return <div className="toast">{translateMessage(message, t)}</div>;
 }

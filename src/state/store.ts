@@ -745,7 +745,7 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     try {
       localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
     } catch {
-      state.showToast("localStorage full — export JSON instead");
+      state.showToast("error.storageFull");
       return;
     }
     set({ projects, projectId: id });

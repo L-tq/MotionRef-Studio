@@ -1,5 +1,5 @@
 import { useStore } from "../state/store";
-import { useT } from "../i18n";
+import { useT, translateMessage } from "../i18n";
 
 /** Dropdown message center: every toast and background error is archived
  *  here (newest first) so nothing has to hover over the canvas forever. */
@@ -29,7 +29,7 @@ export function MessagesPanel() {
             <div key={m.id} className={`msglog-row ${m.kind}`}>
               <span className="dot" />
               <span className="text">
-                {m.text}
+                {translateMessage(m.text, t)}
                 {m.count > 1 && <span className="chip" style={{ marginLeft: 6 }}>×{m.count}</span>}
               </span>
               <time>{new Date(m.time).toLocaleTimeString()}</time>

@@ -236,6 +236,7 @@ export const en: Record<string, string> = {
 
   // Misc
   "error.invalidJson": "Invalid scene JSON: {msg}",
+  "error.storageFull": "localStorage is full — export the scene JSON instead.",
   "error.docImported": "Scene imported.",
   "notice.docExported": "Scene JSON downloaded.",
   "notice.projectSaved": "Project saved.",

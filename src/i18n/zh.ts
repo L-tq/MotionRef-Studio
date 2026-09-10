@@ -236,6 +236,7 @@ export const zh: Record<string, string> = {
 
   // Misc
   "error.invalidJson": "场景 JSON 无效：{msg}",
+  "error.storageFull": "localStorage 空间不足——请改为导出场景 JSON。",
   "error.docImported": "场景已导入。",
   "notice.docExported": "场景 JSON 已下载。",
   "notice.projectSaved": "项目已保存。",

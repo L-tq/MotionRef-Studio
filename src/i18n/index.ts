@@ -47,6 +47,26 @@ export function t(key: string, vars?: Record<string, string | number>): string {
   return value;
 }
 
+/** Resolve a stored toast/archive message of the form "key|arg1|arg2…".
+ *  Args fill the template's {placeholders} in order of first appearance. */
+export function translateMessage(
+  message: string,
+  t: (key: string, vars?: Record<string, string | number>) => string,
+): string {
+  const [key, ...args] = message.split("|");
+  if (args.length === 0) return t(message);
+  const template = t(key);
+  const names: string[] = [];
+  for (const m of template.matchAll(/\{(\w+)\}/g)) {
+    if (!names.includes(m[1])) names.push(m[1]);
+  }
+  const vars: Record<string, string | number> = {};
+  names.forEach((name, i) => {
+    vars[name] = args[i] ?? "";
+  });
+  return t(key, vars);
+}
+
 // React binding -----------------------------------------------------------
 import { useCallback, useSyncExternalStore } from "react";
 
