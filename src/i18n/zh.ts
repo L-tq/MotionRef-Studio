@@ -66,16 +66,16 @@ export const zh: Record<string, string> = {
   // 行走导航
   "walk.title": "行走",
   "walk.hud": "W/A/S/D 移动 · 鼠标转向 · Q/E 下/上 · Shift 减速 · 滚轮或 +/− 调速 · Esc 退出",
+  "walk.hudCam": "W/A/S/D 移动 · 鼠标转向 · Q/E 下/上 · Shift 减速 · 滚轮或 +/− 调速 · 左键确认 · 右键取消",
   "walk.speed": "速度 {pct}%",
-  "walk.previewOn": "请先退出场景相机预览——行走模式作用于编辑器视角。",
 
-  // 导向器（视图球）
-  "gizmo.px": "右 (+X)",
-  "gizmo.nx": "左 (−X)",
-  "gizmo.py": "顶 (+Y)",
-  "gizmo.ny": "底 (−Y)",
-  "gizmo.pz": "前 (+Z)",
-  "gizmo.nz": "后 (−Z)",
+  // 导向器（视图球）— Blender 式 Z 朝上标注（场景数据仍为 Y 朝上）
+  "gizmo.top": "顶 (+Z)",
+  "gizmo.bottom": "底 (−Z)",
+  "gizmo.front": "前 (−Y)",
+  "gizmo.back": "后 (+Y)",
+  "gizmo.right": "右 (+X)",
+  "gizmo.left": "左 (−X)",
 
   // Timeline
   "timeline.play": "播放 (空格)",

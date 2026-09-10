@@ -4,22 +4,25 @@ import type { Engine, ViewAxis } from "../core/engine";
 import { useT } from "../i18n";
 
 interface AxisDef {
+  /** World axis handed to engine.setEditorView when the dot is clicked. */
   id: ViewAxis;
   dir: [number, number, number];
   color: string;
   labelKey: string;
-  /** Positive axes carry a letter and render slightly larger. */
+  /** Positive display axes carry a letter and render slightly larger. */
   letter?: string;
 }
 
-// Colors mirror the viewport AxesHelper (X red, Y green, Z blue; negatives dimmed).
+// Displayed in Blender's Z-up convention: the labeled Z is the world's up axis
+// (+Y), labeled Y is depth (∓Z), X is unchanged. The scene document itself
+// stays Y-up — this is purely the navigation widget's presentation.
 const AXES: AxisDef[] = [
-  { id: "px", dir: [1, 0, 0], color: "#ff5964", labelKey: "gizmo.px", letter: "X" },
-  { id: "nx", dir: [-1, 0, 0], color: "#7e2f36", labelKey: "gizmo.nx" },
-  { id: "py", dir: [0, 1, 0], color: "#8adb4f", labelKey: "gizmo.py", letter: "Y" },
-  { id: "ny", dir: [0, -1, 0], color: "#43702a", labelKey: "gizmo.ny" },
-  { id: "pz", dir: [0, 0, 1], color: "#4f8fe8", labelKey: "gizmo.pz", letter: "Z" },
-  { id: "nz", dir: [0, 0, -1], color: "#2c5187", labelKey: "gizmo.nz" },
+  { id: "px", dir: [1, 0, 0], color: "#ff5964", labelKey: "gizmo.right", letter: "X" },
+  { id: "nx", dir: [-1, 0, 0], color: "#7e2f36", labelKey: "gizmo.left" },
+  { id: "nz", dir: [0, 0, -1], color: "#8adb4f", labelKey: "gizmo.back", letter: "Y" },
+  { id: "pz", dir: [0, 0, 1], color: "#43702a", labelKey: "gizmo.front" },
+  { id: "py", dir: [0, 1, 0], color: "#4f8fe8", labelKey: "gizmo.top", letter: "Z" },
+  { id: "ny", dir: [0, -1, 0], color: "#2c5187", labelKey: "gizmo.bottom" },
 ];
 
 const SIZE = 88;

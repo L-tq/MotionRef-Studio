@@ -53,7 +53,7 @@ export function Viewport() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<Engine | null>(null);
   const [engine, setEngine] = useState<Engine | null>(null);
-  const [walk, setWalk] = useState<{ active: boolean; speed: number }>({ active: false, speed: 100 });
+  const [walk, setWalk] = useState<{ active: boolean; speed: number; cameraMode: boolean }>({ active: false, speed: 100, cameraMode: false });
 
   const doc = useStore((s) => s.doc);
   const objects = doc.objects.length;
@@ -78,8 +78,9 @@ export function Viewport() {
         const msg = errors.map((e) => `#${e.index}: ${e.message}`).join("; ");
         store.getState().pushMessage("error", t("viewport.hookError", { msg }), { toast: true });
       },
-      onWalkChange: (active, speedPct) => setWalk({ active, speed: speedPct }),
+      onWalkChange: (active, speedPct, cameraMode) => setWalk({ active, speed: speedPct, cameraMode }),
       onWalkSpeed: (speedPct) => setWalk((w) => (w.speed === speedPct ? w : { ...w, speed: speedPct })),
+      onWalkCommitCamera: (pose) => store.getState().commitCamera({ position: pose.position, target: pose.target }),
     });
     engine.setSource(() => {
       const s = store.getState();
@@ -117,7 +118,7 @@ export function Viewport() {
       const eng = engineRef.current;
       if (!eng) return;
       if (eng.isWalking()) eng.endWalk();
-      else if (!eng.beginWalk()) s.showToast("walk.previewOn");
+      else eng.beginWalk();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -132,7 +133,7 @@ export function Viewport() {
     const eng = engineRef.current;
     if (!eng) return;
     if (eng.isWalking()) eng.endWalk();
-    else if (!eng.beginWalk()) useStore.getState().showToast("walk.previewOn");
+    else eng.beginWalk();
   };
 
   const snapshotNow = () => {
@@ -196,7 +197,7 @@ export function Viewport() {
       {walk.active && (
         <div className="walk-hud">
           <span className="walk-hud-title">{t("walk.title")}</span>
-          <span>{t("walk.hud")}</span>
+          <span>{t(walk.cameraMode ? "walk.hudCam" : "walk.hud")}</span>
           <span className="walk-hud-speed">{t("walk.speed", { pct: walk.speed })}</span>
         </div>
       )}

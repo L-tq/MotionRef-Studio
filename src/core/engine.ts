@@ -29,8 +29,10 @@ export interface EngineCallbacks {
   onGizmoDragEnd(): void;
   onTimeAdvance(t: number): void;
   onHookErrors(errors: HookError[]): void;
-  onWalkChange?(active: boolean, speedPct: number): void;
+  onWalkChange?(active: boolean, speedPct: number, cameraMode: boolean): void;
   onWalkSpeed?(speedPct: number): void;
+  /** Walk confirmed with a left click in scene-camera mode: bake the pose into the doc. */
+  onWalkCommitCamera?(pose: { position: [number, number, number]; target: [number, number, number] }): void;
 }
 
 export type ViewAxis = "px" | "nx" | "py" | "ny" | "pz" | "nz";
@@ -52,6 +54,17 @@ interface WalkState {
   dragLook: boolean;
   /** Orbit distance captured at entry, restored on exit so orbiting continues. */
   dist0: number;
+  /** Drive the scene camera (camera preview) instead of the editor camera.
+   *  Blender-style: left click bakes the pose into the doc, right click cancels. */
+  camera: boolean;
+  startPos: THREE.Vector3;
+  startTarget: THREE.Vector3;
+  /** Walked scene-camera position (camera mode); re-asserted after every
+   *  docScene.sync() which would otherwise restore the doc pose. */
+  pos: THREE.Vector3;
+  downX: number;
+  downY: number;
+  downButton: number;
 }
 
 // Lets the app-level keyboard router yield to walk mode (WASD/QE must not
@@ -526,24 +539,61 @@ export class Engine {
     return this.editorCamera;
   }
 
+  getSceneCamera(): THREE.PerspectiveCamera {
+    return this.docScene.sceneCamera;
+  }
+
   isWalking(): boolean {
     return this.walk !== null;
   }
 
-  /** Enter walk mode; false when the scene camera preview owns the viewport. */
+  /** Enter walk mode. In scene camera preview it flies the scene camera
+   *  (Blender-style: left click confirms into the doc, right click cancels);
+   *  otherwise it moves the editor view. */
   beginWalk(): boolean {
     if (this.walk) return true;
-    if (this.source()?.cameraPreview) return false;
-    const dir = this.editorCamera.getWorldDirection(new THREE.Vector3());
-    this.editorCamera.rotation.order = "YXZ";
+    const frame = this.source();
+    const cameraMode = !!frame?.cameraPreview;
+    let yaw: number;
+    let pitch: number;
+    let dist0: number;
+    const startPos = new THREE.Vector3();
+    const startTarget = new THREE.Vector3();
+    if (cameraMode && frame) {
+      // Start from the *evaluated* camera — with camera keyframes the preview
+      // shows the keyed pose at the playhead, not the doc's base camera.
+      const cam = evaluate(frame.doc, frame.time).camera;
+      startPos.set(cam.position[0], cam.position[1], cam.position[2]);
+      startTarget.set(cam.target[0], cam.target[1], cam.target[2]);
+      const dir = startTarget.clone().sub(startPos);
+      dist0 = Math.max(dir.length(), 0.1);
+      dir.normalize();
+      yaw = Math.atan2(-dir.x, -dir.z);
+      pitch = Math.asin(THREE.MathUtils.clamp(dir.y, -1, 1));
+      this.docScene.sceneCamera.rotation.order = "YXZ";
+      this.docScene.sceneCamera.position.copy(startPos);
+    } else {
+      const dir = this.editorCamera.getWorldDirection(new THREE.Vector3());
+      this.editorCamera.rotation.order = "YXZ";
+      yaw = Math.atan2(-dir.x, -dir.z);
+      pitch = Math.asin(THREE.MathUtils.clamp(dir.y, -1, 1));
+      dist0 = this.editorCamera.position.distanceTo(this.orbit.target);
+    }
     this.walk = {
       keys: new Set(),
-      yaw: Math.atan2(-dir.x, -dir.z),
-      pitch: Math.asin(THREE.MathUtils.clamp(dir.y, -1, 1)),
+      yaw,
+      pitch,
       mult: 1,
       locked: false,
       dragLook: false,
-      dist0: this.editorCamera.position.distanceTo(this.orbit.target),
+      dist0,
+      camera: cameraMode,
+      startPos,
+      startTarget,
+      pos: startPos.clone(),
+      downX: 0,
+      downY: 0,
+      downButton: -1,
     };
     this.viewTween = null;
     this.orbit.enabled = false;
@@ -556,6 +606,7 @@ export class Engine {
     document.addEventListener("pointerlockchange", this.onPointerLockChange);
     this.canvas.addEventListener("pointerdown", this.onWalkPointerDown);
     this.canvas.addEventListener("pointerup", this.onWalkPointerUp);
+    this.canvas.addEventListener("contextmenu", this.onWalkContextMenu);
     try {
       const p = this.canvas.requestPointerLock() as unknown;
       if (p instanceof Promise) p.catch(() => undefined);
@@ -563,7 +614,7 @@ export class Engine {
       /* pointer lock unavailable — drag-to-look still works */
     }
     walkEngine = this;
-    this.callbacks.onWalkChange?.(true, 100);
+    this.callbacks.onWalkChange?.(true, 100, cameraMode);
     return true;
   }
 
@@ -580,31 +631,65 @@ export class Engine {
     document.removeEventListener("pointerlockchange", this.onPointerLockChange);
     this.canvas.removeEventListener("pointerdown", this.onWalkPointerDown);
     this.canvas.removeEventListener("pointerup", this.onWalkPointerUp);
+    this.canvas.removeEventListener("contextmenu", this.onWalkContextMenu);
     if (document.pointerLockElement === this.canvas) document.exitPointerLock();
-    // Re-arm the orbit around a point straight ahead at the old distance so a
-    // subsequent orbit continues naturally from wherever the walk ended.
-    const dir = this.editorCamera.getWorldDirection(new THREE.Vector3());
-    this.orbit.target.copy(this.editorCamera.position).addScaledVector(dir, walk.dist0);
+    if (!walk.camera) {
+      // Re-arm the orbit around a point straight ahead at the old distance so a
+      // subsequent orbit continues naturally from wherever the walk ended.
+      const dir = this.editorCamera.getWorldDirection(new THREE.Vector3());
+      this.orbit.target.copy(this.editorCamera.position).addScaledVector(dir, walk.dist0);
+      this.orbit.update();
+    }
     this.orbit.enabled = true;
     this.transform.enabled = true;
-    this.orbit.update();
-    this.callbacks.onWalkChange?.(false, 100);
+    this.callbacks.onWalkChange?.(false, 100, false);
+  }
+
+  /** Left click in scene-camera walk: bake the walked pose into the doc camera,
+   *  keeping the original position→target distance for framing. */
+  private confirmCameraWalk(): void {
+    const w = this.walk;
+    if (!w) return;
+    const fwd = new THREE.Vector3(
+      -Math.sin(w.yaw) * Math.cos(w.pitch),
+      Math.sin(w.pitch),
+      -Math.cos(w.yaw) * Math.cos(w.pitch),
+    );
+    const target = w.pos.clone().addScaledVector(fwd, w.dist0);
+    this.callbacks.onWalkCommitCamera?.({
+      position: [w.pos.x, w.pos.y, w.pos.z],
+      target: [target.x, target.y, target.z],
+    });
+    this.endWalk();
   }
 
   private updateWalk(dt: number): void {
     const w = this.walk;
     if (!w) return;
-    this.editorCamera.rotation.set(w.pitch, w.yaw, 0);
     const slow = w.keys.has("shift") ? 0.25 : 1;
     const step = WALK_BASE_SPEED * w.mult * slow * dt;
     const f = (w.keys.has("w") ? 1 : 0) - (w.keys.has("s") ? 1 : 0);
     const r = (w.keys.has("d") ? 1 : 0) - (w.keys.has("a") ? 1 : 0);
     const u = (w.keys.has("e") ? 1 : 0) - (w.keys.has("q") ? 1 : 0);
+    if (w.camera) {
+      if (f !== 0 || r !== 0 || u !== 0) {
+        const fwd = new THREE.Vector3(-Math.sin(w.yaw), 0, -Math.cos(w.yaw));
+        const right = new THREE.Vector3(Math.cos(w.yaw), 0, -Math.sin(w.yaw));
+        w.pos.addScaledVector(fwd, f * step).addScaledVector(right, r * step);
+        w.pos.y += u * step;
+      }
+      // sync() restored the doc camera pose earlier this frame — re-assert ours.
+      this.docScene.sceneCamera.position.copy(w.pos);
+      this.docScene.sceneCamera.rotation.set(w.pitch, w.yaw, 0);
+      return;
+    }
+    const cam = this.editorCamera;
+    cam.rotation.set(w.pitch, w.yaw, 0);
     if (f !== 0 || r !== 0 || u !== 0) {
       const fwd = new THREE.Vector3(-Math.sin(w.yaw), 0, -Math.cos(w.yaw));
       const right = new THREE.Vector3(Math.cos(w.yaw), 0, -Math.sin(w.yaw));
-      this.editorCamera.position.addScaledVector(fwd, f * step).addScaledVector(right, r * step);
-      this.editorCamera.position.y += u * step;
+      cam.position.addScaledVector(fwd, f * step).addScaledVector(right, r * step);
+      cam.position.y += u * step;
     }
   }
 
@@ -665,13 +750,36 @@ export class Engine {
 
   private onWalkPointerDown = (e: PointerEvent): void => {
     const w = this.walk;
-    if (!w || document.pointerLockElement === this.canvas) return;
-    w.dragLook = true;
-    this.canvas.setPointerCapture?.(e.pointerId);
+    if (!w) return;
+    if (e.button === 2 && w.camera) {
+      // Right click cancels: the doc was never touched, so plain exit restores it.
+      e.preventDefault();
+      this.endWalk();
+      return;
+    }
+    if (e.button !== 0) return;
+    w.downX = e.clientX;
+    w.downY = e.clientY;
+    w.downButton = 0;
+    if (document.pointerLockElement !== this.canvas) {
+      w.dragLook = true;
+      this.canvas.setPointerCapture?.(e.pointerId);
+    }
   };
 
-  private onWalkPointerUp = (): void => {
-    if (this.walk) this.walk.dragLook = false;
+  private onWalkPointerUp = (e: PointerEvent): void => {
+    const w = this.walk;
+    if (!w || e.button !== 0) return;
+    w.dragLook = false;
+    // A click (barely any movement between down and up) confirms in camera mode;
+    // drags are mouse-look via the pointer-lock fallback.
+    const dx = e.clientX - w.downX;
+    const dy = e.clientY - w.downY;
+    if (w.camera && w.downButton === 0 && dx * dx + dy * dy < 25) this.confirmCameraWalk();
+  };
+
+  private onWalkContextMenu = (e: MouseEvent): void => {
+    if (this.walk) e.preventDefault();
   };
 
   private onPointerLockChange = (): void => {

@@ -66,16 +66,16 @@ export const en: Record<string, string> = {
   // Walk navigation
   "walk.title": "Walk",
   "walk.hud": "W/A/S/D move · mouse look · Q/E down/up · Shift slow · wheel or +/− speed · Esc exit",
+  "walk.hudCam": "W/A/S/D move · mouse look · Q/E down/up · Shift slow · wheel or +/− speed · Left-click confirm · Right-click cancel",
   "walk.speed": "Speed {pct}%",
-  "walk.previewOn": "Exit the scene camera preview first — walk mode drives the editor view.",
 
-  // Navigation gizmo
-  "gizmo.px": "Right (+X)",
-  "gizmo.nx": "Left (−X)",
-  "gizmo.py": "Top (+Y)",
-  "gizmo.ny": "Bottom (−Y)",
-  "gizmo.pz": "Front (+Z)",
-  "gizmo.nz": "Back (−Z)",
+  // Navigation gizmo — Blender-style Z-up labels (scene data stays Y-up)
+  "gizmo.top": "Top (+Z)",
+  "gizmo.bottom": "Bottom (−Z)",
+  "gizmo.front": "Front (−Y)",
+  "gizmo.back": "Back (+Y)",
+  "gizmo.right": "Right (+X)",
+  "gizmo.left": "Left (−X)",
 
   // Timeline
   "timeline.play": "Play (Space)",
