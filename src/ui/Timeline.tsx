@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useStore } from "../state/store";
 import { useT } from "../i18n";
 import type { SceneDocument } from "../core/types";
@@ -27,12 +27,25 @@ function buildRows(doc: SceneDocument, selection: string[]): TrackRow[] {
 
 type KeyTarget = { objectId: string } | { camera: true };
 
+const ZOOM_MIN = 20;
+const ZOOM_MAX = 500;
+const clampZoom = (z: number) => Math.min(Math.max(Math.round(z), ZOOM_MIN), ZOOM_MAX);
+
+/** First tick step (seconds) whose on-screen spacing is readable at this zoom. */
+function tickStep(zoom: number): number {
+  const candidates = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60];
+  return candidates.find((s) => s * zoom >= 64) ?? 60;
+}
+
 export function Timeline() {
   const t = useT();
   const doc = useStore((s) => s.doc);
   const selection = useStore((s) => s.selection);
   const playing = useStore((s) => s.playing);
+  const playhead = useStore((s) => s.playhead);
   const autoKey = useStore((s) => s.autoKey);
+  const storedZoom = useStore((s) => s.layout.timelineZoom);
+  const zoom = storedZoom ?? 140;
   const play = useStore((s) => s.play);
   const pause = useStore((s) => s.pause);
   const stop = useStore((s) => s.stop);
@@ -40,6 +53,7 @@ export function Timeline() {
   const setDuration = useStore((s) => s.setDuration);
   const setFps = useStore((s) => s.setFps);
   const setUi = useStore((s) => s.setUi);
+  const setLayout = useStore((s) => s.setLayout);
   const setKeyAtPlayhead = useStore((s) => s.setKeyAtPlayhead);
   const setCameraKeyAtPlayhead = useStore((s) => s.setCameraKeyAtPlayhead);
   const retimeKey = useStore((s) => s.retimeKey);
@@ -48,20 +62,67 @@ export function Timeline() {
 
   const rows = buildRows(doc, selection);
   const areaRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(600);
   const [selectedKey, setSelectedKey] = useState<{ rowKey: string; t: number } | null>(null);
 
   useEffect(() => {
     const el = areaRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => setWidth(el.clientWidth));
+    const measure = () => {
+      setWidth(el.clientWidth);
+      // First visit (no stored zoom): fit the whole duration to the width.
+      if (useStore.getState().layout.timelineZoom == null && el.clientWidth > 0 && doc.duration > 0) {
+        useStore.getState().setLayout({ timelineZoom: clampZoom(el.clientWidth / doc.duration) });
+      }
+    };
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
-    setWidth(el.clientWidth);
+    measure();
     return () => ro.disconnect();
-  }, []);
+  }, [doc.duration]);
 
-  const tToX = useCallback((time: number) => (time / Math.max(doc.duration, 0.001)) * width, [doc.duration, width]);
-  const xToT = useCallback((x: number) => (x / Math.max(width, 1)) * doc.duration, [doc.duration, width]);
+  // Zoomable time axis: pixels per second. The content is at least as wide as
+  // the viewport; zooming in makes it scrollable.
+  const contentWidth = Math.max(width, doc.duration * zoom);
+  const tToX = useCallback((time: number) => time * zoom, [zoom]);
+  const xToT = useCallback((x: number) => x / Math.max(zoom, 0.001), [zoom]);
+
+  // Anchor for cursor-staying-still zoom (ctrl/cmd + wheel).
+  const zoomAnchor = useRef<{ pxInView: number; time: number } | null>(null);
+  useLayoutEffect(() => {
+    const el = areaRef.current;
+    const anchor = zoomAnchor.current;
+    if (!el || !anchor) return;
+    zoomAnchor.current = null;
+    el.scrollLeft = Math.max(0, anchor.time * zoom - anchor.pxInView);
+  }, [zoom, contentWidth]);
+
+  useEffect(() => {
+    const el = areaRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const pxInView = e.clientX - rect.left;
+      const time = (pxInView + el.scrollLeft) / Math.max(zoom, 0.001);
+      zoomAnchor.current = { pxInView, time };
+      const factor = e.deltaY < 0 ? 1.2 : 1 / 1.2;
+      setLayout({ timelineZoom: clampZoom(zoom * factor) });
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [zoom, setLayout]);
+
+  // Keep the playhead visible while playing on a zoomed timeline.
+  useEffect(() => {
+    const el = areaRef.current;
+    if (!el || !playing) return;
+    const x = tToX(playhead);
+    if (x < el.scrollLeft + 16) el.scrollLeft = Math.max(0, x - 40);
+    else if (x > el.scrollLeft + el.clientWidth - 48) el.scrollLeft = x - el.clientWidth + 96;
+  }, [playhead, playing, tToX]);
 
   // Click-and-drag scrubbing: sets the playhead immediately, then follows
   // pointermove anywhere until release (listeners on window so dragging
@@ -69,10 +130,10 @@ export function Timeline() {
   const beginScrub = useCallback(
     (e: React.PointerEvent) => {
       pause();
-      const area = areaRef.current;
-      if (!area) return;
+      const content = contentRef.current;
+      if (!content) return;
       const apply = (clientX: number) => {
-        const rect = area.getBoundingClientRect();
+        const rect = content.getBoundingClientRect();
         setPlayhead(Math.min(Math.max(xToT(clientX - rect.left), 0), doc.duration));
       };
       apply(e.clientX);
@@ -94,10 +155,10 @@ export function Timeline() {
     pause();
     setSelectedKey({ rowKey: "camera" in target ? "__camera" : target.objectId, t: startT });
     let lastT = startT;
-    const area = areaRef.current;
+    const content = contentRef.current;
     const move = (ev: PointerEvent) => {
-      if (!area) return;
-      const rect = area.getBoundingClientRect();
+      if (!content) return;
+      const rect = content.getBoundingClientRect();
       const nextT = Math.min(Math.max(xToT(ev.clientX - rect.left), 0), doc.duration);
       retimeKey(target, lastT, nextT);
       setPlayhead(nextT);
@@ -128,8 +189,12 @@ export function Timeline() {
     return () => window.removeEventListener("keydown", onKey);
   }, [selectedKey, deleteKey]);
 
-  const ticks = Math.min(Math.max(Math.ceil(doc.duration), 1), 60);
-  const showEvery = ticks > 20 ? 5 : ticks > 10 ? 2 : 1;
+  const step = tickStep(zoom);
+  const tickCount = Math.floor(doc.duration / step + 1e-6);
+  const tickLabel = (i: number) => `${+(i * step).toFixed(2)}s`;
+
+  const zoomBy = (factor: number) => setLayout({ timelineZoom: clampZoom(zoom * factor) });
+  const zoomFit = () => setLayout({ timelineZoom: clampZoom(width / Math.max(doc.duration, 0.5)) });
 
   return (
     <div className="timeline">
@@ -177,6 +242,18 @@ export function Timeline() {
         <button className="btn small" onClick={setCameraKeyAtPlayhead}>
           🎥◆ {t("timeline.setCameraKey")}
         </button>
+        <span className="spacer" />
+        <span className="tl-zoom" role="group" aria-label={t("timeline.zoom")}>
+          <button className="btn small" title={t("timeline.zoomOut")} onClick={() => zoomBy(1 / 1.5)}>
+            －
+          </button>
+          <button className="btn small" title={t("timeline.zoomIn")} onClick={() => zoomBy(1.5)}>
+            ＋
+          </button>
+          <button className="btn small" title={t("timeline.zoomFit")} onClick={zoomFit}>
+            ⤢ {t("timeline.zoomFitShort")}
+          </button>
+        </span>
       </div>
 
       <div className="timeline-body">
@@ -208,41 +285,41 @@ export function Timeline() {
         </div>
 
         <div className="track-area" ref={areaRef}>
-          <div
-            className="tl-ruler"
-            onPointerDown={beginScrub}
-          >
-            {Array.from({ length: ticks + 1 }, (_, i) => i).map((i) =>
-              i % showEvery === 0 ? (
-                <div key={i} className="tl-tick" style={{ left: `${tToX(i)}px` }}>
-                  {i}s
-                </div>
-              ) : null,
-            )}
-          </div>
-          {rows.map((row) => (
+          <div className="tl-content" ref={contentRef} style={{ width: contentWidth }}>
             <div
-              key={row.key}
-              className="tl-row"
+              className="tl-ruler"
               onPointerDown={beginScrub}
             >
-              {row.keys.map((key, index) => {
-                const target: KeyTarget = row.camera ? { camera: true } : { objectId: row.objectId! };
-                const rowKey = row.camera ? "__camera" : row.objectId!;
-                const isSelected = selectedKey?.rowKey === rowKey && Math.abs(selectedKey.t - key.t) < 1e-4;
-                return (
-                  <div
-                    key={`${key.t}-${index}`}
-                    className={`keyframe ${row.camera ? "camera-key" : ""} ${isSelected ? "selected-key" : ""}`}
-                    style={{ left: `${tToX(key.t)}px` }}
-                    title={t("timeline.deleteKey")}
-                    onPointerDown={(e) => beginKeyDrag(e, target, key.t)}
-                  />
-                );
-              })}
+              {Array.from({ length: tickCount + 1 }, (_, i) => i).map((i) => (
+                <div key={i} className="tl-tick" style={{ left: `${tToX(i * step)}px` }}>
+                  {tickLabel(i)}
+                </div>
+              ))}
             </div>
-          ))}
-          <Playhead duration={doc.duration} tToX={tToX} />
+            {rows.map((row) => (
+              <div
+                key={row.key}
+                className="tl-row"
+                onPointerDown={beginScrub}
+              >
+                {row.keys.map((key, index) => {
+                  const target: KeyTarget = row.camera ? { camera: true } : { objectId: row.objectId! };
+                  const rowKey = row.camera ? "__camera" : row.objectId!;
+                  const isSelected = selectedKey?.rowKey === rowKey && Math.abs(selectedKey.t - key.t) < 1e-4;
+                  return (
+                    <div
+                      key={`${key.t}-${index}`}
+                      className={`keyframe ${row.camera ? "camera-key" : ""} ${isSelected ? "selected-key" : ""}`}
+                      style={{ left: `${tToX(key.t)}px` }}
+                      title={t("timeline.deleteKey")}
+                      onPointerDown={(e) => beginKeyDrag(e, target, key.t)}
+                    />
+                  );
+                })}
+              </div>
+            ))}
+            <Playhead duration={doc.duration} tToX={tToX} />
+          </div>
         </div>
       </div>
     </div>

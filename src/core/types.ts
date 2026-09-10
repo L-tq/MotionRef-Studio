@@ -71,6 +71,9 @@ export interface SceneDocument {
   duration: number;
   /** Export frame rate. */
   fps: number;
+  /** Camera framing aspect ratio (width / height, e.g. 16/9). Used by the
+   *  scene-camera preview letterbox and aspect-aware snapshots. */
+  aspect: number;
   objects: ObjectDesc[];
   /** Base (static) camera pose — used when no cameraKeys exist. */
   camera: CameraState;
@@ -104,12 +107,18 @@ export function createEmptyDocument(name = "Untitled"): SceneDocument {
     background: "#191922",
     duration: 6,
     fps: 30,
+    aspect: 16 / 9,
     objects: [],
     camera: defaultCamera(),
     cameraKeys: [],
     tracks: {},
     onFrameScripts: [],
   };
+}
+
+/** Accept documents saved before `aspect` existed. */
+export function docAspect(doc: SceneDocument): number {
+  return typeof doc.aspect === "number" && doc.aspect > 0 ? doc.aspect : 16 / 9;
 }
 
 export function cloneDoc(doc: SceneDocument): SceneDocument {

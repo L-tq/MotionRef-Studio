@@ -14,7 +14,7 @@ import {
 import { evaluate } from "../core/animation";
 import type { GizmoMode } from "../core/engine";
 import { validateSceneDocument } from "../core/validate";
-import { saveChat } from "./chatPersist";
+import { clampAspect } from "../core/cameraMath";
 import {
   DEFAULT_LLM_SETTINGS,
   isConfigured,
@@ -30,15 +30,26 @@ export interface ProjectEntry {
   doc: SceneDocument;
 }
 
-/** User-resizable panel geometry (px). */
+/** Lightweight session metadata (transcripts live in IndexedDB, see chatPersist). */
+export interface SessionMeta {
+  id: string;
+  name: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** User-resizable panel geometry (px) + timeline zoom. */
 export interface LayoutState {
   leftW: number;
   rightW: number;
   timelineH: number;
   inspH: number;
+  /** Timeline pixels per second. Null until the user zooms; the timeline
+   *  then starts fitted to the current width. */
+  timelineZoom: number | null;
 }
 
-export const DEFAULT_LAYOUT: LayoutState = { leftW: 236, rightW: 384, timelineH: 232, inspH: 320 };
+export const DEFAULT_LAYOUT: LayoutState = { leftW: 236, rightW: 384, timelineH: 232, inspH: 320, timelineZoom: null };
 
 /** One entry in the message center (toasts + background errors are logged). */
 export interface AppMessage {
@@ -125,6 +136,10 @@ export interface AppState {
 
   // Agent session
   session: SessionEvent[];
+  /** Known chat sessions (metadata only; most recent first). */
+  sessions: SessionMeta[];
+  /** Active chat session id; null until sessions finish loading. */
+  activeSessionId: string | null;
   agentState: AgentState;
   agentStep: number;
 }
@@ -149,6 +164,7 @@ export interface AppActions {
 
   // Camera / timeline
   commitCamera(patch: { position?: [number, number, number]; target?: [number, number, number]; fov?: number }): void;
+  setAspect(ratio: number): void;
   setDuration(d: number): void;
   setFps(f: number): void;
 
@@ -178,7 +194,6 @@ export interface AppActions {
   // Session log
   sessionPush(event: SessionEvent): void;
   sessionPatch(id: string, patch: Partial<SessionEvent>): void;
-  sessionClear(): void;
   setAgentState(state: AgentState): void;
   setAgentStep(step: number): void;
   showToast(message: string): void;
@@ -222,6 +237,8 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
   projects: loadProjects(),
 
   session: [],
+  sessions: [],
+  activeSessionId: null,
   agentState: "idle",
   agentStep: 0,
 
@@ -481,6 +498,13 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     }
   },
 
+  setAspect(ratio) {
+    if (!Number.isFinite(ratio)) return;
+    get().mutateDoc("camera-aspect", (draft) => {
+      draft.aspect = +clampAspect(ratio).toFixed(4);
+    });
+  },
+
   setDuration(d) {
     if (!Number.isFinite(d) || d <= 0 || d > 300) return;
     get().mutateDoc("duration", (draft) => {
@@ -641,10 +665,6 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     }));
   },
 
-  sessionClear() {
-    set({ session: [] });
-  },
-
   setAgentState(agentState) {
     set({ agentState });
   },
@@ -697,11 +717,5 @@ useStore.subscribe((state, prev) => {
   }, 800);
 });
 
-// --- chat transcript autosave (IndexedDB; images are too big for localStorage) ---
-
-let chatSaveTimer: number | undefined;
-useStore.subscribe((state, prev) => {
-  if (state.session === prev.session) return;
-  window.clearTimeout(chatSaveTimer);
-  chatSaveTimer = window.setTimeout(() => void saveChat(state.session), 600);
-});
+// Chat transcript autosave lives in agent/agentLoop.ts: the persisted sessions
+// and the provider wire log must be updated together.

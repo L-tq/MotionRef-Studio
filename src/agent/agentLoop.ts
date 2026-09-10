@@ -10,8 +10,18 @@
  */
 import { snapshotDataUrl } from "../core/engine";
 import { newId } from "../core/types";
+import { aspectDims } from "../core/cameraMath";
 import { useStore } from "../state/store";
-import { loadChat } from "../state/chatPersist";
+import {
+  deleteSessionRecord,
+  getSession,
+  listSessions,
+  loadCurrentSessionId,
+  migrateLegacyChat,
+  putSession,
+  saveCurrentSessionId,
+  type ChatSessionRecord,
+} from "../state/chatPersist";
 import { streamChatCompletion, userContent, type ToolSchema } from "./llmClient";
 import { sandbox } from "./sandbox";
 import { getTools, systemPrompt, toWireTools, type ToolContext, type ToolResult } from "./tools";
@@ -23,13 +33,6 @@ import { t } from "../i18n";
 
 let wireLog: WireMessage[] = [];
 let abortController: AbortController | null = null;
-
-export function resetSession(): void {
-  if (useStore.getState().agentState === "running") return;
-  wireLog = [];
-  useStore.getState().sessionClear();
-  useStore.setState({ agentStep: 0 });
-}
 
 export function stopAgentTurn(): void {
   abortController?.abort();
@@ -68,8 +71,11 @@ function makeContext(): ToolContext {
     snapshot: (time, width, height) => {
       const s = useStore.getState();
       const time2 = clamp(time ?? s.playhead, 0, s.doc.duration);
-      const w = Math.round(clamp(width ?? 1024, 64, 2048));
-      const h = Math.round(clamp(height ?? 576, 64, 2048));
+      // Defaults follow the scene aspect ratio so agent-visible snapshots
+      // match the export framing (16:9 → 1024x576, 9:16 → 324x576, …).
+      const dims = aspectDims(s.doc.aspect ?? 16 / 9, 1024);
+      const w = Math.round(clamp(width ?? dims.w, 64, 2048));
+      const h = Math.round(clamp(height ?? dims.h, 64, 2048));
       // JPEG: universally accepted by vision APIs and much smaller on the wire.
       return { dataUrl: snapshotDataUrl(s.doc, time2, w, h, "jpeg"), t: time2, w, h };
     },
@@ -173,11 +179,14 @@ export function appendSnapshotFeedback(snap: { dataUrl: string; t: number; w: nu
   });
 }
 
-// --- chat persistence (survives page reloads) -----------------------------------
+// --- chat session management -----------------------------------------------------
+//
+// Sessions are persisted per-chat (IndexedDB, see state/chatPersist.ts) and the
+// provider wire log is rebuilt from the transcript whenever a session is
+// restored: only user messages (text + images) and assistant text survive —
+// tool-call blocks cannot be reliably reconstructed, and assistant text
+// summaries keep enough context.
 
-/** Rebuild a provider-valid wire log from UI events: only user messages
- *  (text + images) and assistant text — tool-call blocks cannot be reliably
- *  reconstructed, and assistant text summaries keep enough context. */
 function wireFromEvents(events: SessionEvent[]): WireMessage[] {
   const out: WireMessage[] = [];
   for (const e of events) {
@@ -187,19 +196,139 @@ function wireFromEvents(events: SessionEvent[]): WireMessage[] {
   return out;
 }
 
-/** Show a previously persisted transcript and seed the model context with it. */
-export function restoreSession(events: SessionEvent[]): void {
-  if (useStore.getState().agentState === "running") return;
+function running(): boolean {
+  return useStore.getState().agentState === "running";
+}
+
+/** Load a transcript into the UI + seed the model context from it. */
+function loadTranscript(events: SessionEvent[]): void {
   wireLog = wireFromEvents(events);
   useStore.setState({ session: events, agentStep: 0 });
 }
 
-// On boot, bring back the last conversation so chat history survives reloads.
+/** Write the active transcript (and its metadata) to IndexedDB. */
+function persistActiveChat(): void {
+  const s = useStore.getState();
+  const id = s.activeSessionId;
+  if (!id) return;
+  const meta = s.sessions.find((m) => m.id === id);
+  const record: ChatSessionRecord = {
+    id,
+    name: meta?.name ?? "",
+    createdAt: meta?.createdAt ?? Date.now(),
+    updatedAt: Date.now(),
+    events: s.session,
+  };
+  void putSession(record);
+  // Keep the sidebar ordering fresh without waiting for the next reload.
+  useStore.setState((st) => ({
+    sessions: [
+      { id, name: record.name, createdAt: record.createdAt, updatedAt: record.updatedAt },
+      ...st.sessions.filter((m) => m.id !== id),
+    ],
+  }));
+}
+
+// Autosave: any transcript change rewrites the active session (debounced).
+let chatSaveTimer: number | undefined;
+useStore.subscribe((state, prev) => {
+  if (state.session === prev.session) return;
+  window.clearTimeout(chatSaveTimer);
+  chatSaveTimer = window.setTimeout(persistActiveChat, 600);
+});
+
+/** Start a fresh session. The previous one is archived and remains switchable
+ *  from the session manager — nothing is destroyed. */
+export function newSession(): boolean {
+  if (running()) return false;
+  persistActiveChat();
+  const now = Date.now();
+  const id = newId("s");
+  const meta = { id, name: "", createdAt: now, updatedAt: now };
+  void putSession({ id, name: "", createdAt: now, updatedAt: now, events: [] });
+  saveCurrentSessionId(id);
+  wireLog = [];
+  useStore.setState({
+    session: [],
+    sessions: [meta, ...useStore.getState().sessions],
+    activeSessionId: id,
+    agentStep: 0,
+  });
+  return true;
+}
+
+/** Switch to another persisted session. */
+export async function switchSession(id: string): Promise<boolean> {
+  if (running()) return false;
+  if (id === useStore.getState().activeSessionId) return true;
+  persistActiveChat();
+  const record = await getSession(id);
+  if (!record) return false;
+  saveCurrentSessionId(id);
+  loadTranscript(record.events);
+  useStore.setState({ activeSessionId: id });
+  return true;
+}
+
+export async function renameSession(id: string, name: string): Promise<void> {
+  const clean = name.trim().slice(0, 80);
+  const s = useStore.getState();
+  useStore.setState({
+    sessions: s.sessions.map((m) => (m.id === id ? { ...m, name: clean } : m)),
+  });
+  if (id === s.activeSessionId) {
+    persistActiveChat();
+  } else {
+    const record = await getSession(id);
+    if (record) await putSession({ ...record, name: clean });
+  }
+}
+
+/** Delete a session record. Deleting the active one activates the most recent
+ *  remaining session (or starts a fresh one). */
+export async function deleteSessionById(id: string): Promise<boolean> {
+  if (running()) return false;
+  await deleteSessionRecord(id);
+  const s = useStore.getState();
+  const remaining = s.sessions.filter((m) => m.id !== id);
+  if (id === s.activeSessionId) {
+    if (remaining.length > 0) {
+      const next = remaining[0];
+      const record = await getSession(next.id);
+      saveCurrentSessionId(next.id);
+      useStore.setState({ sessions: remaining, activeSessionId: next.id });
+      loadTranscript(record?.events ?? []);
+    } else {
+      useStore.setState({ sessions: remaining });
+      newSession();
+    }
+  } else {
+    useStore.setState({ sessions: remaining });
+  }
+  return true;
+}
+
+// On boot, restore the last active conversation so chat history survives
+// reloads, and migrate any pre-multi-session transcript.
 void (async () => {
   try {
-    const events = await loadChat();
-    if (events.length > 0 && useStore.getState().session.length === 0 && useStore.getState().agentState !== "running") {
-      restoreSession(events);
+    await migrateLegacyChat();
+    let records = await listSessions();
+    const currentId = loadCurrentSessionId();
+    let active = records.find((r) => r.id === currentId) ?? records[0] ?? null;
+    if (!active) {
+      const now = Date.now();
+      active = { id: newId("s"), name: "", createdAt: now, updatedAt: now, events: [] };
+      await putSession(active);
+      records = [active];
+    }
+    saveCurrentSessionId(active.id);
+    useStore.setState({
+      sessions: records.map((r) => ({ id: r.id, name: r.name, createdAt: r.createdAt, updatedAt: r.updatedAt })),
+      activeSessionId: active.id,
+    });
+    if (active.events.length > 0 && useStore.getState().session.length === 0 && !running()) {
+      loadTranscript(active.events);
       useStore.getState().sessionPush({ id: newId("e"), type: "notice", text: t("chat.restored") });
     }
   } catch {

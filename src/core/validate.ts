@@ -2,6 +2,7 @@
  *  (agent tool calls, JSON imports). Returns a normalized document or a
  *  human-readable error string. */
 import { createEmptyDocument, isGeometryType, specOf, type SceneDocument } from "./types";
+import { clampAspect } from "./cameraMath";
 
 const HEX_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
 
@@ -26,6 +27,7 @@ export function validateSceneDocument(input: unknown): { doc: SceneDocument } | 
   if (typeof raw.background === "string" && HEX_RE.test(raw.background)) doc.background = raw.background;
   if (typeof raw.duration === "number" && Number.isFinite(raw.duration)) doc.duration = Math.min(Math.max(raw.duration, 0.1), 300);
   if (typeof raw.fps === "number" && Number.isFinite(raw.fps)) doc.fps = Math.min(Math.max(Math.round(raw.fps), 1), 120);
+  if (typeof raw.aspect === "number" && Number.isFinite(raw.aspect)) doc.aspect = +clampAspect(raw.aspect).toFixed(4);
 
   // Camera base
   if (raw.camera && typeof raw.camera === "object") {

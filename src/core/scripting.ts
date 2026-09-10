@@ -42,6 +42,7 @@ export interface ScriptTarget {
   addKeyframes(id: string, keys: TransformKey[]): void;
   setDuration(seconds: number): void;
   setFps(fps: number): void;
+  setAspect(ratio: number): void;
   addOnFrame(source: string): void;
 }
 
@@ -195,6 +196,13 @@ export function createScriptingAPI(target: ScriptTarget, log: (...args: unknown[
       target.setFps(fps);
     },
 
+    /** Camera framing aspect ratio (width / height, e.g. 16/9 or 9/16). */
+    setAspect(ratio: number): void {
+      if (typeof ratio !== "number" || !Number.isFinite(ratio) || ratio < 0.2 || ratio > 5)
+        throw new Error("aspect must be a number in [0.2, 5] (width / height, e.g. 16/9)");
+      target.setAspect(ratio);
+    },
+
     /** Register a procedural hook run every frame: (t, frameApi, state) => {...}.
      *  frameApi.update(id, patch) / frameApi.camera(patch) affect the current
      *  frame only; the persistent document is not modified. The hook is stored
@@ -321,6 +329,9 @@ export function createScriptTarget(doc: SceneDocument): ScriptTarget {
     },
     setFps(fps) {
       doc.fps = fps;
+    },
+    setAspect(ratio) {
+      doc.aspect = ratio;
     },
     addOnFrame(source) {
       doc.onFrameScripts.push(source);

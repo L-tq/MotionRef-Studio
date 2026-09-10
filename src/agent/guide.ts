@@ -67,7 +67,8 @@ api.onFrame((t, f) => {                       // continuous orbit for "Moon"
 });
 api.find("Moon");            // id lookup by exact/unique-partial name
 api.list(); api.get(); api.remove(id); api.clear();
-api.setDuration(8); api.setFps(30); api.log("done", id);
+api.setDuration(8); api.setFps(30); api.setAspect(9 / 16); // framing ratio, e.g. vertical video
+api.log("done", id);
 \`\`\`
 
 ## Verified patterns
@@ -150,7 +151,8 @@ api.onFrame((t, f) => {                       // “月球”持续环绕
 });
 api.find("月球");             // 按名称（精确或唯一前缀）查 id
 api.list(); api.get(); api.remove(id); api.clear();
-api.setDuration(8); api.setFps(30); api.log("完成", id);
+api.setDuration(8); api.setFps(30); api.setAspect(9 / 16); // 画面比例，如竖屏视频
+api.log("完成", id);
 \`\`\`
 
 ## 验证过的模式

@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
 import { Engine, snapshotDataUrl, type FrameSource, type GizmoMode } from "../core/engine";
 import { downloadBlob } from "../core/videoExport";
+import { aspectDims } from "../core/cameraMath";
+import { docAspect } from "../core/types";
 import { useStore } from "../state/store";
 import { useT } from "../i18n";
 
@@ -68,7 +70,8 @@ export function Viewport() {
 
   const snapshotNow = () => {
     const s = useStore.getState();
-    const dataUrl = snapshotDataUrl(s.doc, s.playhead, 1280, 720);
+    const { w, h } = aspectDims(docAspect(s.doc), 1280);
+    const dataUrl = snapshotDataUrl(s.doc, s.playhead, w, h);
     fetch(dataUrl)
       .then((r) => r.blob())
       .then((b) => downloadBlob(b, `${s.doc.name || "snapshot"}_${s.playhead.toFixed(2)}s.png`))

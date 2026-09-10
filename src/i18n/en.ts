@@ -77,6 +77,11 @@ export const en: Record<string, string> = {
   "timeline.keys": "{n} keys",
   "timeline.deleteKey": "Delete key",
   "timeline.onFrame": "{n} onFrame hook(s)",
+  "timeline.zoom": "Timeline zoom",
+  "timeline.zoomIn": "Zoom in (Ctrl + wheel)",
+  "timeline.zoomOut": "Zoom out (Ctrl + wheel)",
+  "timeline.zoomFit": "Fit the whole duration",
+  "timeline.zoomFitShort": "Fit",
 
   // Inspector
   "inspector.noSelection": "Nothing selected. Click an object in the viewport.",
@@ -96,6 +101,8 @@ export const en: Record<string, string> = {
   "inspector.cameraPosition": "Camera position",
   "inspector.cameraTarget": "Look-at target",
   "inspector.camKeys": "{n} camera key(s)",
+  "inspector.aspect": "Aspect ratio",
+  "inspector.aspectHint": "Framing used by the camera preview and snapshots. The export dialog follows it with a matching preset.",
   "inspector.background": "Background",
   "inspector.onFrameScripts": "onFrame scripts",
   "inspector.removeScript": "Remove",
@@ -106,7 +113,8 @@ export const en: Record<string, string> = {
   // Export dialog
   "export.title": "Export video",
   "export.resolution": "Resolution",
-  "export.aspectNote": "Vertical (9:16) and square (1:1) presets fit short-form video models.",
+  "export.sceneAspect": "Scene {ratio}",
+  "export.aspectNote": "“Scene” matches the camera aspect ratio. Vertical (9:16) and square (1:1) presets fit short-form video models.",
   "export.fps": "Frame rate",
   "export.duration": "Duration",
   "export.format": "Format",
@@ -128,7 +136,6 @@ export const en: Record<string, string> = {
   "chat.attach": "Attach images",
   "chat.attachHint": "File, paste or drag images here",
   "chat.attachView": "Attach current view",
-  "chat.newSession": "New session",
   "chat.notConfigured": "Connect your multimodal LLM to start.",
   "chat.openSettings": "Open settings",
   "chat.images": "{n} image(s) attached",
@@ -147,6 +154,15 @@ export const en: Record<string, string> = {
   "chat.removeImage": "Remove",
   "chat.dropImages": "Drop images to attach",
   "chat.restored": "Previous chat restored.",
+
+  // Chat sessions
+  "session.title": "Sessions",
+  "session.new": "New session",
+  "session.untitled": "Untitled session",
+  "session.switch": "Switch to this session",
+  "session.confirmDelete": "Delete session “{name}”? Its chat history will be removed.",
+  "session.runningBlock": "Stop the agent before managing sessions.",
+  "session.empty": "No sessions yet.",
 
   // Layout
   "layout.resize": "Drag to resize · double-click to reset",

@@ -9,7 +9,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { evaluate, type EvaluatedState, type HookError } from "./animation";
-import type { ObjectDesc, SceneDocument } from "./types";
+import { docAspect, type ObjectDesc, type SceneDocument } from "./types";
 
 export type GizmoMode = "select" | "translate" | "rotate" | "scale";
 
@@ -254,7 +254,7 @@ export class Engine {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
-    this.docScene = new DocScene({ version: 1, name: "", background: "#191922", duration: 1, fps: 30, objects: [], camera: { position: [8, 6, 10], target: [0, 1, 0], fov: 45 }, cameraKeys: [], tracks: {}, onFrameScripts: [] });
+    this.docScene = new DocScene({ version: 1, name: "", background: "#191922", duration: 1, fps: 30, aspect: 16 / 9, objects: [], camera: { position: [8, 6, 10], target: [0, 1, 0], fov: 45 }, cameraKeys: [], tracks: {}, onFrameScripts: [] });
 
     this.editorCamera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000);
     this.editorCamera.position.set(10, 8, 12);
@@ -339,12 +339,30 @@ export class Engine {
       this.updateGizmoAttachment(frame);
 
       this.orbit.update();
-      const camera = frame.cameraPreview ? this.docScene.sceneCamera : this.editorCamera;
+      // The scene camera always carries the document's framing aspect so the
+      // editor frustum helper shows the real export framing.
+      const aspect = docAspect(frame.doc);
+      this.docScene.sceneCamera.aspect = aspect;
+      this.docScene.sceneCamera.updateProjectionMatrix();
+      const W = this.canvas.clientWidth || 1;
+      const H = this.canvas.clientHeight || 1;
       if (frame.cameraPreview) {
-        this.docScene.sceneCamera.aspect = this.canvas.width / this.canvas.height || 1;
-        this.docScene.sceneCamera.updateProjectionMatrix();
+        // Letterbox the scene camera's aspect inside the viewport so what you
+        // see is exactly the export framing.
+        const canvasAspect = W / H;
+        const vw = canvasAspect > aspect ? H * aspect : W;
+        const vh = canvasAspect > aspect ? H : W / aspect;
+        this.renderer.autoClear = false;
+        this.renderer.setScissorTest(false);
+        this.renderer.setViewport(0, 0, W, H);
+        this.renderer.clear();
+        this.renderer.setViewport((W - vw) / 2, (H - vh) / 2, vw, vh);
+        this.renderer.render(this.docScene.scene, this.docScene.sceneCamera);
+      } else {
+        this.renderer.autoClear = true;
+        this.renderer.setViewport(0, 0, W, H);
+        this.renderer.render(this.docScene.scene, this.editorCamera);
       }
-      this.renderer.render(this.docScene.scene, camera);
     };
     this.lastTime = performance.now();
     this.raf = requestAnimationFrame(loop);

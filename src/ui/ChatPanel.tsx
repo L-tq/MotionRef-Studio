@@ -2,9 +2,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useStore } from "../state/store";
 import { getLocale, useT } from "../i18n";
 import { isConfigured } from "../agent/types";
-import { runAgentTurn, resetSession, stopAgentTurn } from "../agent/agentLoop";
+import {
+  deleteSessionById,
+  newSession,
+  renameSession,
+  runAgentTurn,
+  stopAgentTurn,
+  switchSession,
+} from "../agent/agentLoop";
 import { sandbox } from "../agent/sandbox";
 import { snapshotDataUrl } from "../core/engine";
+import { aspectDims } from "../core/cameraMath";
 import type { SessionEvent } from "../agent/types";
 
 // --- image helpers -------------------------------------------------------------
@@ -41,9 +49,10 @@ export function ChatPanel() {
   const rightTab = useStore((s) => s.rightTab);
   const agentState = useStore((s) => s.agentState);
   const setUi = useStore((s) => s.setUi);
+  const [sessionsOpen, setSessionsOpen] = useState(false);
 
   return (
-    <div className="panel" style={{ flex: 1, minHeight: 0 }}>
+    <div className="panel" style={{ flex: 1, minHeight: 0, position: "relative" }}>
       <div className="right-tabs">
         <button
           className={rightTab === "chat" ? "active" : ""}
@@ -59,17 +68,115 @@ export function ChatPanel() {
           ⌨ {t("chat.script")}
         </button>
         <button
-          title={t("chat.newSession")}
-          onClick={() => {
-            if (agentState === "running") return;
-            resetSession();
-          }}
+          title={t("session.title")}
+          className={sessionsOpen ? "active" : ""}
+          onClick={() => setSessionsOpen(!sessionsOpen)}
           style={{ flex: "0 0 auto", padding: "0 12px" }}
         >
-          ✚
+          ☰
         </button>
       </div>
+      {sessionsOpen && <SessionsPopover onClose={() => setSessionsOpen(false)} />}
       {rightTab === "chat" ? <ChatTab /> : <ScriptTab />}
+    </div>
+  );
+}
+
+// --- session manager -----------------------------------------------------------------
+
+function SessionsPopover({ onClose }: { onClose: () => void }) {
+  const t = useT();
+  const sessions = useStore((s) => s.sessions);
+  const activeId = useStore((s) => s.activeSessionId);
+  const agentState = useStore((s) => s.agentState);
+  const showToast = useStore((s) => s.showToast);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameText, setRenameText] = useState("");
+
+  const blocked = () => showToast(t("session.runningBlock"));
+
+  const onNew = async () => {
+    if (agentState === "running") return blocked();
+    newSession();
+  };
+  const onSwitch = async (id: string) => {
+    if (agentState === "running") return blocked();
+    if (!(await switchSession(id))) return;
+    onClose();
+  };
+  const onRenameStart = (id: string, current: string) => {
+    setRenamingId(id);
+    setRenameText(current);
+  };
+  const onRenameCommit = async () => {
+    if (renamingId) await renameSession(renamingId, renameText);
+    setRenamingId(null);
+  };
+  const onDelete = async (id: string, name: string) => {
+    if (agentState === "running") return blocked();
+    if (!window.confirm(t("session.confirmDelete", { name: name || t("session.untitled") }))) return;
+    await deleteSessionById(id);
+  };
+
+  return (
+    <div className="session-pop">
+      <div className="session-pop-header">
+        <span>{t("session.title")}</span>
+        <span className="spacer" />
+        <button className="btn small" title={t("session.new")} onClick={() => void onNew()}>
+          ＋ {t("session.new")}
+        </button>
+        <button className="btn small" title={t("common.close")} onClick={onClose}>
+          ✕
+        </button>
+      </div>
+      <div className="session-pop-list">
+        {sessions.length === 0 && <div className="empty-note">{t("session.empty")}</div>}
+        {sessions.map((meta) => (
+          <div key={meta.id} className={`session-row ${meta.id === activeId ? "active" : ""}`}>
+            {renamingId === meta.id ? (
+              <input
+                autoFocus
+                value={renameText}
+                placeholder={t("session.untitled")}
+                onChange={(e) => setRenameText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void onRenameCommit();
+                  if (e.key === "Escape") setRenamingId(null);
+                }}
+                onBlur={() => void onRenameCommit()}
+              />
+            ) : (
+              <button
+                className="session-main"
+                title={t("session.switch")}
+                onClick={() => void onSwitch(meta.id)}
+              >
+                <span className="session-name">{meta.name || t("session.untitled")}</span>
+                <span className="session-time">{new Date(meta.updatedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
+              </button>
+            )}
+            {renamingId !== meta.id && (
+              <span className="session-actions">
+                <button
+                  className="btn small"
+                  title={t("common.rename")}
+                  onClick={() => onRenameStart(meta.id, meta.name)}
+                >
+                  ✎
+                </button>
+                <button
+                  className="btn small danger"
+                  title={t("common.delete")}
+                  onClick={() => void onDelete(meta.id, meta.name)}
+                >
+                  ✕
+                </button>
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -118,8 +225,10 @@ function ChatTab() {
       showToast(`chat.tooManyImages|${limit}`);
       return;
     }
-    // JPEG keeps the payload small and is accepted by every vision endpoint.
-    const dataUrl = snapshotDataUrl(s.doc, s.playhead, 1280, 720, "jpeg");
+    // Match the scene camera framing (aspect ratio), JPEG keeps the payload
+    // small and is accepted by every vision endpoint.
+    const { w, h } = aspectDims(s.doc.aspect ?? 16 / 9, 1280);
+    const dataUrl = snapshotDataUrl(s.doc, s.playhead, w, h, "jpeg");
     setImages((prev) => [...prev, dataUrl]);
   };
 
@@ -327,7 +436,7 @@ api.find(name) -> id · api.params(type) · api.uniqueName(type)
 api.keyframes(id, [{t, position?, rotation?, scale?, color?, visible?, interp?}])
 api.setCamera({position?,target?,fov?})
 api.addCameraKeys([{t, position?, target?, fov?, interp?}])
-api.setDuration(s) · api.setFps(f)
+api.setDuration(s) · api.setFps(f) · api.setAspect(16/9)
 api.onFrame((t, f, state) => {...})  — must be self-contained: resolve ids
   fresh each frame (const id = f.find("Name"); if (id) f.update(id, …));
   keep counters on state; outer vars do NOT survive reload
@@ -339,7 +448,7 @@ api.find(name) -> id · api.params(type) · api.uniqueName(type)
 api.keyframes(id, [{t, position?, rotation?, scale?, color?, visible?, interp?}])
 api.setCamera({position?,target?,fov?})
 api.addCameraKeys([{t, position?, target?, fov?, interp?}])
-api.setDuration(s) · api.setFps(f)
+api.setDuration(s) · api.setFps(f) · api.setAspect(16/9)
 api.onFrame((t, f, state) => {...})  — 必须自包含：每帧重新解析 id
   （const id = f.find("名字"); if (id) f.update(id, …)）；计数存到 state；
   外部变量在刷新后不存在

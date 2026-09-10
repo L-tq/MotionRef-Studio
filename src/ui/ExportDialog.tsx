@@ -2,6 +2,8 @@ import { useRef, useState } from "react";
 import { useStore } from "../state/store";
 import { useT } from "../i18n";
 import { downloadBlob, exportVideo, pickVideoMime, validateDocForExport } from "../core/videoExport";
+import { aspectDims, aspectLabel } from "../core/cameraMath";
+import { docAspect } from "../core/types";
 
 const PRESETS = [
   { label: "720p 16:9", w: 1280, h: 720 },
@@ -17,7 +19,14 @@ export function ExportDialog() {
   const setUi = useStore((s) => s.setUi);
   const showToast = useStore((s) => s.showToast);
 
-  const [presetIdx, setPresetIdx] = useState(0);
+  // A preset matching the scene camera's aspect ratio, so the exported video
+  // frames exactly what the preview shows.
+  const sceneDims = aspectDims(docAspect(doc), 1920);
+  const SCENE_PRESET = { label: `${t("export.sceneAspect", { ratio: aspectLabel(docAspect(doc)) })}`, w: sceneDims.w, h: sceneDims.h };
+  const ALL_PRESETS = [...PRESETS, SCENE_PRESET];
+  const SCENE_IDX = PRESETS.length;
+
+  const [presetIdx, setPresetIdx] = useState(SCENE_IDX);
   const [fps, setFps] = useState(doc.fps);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<{ frame: number; total: number } | null>(null);
@@ -25,7 +34,7 @@ export function ExportDialog() {
   const abortRef = useRef<AbortController | null>(null);
 
   const picked = pickVideoMime();
-  const preset = PRESETS[presetIdx];
+  const preset = ALL_PRESETS[presetIdx] ?? SCENE_PRESET;
 
   const start = async () => {
     if (!picked) return;
@@ -72,7 +81,7 @@ export function ExportDialog() {
           <div className="field">
             <label>{t("export.resolution")}</label>
             <div className="res-grid">
-              {PRESETS.map((p, i) => (
+              {ALL_PRESETS.map((p, i) => (
                 <button key={p.label} className={i === presetIdx ? "active" : ""} onClick={() => setPresetIdx(i)}>
                   {p.label}
                   <br />

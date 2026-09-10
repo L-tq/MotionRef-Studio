@@ -77,6 +77,11 @@ export const zh: Record<string, string> = {
   "timeline.keys": "{n} 个关键帧",
   "timeline.deleteKey": "删除关键帧",
   "timeline.onFrame": "{n} 个 onFrame 脚本",
+  "timeline.zoom": "时间轴缩放",
+  "timeline.zoomIn": "放大 (Ctrl + 滚轮)",
+  "timeline.zoomOut": "缩小 (Ctrl + 滚轮)",
+  "timeline.zoomFit": "完整显示整个时长",
+  "timeline.zoomFitShort": "适应",
 
   // Inspector
   "inspector.noSelection": "未选中对象。点击视口中的物体。",
@@ -96,6 +101,8 @@ export const zh: Record<string, string> = {
   "inspector.cameraPosition": "相机位置",
   "inspector.cameraTarget": "注视目标",
   "inspector.camKeys": "{n} 个相机关键帧",
+  "inspector.aspect": "画面比例",
+  "inspector.aspectHint": "相机预览与快照使用的取景比例；导出对话框会提供匹配的预设。",
   "inspector.background": "背景色",
   "inspector.onFrameScripts": "onFrame 脚本",
   "inspector.removeScript": "移除",
@@ -106,7 +113,8 @@ export const zh: Record<string, string> = {
   // Export dialog
   "export.title": "导出视频",
   "export.resolution": "分辨率",
-  "export.aspectNote": "竖屏 (9:16) 与方形 (1:1) 预设适合短视频生成模型。",
+  "export.sceneAspect": "场景 {ratio}",
+  "export.aspectNote": "“场景”预设与相机画面比例一致。竖屏 (9:16) 与方形 (1:1) 预设适合短视频生成模型。",
   "export.fps": "帧率",
   "export.duration": "时长",
   "export.format": "格式",
@@ -128,7 +136,6 @@ export const zh: Record<string, string> = {
   "chat.attach": "附加图片",
   "chat.attachHint": "可选择、粘贴或拖拽图片到此处",
   "chat.attachView": "附加当前画面",
-  "chat.newSession": "新会话",
   "chat.notConfigured": "请先连接你的多模态大模型。",
   "chat.openSettings": "打开设置",
   "chat.images": "已附加 {n} 张图片",
@@ -147,6 +154,15 @@ export const zh: Record<string, string> = {
   "chat.removeImage": "移除",
   "chat.dropImages": "拖拽图片到此处以附加",
   "chat.restored": "已恢复上次的对话记录。",
+
+  // 会话管理
+  "session.title": "会话管理",
+  "session.new": "新建会话",
+  "session.untitled": "未命名会话",
+  "session.switch": "切换到此会话",
+  "session.confirmDelete": "删除会话“{name}”？聊天记录将被移除。",
+  "session.runningBlock": "请先停止正在运行的任务，再管理会话。",
+  "session.empty": "暂无会话。",
 
   // Layout
   "layout.resize": "拖动调整大小 · 双击恢复默认",

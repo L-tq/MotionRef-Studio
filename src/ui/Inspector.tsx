@@ -1,6 +1,6 @@
 import { evaluate } from "../core/animation";
-import { focalToFov, fovToFocal, FOCAL_PRESETS } from "../core/cameraMath";
-import { specOf, type ObjectDesc, type Vec3 } from "../core/types";
+import { ASPECT_PRESETS, aspectLabel, clampAspect, focalToFov, fovToFocal, FOCAL_PRESETS } from "../core/cameraMath";
+import { docAspect, specOf, type ObjectDesc, type Vec3 } from "../core/types";
 import { useStore } from "../state/store";
 import { getLocale, useT } from "../i18n";
 import { useState } from "react";
@@ -146,12 +146,15 @@ function CameraInspector() {
   const doc = useStore((s) => s.doc);
   const playhead = useStore((s) => s.playhead);
   const commitCamera = useStore((s) => s.commitCamera);
+  const setAspect = useStore((s) => s.setAspect);
   const setCameraKeyAtPlayhead = useStore((s) => s.setCameraKeyAtPlayhead);
   const mutateDoc = useStore((s) => s.mutateDoc);
   const [focalInput, setFocalInput] = useState<number | null>(null);
+  const [aspectInput, setAspectInput] = useState<number | null>(null);
 
   const cam = evaluate(doc, playhead).camera;
   const focal = fovToFocal(cam.fov);
+  const aspect = docAspect(doc);
 
   return (
     <div className="insp-section">
@@ -194,6 +197,36 @@ function CameraInspector() {
             </button>
           ))}
         </div>
+      </div>
+      <div className="field">
+        <label>
+          {t("inspector.aspect")} · <span style={{ fontFamily: "var(--mono)" }}>{aspectLabel(aspect)}</span>
+        </label>
+        <div className="insp-row" style={{ gap: 4, flexWrap: "wrap" }}>
+          {ASPECT_PRESETS.map((a) => (
+            <button
+              key={a}
+              className={`btn small ${Math.abs(aspect - a) < 0.01 ? "active" : ""}`}
+              onClick={() => {
+                setAspectInput(null);
+                setAspect(a);
+              }}
+            >
+              {aspectLabel(a)}
+            </button>
+          ))}
+          <Num
+            value={aspectInput ?? +aspect.toFixed(3)}
+            step={0.05}
+            min={0.2}
+            max={5}
+            onChange={(v) => {
+              setAspectInput(v);
+              setAspect(clampAspect(v));
+            }}
+          />
+        </div>
+        <span className="hint" style={{ color: "var(--text-3)" }}>{t("inspector.aspectHint")}</span>
       </div>
       <div className="field">
         <label>{t("inspector.cameraPosition")}</label>
