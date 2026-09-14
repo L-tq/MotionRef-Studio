@@ -191,7 +191,12 @@ export const zh: Record<string, string> = {
   "graph.objectTarget": "所选对象",
   "graph.noObject": "未选中对象",
   "graph.toggleChannel": "显示 / 隐藏通道",
-  "graph.hint": "拖动关键点编辑（竖向改数值，横向改时间）。双击插入关键帧，Delete 删除选中的关键帧。",
+  "graph.selectChannel": "选中该通道的全部关键帧",
+  "graph.deselectChannel": "取消选中该通道的关键帧",
+  "graph.selected": "已选 {n} 个关键帧",
+  "graph.smooth": "对选中关键帧做高斯平滑",
+  "graph.smoothSigma": "平滑 σ（核宽度，按关键帧数量）",
+  "graph.hint": "拖动关键点编辑（竖向改数值，横向改时间）。双击插入关键帧。在空白处拖动框选（Shift 追加选择），Delete 删除选中关键帧，Esc 取消选择。",
 
   // Layout
   "layout.resize": "拖动调整大小 · 双击恢复默认",

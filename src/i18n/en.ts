@@ -191,7 +191,12 @@ export const en: Record<string, string> = {
   "graph.objectTarget": "Selected object",
   "graph.noObject": "No object selected",
   "graph.toggleChannel": "Show / hide channel",
-  "graph.hint": "Drag points to edit keys (vertical = value, horizontal = time). Double-click to insert a key. Delete removes the selected key.",
+  "graph.selectChannel": "Select all keys of this channel",
+  "graph.deselectChannel": "Deselect this channel's keys",
+  "graph.selected": "{n} key(s) selected",
+  "graph.smooth": "Gaussian-smooth selected keyframes",
+  "graph.smoothSigma": "Smoothing σ (kernel width in key count)",
+  "graph.hint": "Drag points to edit keys (vertical = value, horizontal = time). Double-click to insert a key. Box-select: drag on empty space (Shift adds). Delete removes selected keys; Esc clears selection.",
 
   // Layout
   "layout.resize": "Drag to resize · double-click to reset",

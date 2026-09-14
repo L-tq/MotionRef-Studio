@@ -411,6 +411,30 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .graph-eye { background: none; border: none; color: var(--text-3); cursor: pointer; font-size: 11px; padding: 0 2px; }
 .graph-eye:hover { color: var(--text); }
 .graph-eye.off { opacity: 0.45; }
+/* Per-channel select-all / deselect buttons (graph editor sidebar). */
+.graph-sel { background: none; border: none; color: var(--text-3); cursor: pointer; font-size: 10px; padding: 0 2px; }
+.graph-sel:hover { color: var(--text); }
+/* Gaussian smooth row below the channel list. */
+.graph-smooth {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-3);
+}
+.graph-smooth .cnt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.graph-smooth label { display: flex; align-items: center; gap: 3px; }
+.graph-smooth input[type="number"] { width: 46px; padding: 2px 4px; }
+/* Rubber-band selection rectangle on the graph plot. */
+.graph-rubber {
+  position: absolute;
+  border: 1px solid rgba(124, 92, 255, 0.9);
+  background: rgba(124, 92, 255, 0.14);
+  pointer-events: none;
+  z-index: 3;
+}
 .graph-plot { position: relative; flex: 1; min-height: 80px; background: var(--bg-1, #14141a); }
 .graph-plot svg { display: block; }
 .graph-grid { stroke: rgba(255, 255, 255, 0.07); stroke-width: 1; }

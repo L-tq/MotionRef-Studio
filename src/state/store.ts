@@ -7,9 +7,11 @@ import {
   newId,
   randomPaletteColor,
   specOf,
+  type CameraKey,
   type GeometryType,
   type SceneDocument,
   type TransformKey,
+  type Vec3,
 } from "../core/types";
 import { evaluate, evalCamera } from "../core/animation";
 import type { GizmoMode } from "../core/engine";
@@ -203,6 +205,8 @@ export interface AppActions {
   ): void;
   /** Insert a full keyframe (evaluated pose at t) into an object track or the camera. */
   insertKeyAt(target: { objectId: string } | { camera: true }, t: number): void;
+  /** Graph editor: Gaussian-smooth the values of the given keys (σ in key count). */
+  smoothKeys(target: { objectId: string } | { camera: true }, times: number[], sigma: number): void;
   clearTrack(objectId: string): void;
   applyDoc(doc: SceneDocument, label: string): void;
 
@@ -551,6 +555,7 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
       if ("camera" in target) {
         const key = draft.cameraKeys.find((k) => Math.abs(k.t - atT) < 1e-4);
         if (!key) return;
+        if (patch.position) key.position = [...patch.position];
         if (patch.target) key.target = [...patch.target];
         if (patch.fov !== undefined) key.fov = patch.fov;
       } else {
@@ -559,6 +564,66 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
         if (patch.position) key.position = [...patch.position];
         if (patch.rotation) key.rotation = [...patch.rotation];
         if (patch.scale) key.scale = [...patch.scale];
+      }
+    });
+  },
+
+  /** Gaussian-smooth the selected keys (Blender "Smooth Keys"): every selected
+   *  key's channel values become the Gaussian-weighted average of the track's
+   *  values, weighted by key-index distance with σ in key count. Channels a
+   *  key doesn't carry are skipped. */
+  smoothKeys(target, times, sigma) {
+    const want = new Set(times.map((t) => +t.toFixed(4)));
+    if (want.size === 0 || !(sigma > 0)) return;
+    get().mutateDoc("smooth-keys", (draft) => {
+      const keys = "camera" in target ? draft.cameraKeys : draft.tracks[target.objectId];
+      if (!keys?.length) return;
+      const n = keys.length;
+      const weight = (i: number, j: number) => Math.exp(-0.5 * ((i - j) / sigma) ** 2);
+      const smoothV3 = (read: (i: number) => Vec3 | undefined, write: (i: number, v: Vec3) => void) => {
+        const vals = keys.map((_, i) => read(i));
+        for (let i = 0; i < n; i++) {
+          if (!want.has(+keys[i].t.toFixed(4)) || !vals[i]) continue;
+          let wsum = 0;
+          const acc: Vec3 = [0, 0, 0];
+          for (let j = 0; j < n; j++) {
+            const v = vals[j];
+            if (!v) continue;
+            const w = weight(i, j);
+            wsum += w;
+            acc[0] += w * v[0];
+            acc[1] += w * v[1];
+            acc[2] += w * v[2];
+          }
+          if (wsum > 1e-9) write(i, [acc[0] / wsum, acc[1] / wsum, acc[2] / wsum]);
+        }
+      };
+      const smoothScalar = (read: (i: number) => number | undefined, write: (i: number, v: number) => void) => {
+        const vals = keys.map((_, i) => read(i));
+        for (let i = 0; i < n; i++) {
+          if (!want.has(+keys[i].t.toFixed(4)) || vals[i] === undefined) continue;
+          let wsum = 0;
+          let acc = 0;
+          for (let j = 0; j < n; j++) {
+            const v = vals[j];
+            if (v === undefined) continue;
+            const w = weight(i, j);
+            wsum += w;
+            acc += w * v;
+          }
+          if (wsum > 1e-9) write(i, acc / wsum);
+        }
+      };
+      if ("camera" in target) {
+        const ks = keys as CameraKey[];
+        smoothV3((i) => ks[i].position, (i, v) => { ks[i] = { ...ks[i], position: [...v] as Vec3 }; });
+        smoothV3((i) => ks[i].target, (i, v) => { ks[i] = { ...ks[i], target: [...v] as Vec3 }; });
+        smoothScalar((i) => ks[i].fov, (i, v) => { ks[i] = { ...ks[i], fov: v }; });
+      } else {
+        const ks = keys as TransformKey[];
+        smoothV3((i) => ks[i].position, (i, v) => { ks[i] = { ...ks[i], position: [...v] as Vec3 }; });
+        smoothV3((i) => ks[i].rotation, (i, v) => { ks[i] = { ...ks[i], rotation: [...v] as Vec3 }; });
+        smoothV3((i) => ks[i].scale, (i, v) => { ks[i] = { ...ks[i], scale: [...v] as Vec3 }; });
       }
     });
   },
