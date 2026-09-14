@@ -196,7 +196,7 @@ export const zh: Record<string, string> = {
   "graph.selected": "已选 {n} 个关键点",
   "graph.smooth": "对选中关键帧做高斯平滑",
   "graph.smoothSigma": "平滑 σ（核宽度，按关键帧数量）",
-  "graph.hint": "拖动关键点编辑（竖向改数值，横向改时间）。双击插入关键帧。在空白处拖动框选（Shift 追加选择），Delete 删除选中关键帧，Esc 取消选择。",
+  "graph.hint": "拖动关键点编辑（竖向改数值，横向改时间）。双击插入关键帧。在空白处拖动框选（Shift 追加选择），Delete 按通道删除选中关键点——其他属性的关键帧不受影响，Esc 取消选择。",
 
   // Layout
   "layout.resize": "拖动调整大小 · 双击恢复默认",

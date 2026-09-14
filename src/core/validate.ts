@@ -1,7 +1,7 @@
 /** Strict validation for SceneDocuments coming from untrusted sources
  *  (agent tool calls, JSON imports). Returns a normalized document or a
  *  human-readable error string. */
-import { createEmptyDocument, isGeometryType, specOf, type SceneDocument } from "./types";
+import { createEmptyDocument, isGeometryType, specOf, type SceneDocument, type Vec3 } from "./types";
 import { clampAspect } from "./cameraMath";
 
 const HEX_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
@@ -123,11 +123,25 @@ export function validateSceneDocument(input: unknown): { doc: SceneDocument } | 
       if (typeof key.t !== "number" || !Number.isFinite(key.t) || key.t < 0) {
         return { error: `cameraKeys[${i}].t must be a number >= 0` };
       }
-      const position = asVec3(key.position, `cameraKeys[${i}].position`);
-      if (typeof position === "string") return { error: position };
-      const target = asVec3(key.target, `cameraKeys[${i}].target`);
-      if (typeof target === "string") return { error: target };
-      const fov = typeof key.fov === "number" && key.fov > 0 && key.fov < 180 ? key.fov : doc.camera.fov;
+      // Components are optional — the graph editor splits shared camera keys
+      // when one channel is retimed/deleted alone.
+      let position: Vec3 | undefined;
+      if (key.position !== undefined) {
+        const p = asVec3(key.position, `cameraKeys[${i}].position`);
+        if (typeof p === "string") return { error: p };
+        position = p;
+      }
+      let target: Vec3 | undefined;
+      if (key.target !== undefined) {
+        const tg = asVec3(key.target, `cameraKeys[${i}].target`);
+        if (typeof tg === "string") return { error: tg };
+        target = tg;
+      }
+      let fov: number | undefined;
+      if (key.fov !== undefined) {
+        if (typeof key.fov !== "number" || key.fov <= 0 || key.fov >= 180) return { error: `cameraKeys[${i}].fov must be in (0, 180)` };
+        fov = key.fov;
+      }
       doc.cameraKeys.push({
         t: key.t,
         position,

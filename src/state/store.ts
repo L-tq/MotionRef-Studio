@@ -197,6 +197,21 @@ export interface AppActions {
   setCameraKeyAtPlayhead(): void;
   retimeKey(target: { objectId: string } | { camera: true }, fromT: number, toT: number): void;
   deleteKey(target: { objectId: string } | { camera: true }, atT: number): void;
+  /** Graph editor: remove the given channel component at the given times from
+   *  keys — a key left with no data is removed, other channels keep their
+   *  keys (unlike deleteKey, which always removes the whole shared key). */
+  deleteKeyChans(
+    target: { objectId: string } | { camera: true },
+    specs: Array<{ chan: "position" | "rotation" | "scale" | "target" | "fov"; t: number }>,
+  ): void;
+  /** Graph editor: move one channel component in time, splitting the shared
+   *  full-pose key so other channels' keys stay where they are. */
+  retimeKeyChan(
+    target: { objectId: string } | { camera: true },
+    chan: "position" | "rotation" | "scale" | "target" | "fov",
+    fromT: number,
+    toT: number,
+  ): void;
   /** Graph-editor edits: change channel values stored on one key. */
   setKeyValues(
     target: { objectId: string } | { camera: true },
@@ -547,6 +562,59 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
         }
       });
       if (best >= 0) keys.splice(best, 1);
+    });
+  },
+
+  deleteKeyChans(target, specs) {
+    if (!specs.length) return;
+    const want = specs.map((s) => ({ chan: s.chan, t: +s.t.toFixed(4) }));
+    get().mutateDoc("delete-key", (draft) => {
+      const keys = "camera" in target ? draft.cameraKeys : draft.tracks[target.objectId];
+      if (!keys?.length) return;
+      for (const { chan, t } of want) {
+        const idx = keys.findIndex((k) => Math.abs(k.t - t) < 1e-4);
+        if (idx < 0) continue;
+        const rest = { ...keys[idx] } as Record<string, unknown>;
+        if (rest[chan] === undefined) continue;
+        delete rest[chan];
+        const hasRest =
+          rest.position !== undefined || rest.rotation !== undefined || rest.scale !== undefined ||
+          rest.color !== undefined || rest.visible !== undefined || rest.target !== undefined ||
+          rest.fov !== undefined;
+        if (hasRest) keys[idx] = rest as unknown as TransformKey & CameraKey;
+        else keys.splice(idx, 1);
+      }
+    });
+  },
+
+  retimeKeyChan(target, chan, fromT, toT) {
+    const from = +fromT.toFixed(4);
+    const to = Math.min(Math.max(+toT.toFixed(4), 0), get().doc.duration);
+    if (Math.abs(to - from) < 1e-6) return;
+    get().mutateDoc("retime-key", (draft) => {
+      const keys = "camera" in target ? draft.cameraKeys : draft.tracks[target.objectId];
+      if (!keys?.length) return;
+      const idx = keys.findIndex((k) => Math.abs(k.t - from) < 1e-4);
+      if (idx < 0) return;
+      const k = keys[idx] as TransformKey & CameraKey;
+      const val = k[chan];
+      if (val === undefined) return;
+      const rest = { ...k } as Record<string, unknown>;
+      delete rest[chan];
+      const hasRest =
+        rest.position !== undefined || rest.rotation !== undefined || rest.scale !== undefined ||
+        rest.color !== undefined || rest.visible !== undefined || rest.target !== undefined ||
+        rest.fov !== undefined;
+      if (hasRest) keys[idx] = rest as unknown as TransformKey & CameraKey;
+      else keys.splice(idx, 1);
+      const ks = keys as Array<TransformKey & CameraKey>;
+      const dst = ks.find((kk) => Math.abs(kk.t - to) < 1e-4);
+      if (dst) {
+        keys[keys.indexOf(dst)] = { ...dst, [chan]: val };
+      } else {
+        keys.push({ t: to, [chan]: val, interp: k.interp ?? "linear" } as TransformKey & CameraKey);
+      }
+      keys.sort((a, b) => a.t - b.t);
     });
   },
 

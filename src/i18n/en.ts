@@ -196,7 +196,7 @@ export const en: Record<string, string> = {
   "graph.selected": "{n} point(s) selected",
   "graph.smooth": "Gaussian-smooth selected keyframes",
   "graph.smoothSigma": "Smoothing σ (kernel width in key count)",
-  "graph.hint": "Drag points to edit keys (vertical = value, horizontal = time). Double-click to insert a key. Box-select: drag on empty space (Shift adds). Delete removes selected keys; Esc clears selection.",
+  "graph.hint": "Drag points to edit keys (vertical = value, horizontal = time). Double-click to insert a key. Box-select: drag on empty space (Shift adds). Delete removes the selected points' keys per channel — other properties keep theirs; Esc clears selection.",
 
   // Layout
   "layout.resize": "Drag to resize · double-click to reset",

@@ -298,8 +298,8 @@ export function createScriptTarget(doc: SceneDocument): ScriptTarget {
       for (const k of keys) {
         doc.cameraKeys.push({
           t: k.t,
-          position: k.position ? [...k.position] : prev ? [...prev.position] : [...doc.camera.position],
-          target: k.target ? [...k.target] : prev ? [...prev.target] : [...doc.camera.target],
+          position: k.position ? [...k.position] : [...(prev?.position ?? doc.camera.position)],
+          target: k.target ? [...k.target] : [...(prev?.target ?? doc.camera.target)],
           fov: k.fov ?? prev?.fov ?? doc.camera.fov,
           interp: (k.interp as TransformKey["interp"]) ?? "linear",
         });

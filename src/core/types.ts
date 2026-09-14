@@ -48,11 +48,14 @@ export interface TransformKey {
 
 export interface CameraKey {
   t: number;
-  position: Vec3;
+  /** Components are optional: the graph editor splits shared keys when one
+   *  channel is retimed or deleted alone. Missing components fall back to the
+   *  base camera during evaluation. */
+  position?: Vec3;
   /** lookAt target. */
-  target: Vec3;
+  target?: Vec3;
   /** Vertical field of view in degrees. */
-  fov: number;
+  fov?: number;
   interp?: Interp;
 }
 

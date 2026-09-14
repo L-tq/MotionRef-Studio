@@ -12,6 +12,10 @@
  *  values vertically, 1:1 with the mouse); Delete removes selected keys;
  *  "≈" applies a Gaussian smooth (σ = kernel width in key count) to exactly
  *  the selected points.
+ *
+ *  Delete and retime are CHANNEL-SCOPED: keys are shared full-pose records,
+ *  but moving/deleting points of one property (e.g. Position X) splits the
+ *  shared key so other properties keep their own keys at their own times.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "../state/store";
@@ -89,7 +93,7 @@ function cameraChannels(): ChannelDef[] {
   const keyAt = (doc: SceneDocument, atT: number): CameraKey | undefined =>
     doc.cameraKeys.find((k) => Math.abs(k.t - atT) < 1e-4);
   const chans: ChannelDef[] = [];
-  const groups: Array<{ group: string; prefix: string; sel: (k: CameraKey) => Vec3 }> = [
+  const groups: Array<{ group: string; prefix: string; sel: (k: CameraKey) => Vec3 | undefined }> = [
     { group: "Cam Position", prefix: "cpos", sel: (k) => k.position },
     { group: "Cam Target", prefix: "ctgt", sel: (k) => k.target },
   ];
@@ -102,11 +106,16 @@ function cameraChannels(): ChannelDef[] {
         color: c,
         scale: 1,
         comp: { chan: g.prefix === "cpos" ? "position" : "target", index: i },
-        read: (k) => g.sel(k as CameraKey)[i],
+        read: (k) => {
+          const v = g.sel(k as CameraKey);
+          return v ? v[i] : undefined;
+        },
         base: (doc) => (g.prefix === "cpos" ? doc.camera.position[i] : doc.camera.target[i]),
         makePatch: (doc, _target, atT, value) => {
           const k = keyAt(doc, atT);
-          const cur = (k && g.sel(k)) || [0, 0, 0];
+          const cur =
+            (k && g.sel(k)) ||
+            (g.prefix === "cpos" ? [...doc.camera.position] : [...doc.camera.target]);
           const next = [...cur] as Vec3;
           next[i] = value;
           return g.prefix === "cpos" ? { position: next } : { target: next };
@@ -179,8 +188,8 @@ export function GraphEditor() {
   const setLayout = useStore((s) => s.setLayout);
   const setPlayhead = useStore((s) => s.setPlayhead);
   const pause = useStore((s) => s.pause);
-  const retimeKey = useStore((s) => s.retimeKey);
-  const deleteKey = useStore((s) => s.deleteKey);
+  const retimeKeyChan = useStore((s) => s.retimeKeyChan);
+  const deleteKeyChans = useStore((s) => s.deleteKeyChans);
   const setKeyValues = useStore((s) => s.setKeyValues);
   const insertKeyAt = useStore((s) => s.insertKeyAt);
   const smoothKeys = useStore((s) => s.smoothKeys);
@@ -245,10 +254,6 @@ export function GraphEditor() {
 
   const keyId = (chanId: string, time: number) => `${chanId}|${time.toFixed(4)}`;
   const channelById = useMemo(() => new Map(channels.map((c) => [c.id, c])), [channels]);
-  const selUniqueTimes = useMemo(
-    () => [...new Set([...selKeys].map((id) => parseFloat(id.split("|")[1])))],
-    [selKeys],
-  );
 
   /** Selected points mapped to store-level components, for Gaussian smoothing. */
   const selPoints = useMemo(
@@ -383,9 +388,19 @@ export function GraphEditor() {
     setRangeOverride(valueRange);
     const entries = [...sel].map((s) => {
       const [cid, ts] = s.split("|");
-      return { chanId: cid, origT: parseFloat(ts) };
+      const c = channelById.get(cid);
+      return { chanId: cid, origT: parseFloat(ts), chan: c?.comp.chan };
     });
-    const uniqT = [...new Set(entries.map((en) => en.origT))];
+    // One move per (component, time): the X/Y/Z axes of one Vec3 share a key,
+    // so e.g. dragging "Position X" must not drag "Position Y" twice — and it
+    // must NOT drag rotation/scale keys at the same time at all.
+    const compMoves = [
+      ...new Map(
+        entries
+          .filter((en) => en.chan)
+          .map((en) => [`${en.chan}|${en.origT}`, { chan: en.chan!, origT: en.origT }] as const),
+      ).values(),
+    ];
     const clampT = (v: number) => Math.min(Math.max(v, 0), doc.duration);
     const keysOf = (d: SceneDocument) => ("camera" in target ? d.cameraKeys : d.tracks[(target as { objectId: string }).objectId] ?? []);
     const startX = e.clientX;
@@ -401,25 +416,28 @@ export function GraphEditor() {
       const raw = k && ch ? ch.read(k) : undefined;
       return ch && raw !== undefined ? raw * ch.scale : null;
     });
-    const curT = new Map(uniqT.map((t0) => [t0, t0]));
+    const curT = new Map(compMoves.map((m) => [`${m.chan}|${m.origT}`, m.origT]));
     let curDt = 0;
     let curDv = 0;
     const move = (ev: PointerEvent) => {
       const dt = (ev.clientX - startX) / zoom;
       const dv = (-(ev.clientY - startY) / Math.max(plotH - 12, 1)) * (valueRange.max - valueRange.min);
       if (Math.abs(dt - curDt) > 1e-4) {
-        for (const t0 of uniqT) {
-          const from = curT.get(t0)!;
-          const to = clampT(t0 + dt);
+        for (const m of compMoves) {
+          const mk = `${m.chan}|${m.origT}`;
+          const from = curT.get(mk)!;
+          const to = clampT(m.origT + dt);
           if (Math.abs(to - from) > 1e-6) {
-            retimeKey(target, from, to);
-            curT.set(t0, to);
+            retimeKeyChan(target, m.chan, from, to);
+            curT.set(mk, to);
           }
         }
         curDt = dt;
         // Keep selection ids in step with the moved times so dragged points
         // stay highlighted (and remain grabbed) mid-drag.
-        setSelKeys(new Set(entries.map((en) => keyId(en.chanId, curT.get(en.origT)!))));
+        setSelKeys(
+          new Set(entries.map((en) => keyId(en.chanId, (en.chan && curT.get(`${en.chan}|${en.origT}`)) ?? en.origT))),
+        );
       }
       if (Math.abs(dv - curDv) > 1e-6) {
         for (let i = 0; i < entries.length; i++) {
@@ -440,7 +458,9 @@ export function GraphEditor() {
       window.removeEventListener("pointerup", up);
       setRangeOverride(null);
       // Re-key the selection to the moved times so the next drag keeps working.
-      setSelKeys(new Set(entries.map((en) => keyId(en.chanId, curT.get(en.origT)!))));
+      setSelKeys(
+        new Set(entries.map((en) => keyId(en.chanId, (en.chan && curT.get(`${en.chan}|${en.origT}`)) ?? en.origT))),
+      );
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -496,9 +516,11 @@ export function GraphEditor() {
     insertKeyAt(target, xToT(e.clientX - rect.left));
   };
 
-  // Delete the selected keys / clear selection via keyboard. Capture phase so
-  // this runs before App's global bubble listener: with graph keys selected,
-  // Delete must remove KEYS, not the selected object.
+  // Delete the selected points' channel keys / clear selection via keyboard.
+  // Capture phase so this runs before App's global bubble listener: with graph
+  // keys selected, Delete must remove KEYS, not the selected object. Only the
+  // components with selected points lose their keys — e.g. deleting "Position
+  // X" keys leaves rotation/scale keys at the same times untouched.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const active = document.activeElement;
@@ -507,16 +529,18 @@ export function GraphEditor() {
         setSelKeys(new Set());
         return;
       }
-      if ((e.key === "Delete" || e.key === "Backspace") && selUniqueTimes.length) {
+      if ((e.key === "Delete" || e.key === "Backspace") && selPoints.length) {
         e.preventDefault();
         e.stopPropagation();
-        for (const tt of selUniqueTimes) deleteKey(target, tt);
+        const specs = new Map<string, { chan: (typeof selPoints)[number]["chan"]; t: number }>();
+        for (const p of selPoints) specs.set(`${p.chan}|${p.t.toFixed(4)}`, { chan: p.chan, t: p.t });
+        deleteKeyChans(target, [...specs.values()]);
         setSelKeys(new Set());
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [selKeys, selUniqueTimes, deleteKey, target]);
+  }, [selKeys, selPoints, deleteKeyChans, target]);
 
   const step = tickStepFor(zoom);
   const tickCount = Math.floor(doc.duration / step + 1e-6);

@@ -106,17 +106,6 @@ function segment<K extends KeyLike>(keys: K[], t: number): { a: K; b: K; u: numb
 // --- object evaluation --------------------------------------------------------
 
 function evalObjectTrack(base: import("./types").ObjectDesc, keys: TransformKey[], t: number): EvaluatedObject {
-  if (keys.length === 0) {
-    return {
-      id: base.id,
-      position: [...base.position] as Vec3,
-      rotation: [...base.rotation] as Vec3,
-      scale: [...base.scale] as Vec3,
-      color: base.color,
-      visible: base.visible,
-    };
-  }
-  const seg = segment(keys, t);
   const out: EvaluatedObject = {
     id: base.id,
     position: [...base.position] as Vec3,
@@ -125,41 +114,38 @@ function evalObjectTrack(base: import("./types").ObjectDesc, keys: TransformKey[
     color: base.color,
     visible: base.visible,
   };
-  if (!seg) return out;
-  const { a, b, u } = seg;
-  if (a.position && b.position) lerpVec3(a.position, b.position, u, out.position);
-  if (a.rotation && b.rotation) lerpVec3(a.rotation, b.rotation, u, out.rotation);
-  if (a.scale && b.scale) lerpVec3(a.scale, b.scale, u, out.scale);
-  if (a.color && b.color) out.color = lerpColor(a.color, b.color, u);
-  if (a.visible !== undefined && b.visible !== undefined) out.visible = u < 1 ? a.visible : b.visible;
+  // Keys may be partial (the graph editor splits shared full-pose keys when
+  // one channel is retimed/deleted alone), so every component interpolates
+  // over just the keys that carry it, falling back to the base pose.
+  const segPos = segment(keys.filter((k) => k.position !== undefined), t);
+  if (segPos) lerpVec3(segPos.a.position!, segPos.b.position!, segPos.u, out.position);
+  const segRot = segment(keys.filter((k) => k.rotation !== undefined), t);
+  if (segRot) lerpVec3(segRot.a.rotation!, segRot.b.rotation!, segRot.u, out.rotation);
+  const segScl = segment(keys.filter((k) => k.scale !== undefined), t);
+  if (segScl) lerpVec3(segScl.a.scale!, segScl.b.scale!, segScl.u, out.scale);
+  const segCol = segment(keys.filter((k) => k.color !== undefined), t);
+  if (segCol) out.color = lerpColor(segCol.a.color!, segCol.b.color!, segCol.u);
+  const segVis = segment(keys.filter((k) => k.visible !== undefined), t);
+  if (segVis) out.visible = segVis.u < 1 ? segVis.a.visible! : segVis.b.visible!;
   return out;
 }
 
 // --- camera evaluation ---------------------------------------------------------
 
 export function evalCamera(doc: SceneDocument, t: number): CameraState {
+  const out: CameraState = {
+    position: [...doc.camera.position] as Vec3,
+    target: [...doc.camera.target] as Vec3,
+    fov: doc.camera.fov,
+  };
   const keys = doc.cameraKeys;
-  if (keys.length === 0) {
-    return {
-      position: [...doc.camera.position] as Vec3,
-      target: [...doc.camera.target] as Vec3,
-      fov: doc.camera.fov,
-    };
-  }
-  const seg = segment(keys, t);
-  if (!seg) {
-    return {
-      position: [...doc.camera.position] as Vec3,
-      target: [...doc.camera.target] as Vec3,
-      fov: doc.camera.fov,
-    };
-  }
-  const { a, b, u } = seg;
-  const pos = [0, 0, 0] as Vec3;
-  const tgt = [0, 0, 0] as Vec3;
-  lerpVec3(a.position, b.position, u, pos);
-  lerpVec3(a.target, b.target, u, tgt);
-  return { position: pos, target: tgt, fov: lerp(a.fov, b.fov, u) };
+  const segPos = segment(keys.filter((k) => k.position !== undefined), t);
+  if (segPos) lerpVec3(segPos.a.position!, segPos.b.position!, segPos.u, out.position);
+  const segTgt = segment(keys.filter((k) => k.target !== undefined), t);
+  if (segTgt) lerpVec3(segTgt.a.target!, segTgt.b.target!, segTgt.u, out.target);
+  const segFov = segment(keys.filter((k) => k.fov !== undefined), t);
+  if (segFov) out.fov = lerp(segFov.a.fov!, segFov.b.fov!, segFov.u);
+  return out;
 }
 
 // --- onFrame hooks -------------------------------------------------------------
