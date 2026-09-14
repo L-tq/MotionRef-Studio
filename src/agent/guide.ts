@@ -23,13 +23,14 @@ Never claim success without a verifying snapshot.
   - box: width, height, depth · sphere: radius · cylinder: radiusTop, radiusBottom, height · cone: radius, height · torus: radius, tube · plane: width, height · capsule: radius, length · ring: innerRadius, outerRadius · tetrahedron/octahedron/dodecahedron/icosahedron: radius · torusKnot: radius, tube
 - Colors: hex strings only. Choose distinct, harmonious solid colors; keep the background neutral.
 - Camera: position + lookAt target + vertical fov (degrees). fov 45 ≈ 50mm lens; smaller fov = more telephoto; larger = wider.
-- MULTIPLE CAMERAS (Blender-style): \`doc.cameras\` is a list; one camera is ACTIVE (\`doc.activeCameraId\`) and every snapshot/export renders it. \`api.addCamera({name, position, target, fov})\` returns a camera id; \`api.setActiveCamera(id)\` switches rendering to it; \`api.addCameraKeys(keys, cameraId?)\` keys that camera (default: the active one). Use a second camera for an alternate angle (e.g. wide master + close-up).
+- MULTIPLE CAMERAS (Blender-style): \`doc.cameras\` is a list; one camera is ACTIVE (\`doc.activeCameraId\`) and every snapshot/export renders it. \`api.addCamera({name, position, target, fov})\` returns a camera id; \`api.setActiveCamera(id)\` switches rendering to it; \`api.addCameraKeys(keys, cameraId?)\` keys that camera (default: the active one). \`api.updateCamera(id, {name?, position?, target?, fov?})\` patches and \`api.removeCamera(id)\` deletes an existing camera (with its keys; the last one cannot be removed). Camera ids come from \`api.get().cameras\` / \`get_scene_state\`. Use a second camera for an alternate angle (e.g. wide master + close-up).
 - Timeline: duration (seconds, default 6) + fps (export rate, default 30).
 
 ## Animation semantics
 - Object keyframes: \`{t (seconds), position?, rotation?, scale?, color?, visible?, interp}\`. Missing properties inherit from the PREVIOUS keyframe of that object. interp: "linear" (default) | "smooth" (eased) | "step" (hold then jump).
-- Camera keyframes: \`{t, position, target, fov, interp}\` — all required per key (they inherit from the previous key when omitted via the scripting API).
+- Camera keyframes: \`{t, position?, target?, fov?, interp}\` — omitted components inherit from that camera's PREVIOUS key. Every key belongs to one camera; the scripting API targets the ACTIVE camera unless you pass a camera id.
 - With NO keyframes, the base pose is used. With keyframes, they fully drive the property.
+- Per-axis keys: a vector component may hold \`null\` on some axes (= not keyed there). Each axis interpolates over only the keys that define it, falling back to the base pose when none do. The graph editor creates such keys when one axis is edited alone; you rarely need to author them.
 - Procedural motion: \`api.onFrame((t, f, state) => {...})\` runs every evaluated frame; \`f.update(id, {position,...})\` / \`f.camera({fov,...})\` patch ONLY that frame (great for sine orbits, easing, physics-like loops). Use keyframes for blocking, onFrame for continuous motion. Both are deterministic at export time.
 - HOOKS MUST BE SELF-CONTAINED: they are stored as source and re-created on reload, so variables you declared outside (e.g. \`const id = api.add(...)\`) DO NOT exist inside the hook. Look ids up fresh every frame and guard: \`api.onFrame((t, f) => { const id = f.find("Name"); if (id) f.update(id, { rotation: [0, t, 0] }); })\`. Keep counters/accumulators on the 3rd argument: \`api.onFrame((t, f, s) => { s.spin = (s.spin ?? 0) + 0.02; ... })\`. \`f.update\` with an unknown id is a safe no-op, so deleted objects never crash a hook.
 
@@ -67,6 +68,8 @@ api.addCameraKeys([
 ]);                                     // keys the ACTIVE camera
 api.addCameraKeys([{ t: 0, position: [14, 2, 0] }, { t: 6, position: [-14, 2, 0] }], wide); // keys "Wide"
 api.setActiveCamera(wide);              // snapshots/export now render "Wide"
+api.updateCamera(wide, { fov: 35 });    // patch a camera's base pose/name
+// api.removeCamera(id) — drops that camera AND its keys (last one protected)
 api.onFrame((t, f) => {                       // continuous orbit for "Moon"
   const moon = f.find("Moon");                // ids: look up fresh each frame
   if (moon) f.update(moon, { position: [Math.cos(t) * 3, 1.5, Math.sin(t) * 3] });
@@ -81,6 +84,7 @@ api.log("done", id);
 - Bouncing ball: keyframe y with "smooth" at contacts + squash scale at impact.
 - Orbit: \`onFrame\` with cos/sin; keep the orbit radius small enough to stay in frame.
 - Camera: dollying = translate position keyframes toward the target; crane = move y; orbit = keyframe positions on a circle around the target, always aiming at it.
+- Two cameras: build the wide master first, then \`api.addCamera\` + \`api.addCameraKeys(keys, camId)\` for a second angle (e.g. close-up); \`api.setActiveCamera\` + \`snapshot\` to verify each framing.
 - Composition: subject near center, horizon around the lower third, ground plane larger than the action area, 3–8 objects usually reads best.
 
 ## Constraints
@@ -113,13 +117,14 @@ api.log("done", id);
   - box: width, height, depth · sphere: radius · cylinder: radiusTop, radiusBottom, height · cone: radius, height · torus: radius, tube · plane: width, height · capsule: radius, length · ring: innerRadius, outerRadius · tetrahedron/octahedron/dodecahedron/icosahedron: radius · torusKnot: radius, tube
 - 颜色：仅十六进制字符串。选区分度好、和谐的纯色；背景保持中性。
 - 相机：位置 + 注视目标 target + 垂直视场角 fov（度）。fov 45 ≈ 50mm 镜头；更小更“长焦”，更大更“广角”。
-- 多相机（Blender 风格）：\`doc.cameras\` 是相机列表；其中一台是“活动”相机（\`doc.activeCameraId\`），所有快照/导出都渲染它。\`api.addCamera({name, position, target, fov})\` 返回相机 id；\`api.setActiveCamera(id)\` 切换渲染目标；\`api.addCameraKeys(keys, cameraId?)\` 为指定相机打关键帧（默认为活动相机）。可用第二台相机拍别的机位（如全景 + 特写）。
+- 多相机（Blender 风格）：\`doc.cameras\` 是相机列表；其中一台是“活动”相机（\`doc.activeCameraId\`），所有快照/导出都渲染它。\`api.addCamera({name, position, target, fov})\` 返回相机 id；\`api.setActiveCamera(id)\` 切换渲染目标；\`api.addCameraKeys(keys, cameraId?)\` 为指定相机打关键帧（默认为活动相机）。\`api.updateCamera(id, {name?, position?, target?, fov?})\` 修改、\`api.removeCamera(id)\` 删除已有相机（连同其关键帧；最后一台不可删除）。相机 id 从 \`api.get().cameras\` / \`get_scene_state\` 获取。可用第二台相机拍别的机位（如全景 + 特写）。
 - 时间轴：duration（秒，默认 6）+ fps（导出帧率，默认 30）。
 
 ## 动画语义
 - 对象关键帧：\`{t（秒）, position?, rotation?, scale?, color?, visible?, interp}\`。缺省的属性继承该对象**上一个关键帧**的值。interp："linear"（默认）| "smooth"（缓动）| "step"（保持后跳变）。
-- 相机关键帧：\`{t, position, target, fov, interp}\`（脚本接口中缺省项继承上一帧）。
+- 相机关键帧：\`{t, position?, target?, fov?, interp}\`——缺省分量继承该相机上一个关键帧。每个关键帧只属于一台相机；脚本接口默认作用于活动相机，也可传入相机 id。
 - 无关键帧时使用基础位姿；有关键帧的属性完全由关键帧驱动。
+- 按轴关键帧：向量分量中某个轴可为 \`null\`（= 该轴在此帧未打关键帧）。每个轴只在其有关键帧的帧之间插值，全无则回退基础位姿。这类关键帧通常由曲线编辑器按轴拆分产生，很少需要主动写入。
 - 程序化运动：\`api.onFrame((t, f, state) => {...})\` 在每个求值帧运行；\`f.update(id, {position,...})\` / \`f.camera({fov,...})\` 只作用于当前帧（适合正弦环绕、缓动、类物理循环）。关键帧用于“布局”，onFrame 用于“连续运动”。导出时二者都是确定性的。
 - onFrame 脚本必须自包含：脚本以源码形式保存、刷新页面后会重新创建，因此你在脚本外部声明的变量（如 \`const id = api.add(...)\`）在 hook 内**不存在**。id 请每帧重新查找并判空：\`api.onFrame((t, f) => { const id = f.find("名字"); if (id) f.update(id, { rotation: [0, t, 0] }); })\`；计数器/累加值存到第三个参数：\`api.onFrame((t, f, s) => { s.spin = (s.spin ?? 0) + 0.02; ... })\`。对未知 id \`f.update\` 会静默跳过，删除对象不会导致 hook 报错。
 
@@ -149,14 +154,16 @@ api.keyframes(id, [
   { t: 2, position: [0, 0.5, 0] },            // 落地
   { t: 3, position: [0, 0.5, 0], scale: [1.3, 0.7, 1.3] } // 压扁
 ]);
-api.setCamera({ position: [8, 5, 10], target: [0, 1, 0], fov: 40 });   // ACTIVE camera
+api.setCamera({ position: [8, 5, 10], target: [0, 1, 0], fov: 40 });   // 活动相机
 const wide = api.addCamera({ name: "Wide", position: [12, 8, 14], target: [0, 1, 0], fov: 55 });
 api.addCameraKeys([
   { t: 0, position: [10, 3, 0], target: [0, 1, 0] },
   { t: 6, position: [0, 6, 10], target: [0, 1, 0], fov: 35 }
-]);                                     // keys the ACTIVE camera
-api.addCameraKeys([{ t: 0, position: [14, 2, 0] }, { t: 6, position: [-14, 2, 0] }], wide); // keys "Wide"
-api.setActiveCamera(wide);              // snapshots/export now render "Wide"
+]);                                     // 为活动相机打关键帧
+api.addCameraKeys([{ t: 0, position: [14, 2, 0] }, { t: 6, position: [-14, 2, 0] }], wide); // 为 "Wide" 打关键帧
+api.setActiveCamera(wide);              // 快照/导出改为渲染 "Wide"
+api.updateCamera(wide, { fov: 35 });    // 修改某台相机的基础位姿/名称
+// api.removeCamera(id) — 连同其关键帧一起删除（最后一台不可删）
 api.onFrame((t, f) => {                       // “月球”持续环绕
   const moon = f.find("月球");                 // id 每帧重新查找
   if (moon) f.update(moon, { position: [Math.cos(t) * 3, 1.5, Math.sin(t) * 3] });
@@ -171,6 +178,7 @@ api.log("完成", id);
 - 弹跳球：触地点用 "smooth" 关键帧 + 撞击帧压扁 scale。
 - 环绕：\`onFrame\` 用 cos/sin；轨道半径要足够小以保持在画面内。
 - 运镜：推轨 = position 关键帧向 target 靠近；升降 = 改 y；环绕 = 沿目标周围圆周打关键帧并始终注视目标。
+- 双机位：先搭全景主机位，再用 \`api.addCamera\` + \`api.addCameraKeys(keys, 相机id)\` 加一个特写机位；用 \`api.setActiveCamera\` + \`snapshot\` 逐机位验证构图。
 - 构图：主体居中偏下三分之一，地面大于动作范围，3–8 个对象通常观感最好。
 
 ## 限制

@@ -441,8 +441,10 @@ const DOCS: Record<"en" | "zh", string> = {
 api.update(id, patch) · api.remove(id) · api.clear() · api.get() · api.list()
 api.find(name) -> id · api.params(type) · api.uniqueName(type)
 api.keyframes(id, [{t, position?, rotation?, scale?, color?, visible?, interp?}])
-api.setCamera({position?,target?,fov?})
-api.addCameraKeys([{t, position?, target?, fov?, interp?}])
+api.setCamera({position?,target?,fov?}) — ACTIVE camera's base pose
+api.addCamera({name?,position?,target?,fov?}) -> id · api.updateCamera(id, patch) · api.removeCamera(id)
+api.setActiveCamera(id) — what preview/snapshot/export render
+api.addCameraKeys([{t, position?, target?, fov?, interp?}], cameraId?) — default: active
 api.setDuration(s) · api.setFps(f) · api.setAspect(16/9)
 api.onFrame((t, f, state) => {...})  — must be self-contained: resolve ids
   fresh each frame (const id = f.find("Name"); if (id) f.update(id, …));
@@ -453,8 +455,10 @@ api.log(...) — print to the output pane`,
 api.update(id, patch) · api.remove(id) · api.clear() · api.get() · api.list()
 api.find(name) -> id · api.params(type) · api.uniqueName(type)
 api.keyframes(id, [{t, position?, rotation?, scale?, color?, visible?, interp?}])
-api.setCamera({position?,target?,fov?})
-api.addCameraKeys([{t, position?, target?, fov?, interp?}])
+api.setCamera({position?,target?,fov?}) — 活动相机的基础位姿
+api.addCamera({name?,position?,target?,fov?}) -> id · api.updateCamera(id, patch) · api.removeCamera(id)
+api.setActiveCamera(id) — 预览/快照/导出渲染的相机
+api.addCameraKeys([{t, position?, target?, fov?, interp?}], cameraId?) — 默认活动相机
 api.setDuration(s) · api.setFps(f) · api.setAspect(16/9)
 api.onFrame((t, f, state) => {...})  — 必须自包含：每帧重新解析 id
   （const id = f.find("名字"); if (id) f.update(id, …)）；计数存到 state；
