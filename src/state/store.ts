@@ -9,6 +9,7 @@ import {
   specOf,
   type CameraKey,
   type GeometryType,
+  type KeyVec3,
   type SceneDocument,
   type TransformKey,
   type Vec3,
@@ -31,6 +32,31 @@ export interface ProjectEntry {
   name: string;
   savedAt: number;
   doc: SceneDocument;
+}
+
+type KeyChan = "position" | "rotation" | "scale" | "target" | "fov";
+
+/** Null out one axis of a key's vector (or the whole fov); drops the component
+ *  when its last axis goes away. Mutates the (draft) key. */
+function nullKeyAxis(k: TransformKey & CameraKey, chan: KeyChan, index: number) {
+  if (chan === "fov") {
+    k.fov = undefined;
+    return;
+  }
+  const v = k[chan];
+  if (!v) return;
+  const next: KeyVec3 = [...v];
+  next[index] = null;
+  if (next.every((x) => x === null)) k[chan] = undefined;
+  else k[chan] = next;
+}
+
+/** True when a key carries no keyed data at all and can be dropped. */
+function keyIsEmpty(k: TransformKey & CameraKey) {
+  return (
+    k.position === undefined && k.rotation === undefined && k.scale === undefined &&
+    k.color === undefined && k.visible === undefined && k.target === undefined && k.fov === undefined
+  );
 }
 
 /** Lightweight task metadata (transcripts live in IndexedDB, see chatPersist). */
@@ -197,26 +223,29 @@ export interface AppActions {
   setCameraKeyAtPlayhead(): void;
   retimeKey(target: { objectId: string } | { camera: true }, fromT: number, toT: number): void;
   deleteKey(target: { objectId: string } | { camera: true }, atT: number): void;
-  /** Graph editor: remove the given channel component at the given times from
-   *  keys — a key left with no data is removed, other channels keep their
-   *  keys (unlike deleteKey, which always removes the whole shared key). */
+  /** Graph editor: remove the given channel axis at the given times from
+   *  keys — a key left with no data is removed, other channels (and other
+   *  axes of the same vector) keep their keys (unlike deleteKey, which always
+   *  removes the whole shared key). */
   deleteKeyChans(
     target: { objectId: string } | { camera: true },
-    specs: Array<{ chan: "position" | "rotation" | "scale" | "target" | "fov"; t: number }>,
+    specs: Array<{ chan: "position" | "rotation" | "scale" | "target" | "fov"; index: number; t: number }>,
   ): void;
-  /** Graph editor: move one channel component in time, splitting the shared
-   *  full-pose key so other channels' keys stay where they are. */
+  /** Graph editor: move one channel axis in time, splitting the shared
+   *  full-pose key so other channels/axes' keys stay where they are. */
   retimeKeyChan(
     target: { objectId: string } | { camera: true },
     chan: "position" | "rotation" | "scale" | "target" | "fov",
+    index: number,
     fromT: number,
     toT: number,
   ): void;
-  /** Graph-editor edits: change channel values stored on one key. */
+  /** Graph-editor edits: change channel values stored on one key. Vectors may
+   *  carry nulls for axes this key does not key. */
   setKeyValues(
     target: { objectId: string } | { camera: true },
     atT: number,
-    patch: { position?: [number, number, number]; rotation?: [number, number, number]; scale?: [number, number, number]; target?: [number, number, number]; fov?: number },
+    patch: { position?: KeyVec3; rotation?: KeyVec3; scale?: KeyVec3; target?: KeyVec3; fov?: number },
   ): void;
   /** Insert a full keyframe (evaluated pose at t) into an object track or the camera. */
   insertKeyAt(target: { objectId: string } | { camera: true }, t: number): void;
@@ -473,9 +502,9 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
       state.mutateDoc("pose", (draft) => {
         const target = draft.objects.find((o) => o.id === id);
         if (!target) return;
-        if (pose.position) target.position = [...pose.position];
-        if (pose.rotation) target.rotation = [...pose.rotation];
-        if (pose.scale) target.scale = [...pose.scale];
+        if (pose.position) target.position = [...pose.position] as Vec3;
+        if (pose.rotation) target.rotation = [...pose.rotation] as Vec3;
+        if (pose.scale) target.scale = [...pose.scale] as Vec3;
       });
     }
   },
@@ -567,27 +596,22 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
 
   deleteKeyChans(target, specs) {
     if (!specs.length) return;
-    const want = specs.map((s) => ({ chan: s.chan, t: +s.t.toFixed(4) }));
+    const want = specs.map((s) => ({ chan: s.chan, index: s.index, t: +s.t.toFixed(4) }));
     get().mutateDoc("delete-key", (draft) => {
       const keys = "camera" in target ? draft.cameraKeys : draft.tracks[target.objectId];
       if (!keys?.length) return;
-      for (const { chan, t } of want) {
+      for (const { chan, index, t } of want) {
         const idx = keys.findIndex((k) => Math.abs(k.t - t) < 1e-4);
         if (idx < 0) continue;
-        const rest = { ...keys[idx] } as Record<string, unknown>;
-        if (rest[chan] === undefined) continue;
-        delete rest[chan];
-        const hasRest =
-          rest.position !== undefined || rest.rotation !== undefined || rest.scale !== undefined ||
-          rest.color !== undefined || rest.visible !== undefined || rest.target !== undefined ||
-          rest.fov !== undefined;
-        if (hasRest) keys[idx] = rest as unknown as TransformKey & CameraKey;
-        else keys.splice(idx, 1);
+        const k = keys[idx] as TransformKey & CameraKey;
+        if (chan === "fov" ? k.fov === undefined : !k[chan] || k[chan]![index] == null) continue;
+        nullKeyAxis(k, chan, index);
+        if (keyIsEmpty(k)) keys.splice(idx, 1);
       }
     });
   },
 
-  retimeKeyChan(target, chan, fromT, toT) {
+  retimeKeyChan(target, chan, index, fromT, toT) {
     const from = +fromT.toFixed(4);
     const to = Math.min(Math.max(+toT.toFixed(4), 0), get().doc.duration);
     if (Math.abs(to - from) < 1e-6) return;
@@ -597,22 +621,35 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
       const idx = keys.findIndex((k) => Math.abs(k.t - from) < 1e-4);
       if (idx < 0) return;
       const k = keys[idx] as TransformKey & CameraKey;
-      const val = k[chan];
-      if (val === undefined) return;
-      const rest = { ...k } as Record<string, unknown>;
-      delete rest[chan];
-      const hasRest =
-        rest.position !== undefined || rest.rotation !== undefined || rest.scale !== undefined ||
-        rest.color !== undefined || rest.visible !== undefined || rest.target !== undefined ||
-        rest.fov !== undefined;
-      if (hasRest) keys[idx] = rest as unknown as TransformKey & CameraKey;
-      else keys.splice(idx, 1);
+      let val: number;
+      if (chan === "fov") {
+        if (k.fov === undefined) return;
+        val = k.fov;
+      } else {
+        const v = k[chan];
+        if (!v || v[index] === null || v[index] === undefined) return;
+        val = v[index];
+      }
+      nullKeyAxis(k, chan, index);
+      if (keyIsEmpty(k)) keys.splice(idx, 1);
       const ks = keys as Array<TransformKey & CameraKey>;
       const dst = ks.find((kk) => Math.abs(kk.t - to) < 1e-4);
       if (dst) {
-        keys[keys.indexOf(dst)] = { ...dst, [chan]: val };
+        if (chan === "fov") dst.fov = val;
+        else {
+          if (!dst[chan]) dst[chan] = [null, null, null];
+          dst[chan][index] = val;
+        }
       } else {
-        keys.push({ t: to, [chan]: val, interp: k.interp ?? "linear" } as TransformKey & CameraKey);
+        const entry = { t: to, interp: k.interp ?? "linear" } as TransformKey & CameraKey;
+        if (chan === "fov") {
+          entry.fov = val;
+        } else {
+          const v: KeyVec3 = [null, null, null];
+          v[index] = val;
+          entry[chan] = v;
+        }
+        keys.push(entry);
       }
       keys.sort((a, b) => a.t - b.t);
     });
@@ -657,14 +694,16 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
       const readComp = (k: TransformKey & CameraKey, chan: Comp | "fov", index: number): number | undefined => {
         if (chan === "fov") return k.fov;
         const v = k[chan];
-        return v ? v[index] : undefined;
+        const x = v ? v[index] : undefined;
+        return x === undefined || x === null ? undefined : x;
       };
       const writeComp = (i: number, chan: Comp | "fov", index: number, v: number) => {
         if (chan === "fov") {
           ks[i] = { ...ks[i], fov: v };
           return;
         }
-        const arr = [...(ks[i][chan] as Vec3)] as Vec3;
+        const cur = ks[i][chan];
+        const arr: KeyVec3 = cur ? [...cur] : [null, null, null];
         arr[index] = v;
         ks[i] = { ...ks[i], [chan]: arr };
       };

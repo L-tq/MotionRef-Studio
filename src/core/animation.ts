@@ -105,7 +105,24 @@ function segment<K extends KeyLike>(keys: K[], t: number): { a: K; b: K; u: numb
 
 // --- object evaluation --------------------------------------------------------
 
-function evalObjectTrack(base: import("./types").ObjectDesc, keys: TransformKey[], t: number): EvaluatedObject {
+type VecComp = "position" | "rotation" | "scale" | "target";
+
+/** Interpolate ONE axis of a vector component over the keys that key it
+ *  (null = axis not keyed here). Returns null when no key defines the axis. */
+function evalAxis(keys: Array<TransformKey & CameraKey>, comp: VecComp, axis: number, t: number): number | null {
+  const pts = keys.filter((k) => {
+    const v = k[comp];
+    return v && v[axis] !== null && v[axis] !== undefined;
+  });
+  const seg = segment(pts, t);
+  if (!seg) return null;
+  const a = seg.a[comp]![axis] as number;
+  const b = seg.b[comp]![axis] as number;
+  return lerp(a, b, seg.u);
+}
+
+function evalObjectTrack(base: import("./types").ObjectDesc, rawKeys: TransformKey[], t: number): EvaluatedObject {
+  const keys = rawKeys as Array<TransformKey & CameraKey>;
   const out: EvaluatedObject = {
     id: base.id,
     position: [...base.position] as Vec3,
@@ -114,15 +131,15 @@ function evalObjectTrack(base: import("./types").ObjectDesc, keys: TransformKey[
     color: base.color,
     visible: base.visible,
   };
-  // Keys may be partial (the graph editor splits shared full-pose keys when
-  // one channel is retimed/deleted alone), so every component interpolates
-  // over just the keys that carry it, falling back to the base pose.
-  const segPos = segment(keys.filter((k) => k.position !== undefined), t);
-  if (segPos) lerpVec3(segPos.a.position!, segPos.b.position!, segPos.u, out.position);
-  const segRot = segment(keys.filter((k) => k.rotation !== undefined), t);
-  if (segRot) lerpVec3(segRot.a.rotation!, segRot.b.rotation!, segRot.u, out.rotation);
-  const segScl = segment(keys.filter((k) => k.scale !== undefined), t);
-  if (segScl) lerpVec3(segScl.a.scale!, segScl.b.scale!, segScl.u, out.scale);
+  // Keys may be partial — per component AND per axis (the graph editor splits
+  // shared full-pose keys) — so every axis interpolates over just the keys
+  // that key it, falling back to the base pose.
+  (["position", "rotation", "scale"] as const).forEach((comp) => {
+    for (let axis = 0; axis < 3; axis++) {
+      const v = evalAxis(keys, comp, axis, t);
+      if (v !== null) out[comp][axis] = v;
+    }
+  });
   const segCol = segment(keys.filter((k) => k.color !== undefined), t);
   if (segCol) out.color = lerpColor(segCol.a.color!, segCol.b.color!, segCol.u);
   const segVis = segment(keys.filter((k) => k.visible !== undefined), t);
@@ -133,16 +150,18 @@ function evalObjectTrack(base: import("./types").ObjectDesc, keys: TransformKey[
 // --- camera evaluation ---------------------------------------------------------
 
 export function evalCamera(doc: SceneDocument, t: number): CameraState {
+  const keys = doc.cameraKeys as Array<TransformKey & CameraKey>;
   const out: CameraState = {
     position: [...doc.camera.position] as Vec3,
     target: [...doc.camera.target] as Vec3,
     fov: doc.camera.fov,
   };
-  const keys = doc.cameraKeys;
-  const segPos = segment(keys.filter((k) => k.position !== undefined), t);
-  if (segPos) lerpVec3(segPos.a.position!, segPos.b.position!, segPos.u, out.position);
-  const segTgt = segment(keys.filter((k) => k.target !== undefined), t);
-  if (segTgt) lerpVec3(segTgt.a.target!, segTgt.b.target!, segTgt.u, out.target);
+  (["position", "target"] as const).forEach((comp) => {
+    for (let axis = 0; axis < 3; axis++) {
+      const v = evalAxis(keys, comp, axis, t);
+      if (v !== null) out[comp][axis] = v;
+    }
+  });
   const segFov = segment(keys.filter((k) => k.fov !== undefined), t);
   if (segFov) out.fov = lerp(segFov.a.fov!, segFov.b.fov!, segFov.u);
   return out;

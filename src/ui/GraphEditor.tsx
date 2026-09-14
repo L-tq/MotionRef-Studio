@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "../state/store";
 import { useT } from "../i18n";
-import type { CameraKey, SceneDocument, TransformKey, Vec3 } from "../core/types";
+import type { CameraKey, KeyVec3, SceneDocument, TransformKey, Vec3 } from "../core/types";
 
 type KeyTarget = { objectId: string } | { camera: true };
 type AnyKey = TransformKey | CameraKey;
@@ -50,7 +50,7 @@ function objectChannels(objectId: string, basePos: Vec3, baseRot: Vec3, baseScl:
   const keyAt = (doc: SceneDocument, atT: number): TransformKey | undefined =>
     (doc.tracks[objectId] ?? []).find((k) => Math.abs(k.t - atT) < 1e-4);
   const chans: ChannelDef[] = [];
-  const groups: Array<{ group: string; prefix: string; sel: (k: TransformKey) => Vec3 | undefined; base: Vec3 }> = [
+  const groups: Array<{ group: string; prefix: string; sel: (k: TransformKey) => KeyVec3 | undefined; base: Vec3 }> = [
     { group: "Position", prefix: "pos", sel: (k) => k.position, base: basePos },
     { group: "Rotation", prefix: "rot", sel: (k) => k.rotation, base: baseRot },
     { group: "Scale", prefix: "scl", sel: (k) => k.scale, base: baseScl },
@@ -66,13 +66,14 @@ function objectChannels(objectId: string, basePos: Vec3, baseRot: Vec3, baseScl:
         comp: { chan: g.prefix === "pos" ? "position" : g.prefix === "rot" ? "rotation" : "scale", index: i },
         read: (k) => {
           const v = g.sel(k as TransformKey);
-          return v ? v[i] : undefined;
+          const x = v ? v[i] : undefined;
+          return x === undefined || x === null ? undefined : x;
         },
         base: () => g.base[i],
         makePatch: (doc, _target, atT, value) => {
           const k = keyAt(doc, atT);
           const cur = (k && g.sel(k)) || ([...g.base] as Vec3);
-          const next = [...cur] as Vec3;
+          const next = [...cur] as KeyVec3;
           next[i] = value / (g.group === "Rotation" ? 180 / Math.PI : 1);
           if (g.prefix === "pos") return { position: next };
           if (g.prefix === "rot") return { rotation: next };
@@ -93,7 +94,7 @@ function cameraChannels(): ChannelDef[] {
   const keyAt = (doc: SceneDocument, atT: number): CameraKey | undefined =>
     doc.cameraKeys.find((k) => Math.abs(k.t - atT) < 1e-4);
   const chans: ChannelDef[] = [];
-  const groups: Array<{ group: string; prefix: string; sel: (k: CameraKey) => Vec3 | undefined }> = [
+  const groups: Array<{ group: string; prefix: string; sel: (k: CameraKey) => KeyVec3 | undefined }> = [
     { group: "Cam Position", prefix: "cpos", sel: (k) => k.position },
     { group: "Cam Target", prefix: "ctgt", sel: (k) => k.target },
   ];
@@ -108,7 +109,8 @@ function cameraChannels(): ChannelDef[] {
         comp: { chan: g.prefix === "cpos" ? "position" : "target", index: i },
         read: (k) => {
           const v = g.sel(k as CameraKey);
-          return v ? v[i] : undefined;
+          const x = v ? v[i] : undefined;
+          return x === undefined || x === null ? undefined : x;
         },
         base: (doc) => (g.prefix === "cpos" ? doc.camera.position[i] : doc.camera.target[i]),
         makePatch: (doc, _target, atT, value) => {
@@ -116,7 +118,7 @@ function cameraChannels(): ChannelDef[] {
           const cur =
             (k && g.sel(k)) ||
             (g.prefix === "cpos" ? [...doc.camera.position] : [...doc.camera.target]);
-          const next = [...cur] as Vec3;
+          const next = [...cur] as KeyVec3;
           next[i] = value;
           return g.prefix === "cpos" ? { position: next } : { target: next };
         },
@@ -389,16 +391,19 @@ export function GraphEditor() {
     const entries = [...sel].map((s) => {
       const [cid, ts] = s.split("|");
       const c = channelById.get(cid);
-      return { chanId: cid, origT: parseFloat(ts), chan: c?.comp.chan };
+      return { chanId: cid, origT: parseFloat(ts), chan: c?.comp.chan, index: c?.comp.index ?? 0 };
     });
-    // One move per (component, time): the X/Y/Z axes of one Vec3 share a key,
-    // so e.g. dragging "Position X" must not drag "Position Y" twice — and it
-    // must NOT drag rotation/scale keys at the same time at all.
+    // One move per (channel axis, time): X/Y/Z are independent curves, so
+    // dragging "Position X" (or "Cam Position X") must not drag the Y/Z axes
+    // — and never other components' keys at the same time.
     const compMoves = [
       ...new Map(
         entries
           .filter((en) => en.chan)
-          .map((en) => [`${en.chan}|${en.origT}`, { chan: en.chan!, origT: en.origT }] as const),
+          .map((en) => [
+            `${en.chan}.${en.index}|${en.origT}`,
+            { chan: en.chan!, index: en.index, origT: en.origT },
+          ] as const),
       ).values(),
     ];
     const clampT = (v: number) => Math.min(Math.max(v, 0), doc.duration);
@@ -416,7 +421,7 @@ export function GraphEditor() {
       const raw = k && ch ? ch.read(k) : undefined;
       return ch && raw !== undefined ? raw * ch.scale : null;
     });
-    const curT = new Map(compMoves.map((m) => [`${m.chan}|${m.origT}`, m.origT]));
+    const curT = new Map(compMoves.map((m) => [`${m.chan}.${m.index}|${m.origT}`, m.origT]));
     let curDt = 0;
     let curDv = 0;
     const move = (ev: PointerEvent) => {
@@ -424,11 +429,11 @@ export function GraphEditor() {
       const dv = (-(ev.clientY - startY) / Math.max(plotH - 12, 1)) * (valueRange.max - valueRange.min);
       if (Math.abs(dt - curDt) > 1e-4) {
         for (const m of compMoves) {
-          const mk = `${m.chan}|${m.origT}`;
+          const mk = `${m.chan}.${m.index}|${m.origT}`;
           const from = curT.get(mk)!;
           const to = clampT(m.origT + dt);
           if (Math.abs(to - from) > 1e-6) {
-            retimeKeyChan(target, m.chan, from, to);
+            retimeKeyChan(target, m.chan, m.index, from, to);
             curT.set(mk, to);
           }
         }
@@ -436,7 +441,11 @@ export function GraphEditor() {
         // Keep selection ids in step with the moved times so dragged points
         // stay highlighted (and remain grabbed) mid-drag.
         setSelKeys(
-          new Set(entries.map((en) => keyId(en.chanId, (en.chan && curT.get(`${en.chan}|${en.origT}`)) ?? en.origT))),
+          new Set(
+            entries.map((en) =>
+              keyId(en.chanId, (en.chan && curT.get(`${en.chan}.${en.index}|${en.origT}`)) ?? en.origT),
+            ),
+          ),
         );
       }
       if (Math.abs(dv - curDv) > 1e-6) {
@@ -459,7 +468,11 @@ export function GraphEditor() {
       setRangeOverride(null);
       // Re-key the selection to the moved times so the next drag keeps working.
       setSelKeys(
-        new Set(entries.map((en) => keyId(en.chanId, (en.chan && curT.get(`${en.chan}|${en.origT}`)) ?? en.origT))),
+        new Set(
+          entries.map((en) =>
+            keyId(en.chanId, (en.chan && curT.get(`${en.chan}.${en.index}|${en.origT}`)) ?? en.origT),
+          ),
+        ),
       );
     };
     window.addEventListener("pointermove", move);
@@ -532,8 +545,8 @@ export function GraphEditor() {
       if ((e.key === "Delete" || e.key === "Backspace") && selPoints.length) {
         e.preventDefault();
         e.stopPropagation();
-        const specs = new Map<string, { chan: (typeof selPoints)[number]["chan"]; t: number }>();
-        for (const p of selPoints) specs.set(`${p.chan}|${p.t.toFixed(4)}`, { chan: p.chan, t: p.t });
+        const specs = new Map<string, { chan: (typeof selPoints)[number]["chan"]; index: number; t: number }>();
+        for (const p of selPoints) specs.set(`${p.chan}.${p.index}|${p.t.toFixed(4)}`, { chan: p.chan, index: p.index, t: p.t });
         deleteKeyChans(target, [...specs.values()]);
         setSelKeys(new Set());
       }

@@ -2,6 +2,11 @@
 
 export type Vec3 = [number, number, number];
 
+/** Vector as stored on a keyframe: `null` = this axis is not keyed here (the
+ *  graph editor splits shared keys per axis). Evaluated poses are always full
+ *  Vec3s — unkeyed axes fall back to the base pose during evaluation. */
+export type KeyVec3 = [number | null, number | null, number | null];
+
 export type GeometryType =
   | "box"
   | "sphere"
@@ -34,13 +39,14 @@ export interface ObjectDesc {
   visible: boolean;
 }
 
-/** A keyframe for one object. Only the properties present are keyed. */
+/** A keyframe for one object. Only the properties present are keyed; within a
+ *  vector, only the axes present (non-null) are keyed. */
 export interface TransformKey {
   /** Seconds from clip start. */
   t: number;
-  position?: Vec3;
-  rotation?: Vec3;
-  scale?: Vec3;
+  position?: KeyVec3;
+  rotation?: KeyVec3;
+  scale?: KeyVec3;
   color?: string;
   visible?: boolean;
   interp?: Interp;
@@ -51,9 +57,9 @@ export interface CameraKey {
   /** Components are optional: the graph editor splits shared keys when one
    *  channel is retimed or deleted alone. Missing components fall back to the
    *  base camera during evaluation. */
-  position?: Vec3;
+  position?: KeyVec3;
   /** lookAt target. */
-  target?: Vec3;
+  target?: KeyVec3;
   /** Vertical field of view in degrees. */
   fov?: number;
   interp?: Interp;

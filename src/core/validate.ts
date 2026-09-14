@@ -1,7 +1,7 @@
 /** Strict validation for SceneDocuments coming from untrusted sources
  *  (agent tool calls, JSON imports). Returns a normalized document or a
  *  human-readable error string. */
-import { createEmptyDocument, isGeometryType, specOf, type SceneDocument, type Vec3 } from "./types";
+import { createEmptyDocument, isGeometryType, specOf, type KeyVec3, type SceneDocument, type Vec3 } from "./types";
 import { clampAspect } from "./cameraMath";
 
 const HEX_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
@@ -13,6 +13,15 @@ function fail(what: string): string {
 function asVec3(v: unknown, what: string): [number, number, number] | string {
   if (!Array.isArray(v) || v.length !== 3 || !v.every((n) => typeof n === "number" && Number.isFinite(n))) {
     return `${what} must be [x, y, z]`;
+  }
+  return [v[0], v[1], v[2]];
+}
+
+/** Key vectors additionally allow `null` per axis (= axis not keyed here). */
+function asKeyVec3(v: unknown, what: string): Vec3 | KeyVec3 | string {
+  if (!Array.isArray(v) || v.length !== 3) return `${what} must be [x, y, z]`;
+  for (const n of v) {
+    if (n !== null && (typeof n !== "number" || !Number.isFinite(n))) return `${what} must be [x, y, z]`;
   }
   return [v[0], v[1], v[2]];
 }
@@ -100,7 +109,7 @@ export function validateSceneDocument(input: unknown): { doc: SceneDocument } | 
         const entry: Record<string, unknown> = { t: key.t, interp: INTERPS.includes(String(key.interp)) ? key.interp : "linear" };
         for (const prop of ["position", "rotation", "scale"] as const) {
           if (key[prop] !== undefined) {
-            const v = asVec3(key[prop], `tracks.${objectId}[${i}].${prop}`);
+            const v = asKeyVec3(key[prop], `tracks.${objectId}[${i}].${prop}`);
             if (typeof v === "string") return { error: v };
             entry[prop] = v;
           }
@@ -125,15 +134,15 @@ export function validateSceneDocument(input: unknown): { doc: SceneDocument } | 
       }
       // Components are optional — the graph editor splits shared camera keys
       // when one channel is retimed/deleted alone.
-      let position: Vec3 | undefined;
+      let position: Vec3 | KeyVec3 | undefined;
       if (key.position !== undefined) {
-        const p = asVec3(key.position, `cameraKeys[${i}].position`);
+        const p = asKeyVec3(key.position, `cameraKeys[${i}].position`);
         if (typeof p === "string") return { error: p };
         position = p;
       }
-      let target: Vec3 | undefined;
+      let target: Vec3 | KeyVec3 | undefined;
       if (key.target !== undefined) {
-        const tg = asVec3(key.target, `cameraKeys[${i}].target`);
+        const tg = asKeyVec3(key.target, `cameraKeys[${i}].target`);
         if (typeof tg === "string") return { error: tg };
         target = tg;
       }

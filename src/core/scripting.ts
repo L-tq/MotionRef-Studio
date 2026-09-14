@@ -7,7 +7,7 @@
  *   - persistent (worker / script console): mutations write the SceneDocument.
  *   - overlay: created by animation.ts FrameApi during evaluation instead.
  */
-import type { CameraState, GeometryType, SceneDocument, TransformKey, Vec3 } from "./types";
+import type { CameraState, GeometryType, KeyVec3, SceneDocument, TransformKey, Vec3 } from "./types";
 import { isGeometryType, newId, specOf } from "./types";
 
 export interface ScriptTarget {
@@ -61,6 +61,11 @@ function checkColor(color: string): string {
 
 function checkVec3(v: Vec3, what: string): void {
   if (!isVec3(v)) throw new Error(`${what} must be [x, y, z] numbers`);
+}
+
+function checkKeyVec3(v: KeyVec3, what: string): void {
+  if (!v.every((n) => n === null || (typeof n === "number" && Number.isFinite(n))))
+    throw new Error(`${what} must be [x, y, z] numbers (null = axis not keyed)`);
 }
 
 /** Create the `api` object bound to a ScriptTarget. */
@@ -172,9 +177,9 @@ export function createScriptingAPI(target: ScriptTarget, log: (...args: unknown[
       for (const k of keys) {
         if (typeof k?.t !== "number" || !Number.isFinite(k.t) || k.t < 0)
           throw new Error(`Key needs a numeric t >= 0, got ${String(k?.t)}`);
-        if (k.position) checkVec3(k.position, "key position");
-        if (k.rotation) checkVec3(k.rotation, "key rotation");
-        if (k.scale) checkVec3(k.scale, "key scale");
+        if (k.position) checkKeyVec3(k.position, "key position");
+        if (k.rotation) checkKeyVec3(k.rotation, "key rotation");
+        if (k.scale) checkKeyVec3(k.scale, "key scale");
         if (k.color) checkColor(k.color);
         if (k.interp && !["linear", "step", "smooth"].includes(k.interp))
           throw new Error(`interp must be linear|step|smooth, got "${k.interp}"`);
