@@ -205,8 +205,14 @@ export interface AppActions {
   ): void;
   /** Insert a full keyframe (evaluated pose at t) into an object track or the camera. */
   insertKeyAt(target: { objectId: string } | { camera: true }, t: number): void;
-  /** Graph editor: Gaussian-smooth the values of the given keys (σ in key count). */
-  smoothKeys(target: { objectId: string } | { camera: true }, times: number[], sigma: number): void;
+  /** Graph editor: Gaussian-smooth exactly the selected curve points (σ in
+   *  key count). `points` are channel-scoped — sibling channels of the same
+   *  key and unselected keys keep their values. */
+  smoothKeys(
+    target: { objectId: string } | { camera: true },
+    points: Array<{ chan: "position" | "rotation" | "scale" | "target" | "fov"; index: number; t: number }>,
+    sigma: number,
+  ): void;
   clearTrack(objectId: string): void;
   applyDoc(doc: SceneDocument, label: string): void;
 
@@ -568,62 +574,62 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     });
   },
 
-  /** Gaussian-smooth the selected keys (Blender "Smooth Keys"): every selected
-   *  key's channel values become the Gaussian-weighted average of the track's
-   *  values, weighted by key-index distance with σ in key count. Channels a
-   *  key doesn't carry are skipped. */
-  smoothKeys(target, times, sigma) {
-    const want = new Set(times.map((t) => +t.toFixed(4)));
-    if (want.size === 0 || !(sigma > 0)) return;
+  /** Gaussian-smooth the selected curve points (Blender "Smooth Keys"): each
+   *  selected point's value becomes the Gaussian-weighted average of its own
+   *  channel's values across the whole track, weighted by key-index distance
+   *  with σ in key count. Only selected (channel, key) pairs are written. */
+  smoothKeys(target, points, sigma) {
+    if (!points.length || !(sigma > 0)) return;
     get().mutateDoc("smooth-keys", (draft) => {
       const keys = "camera" in target ? draft.cameraKeys : draft.tracks[target.objectId];
       if (!keys?.length) return;
-      const n = keys.length;
       const weight = (i: number, j: number) => Math.exp(-0.5 * ((i - j) / sigma) ** 2);
-      const smoothV3 = (read: (i: number) => Vec3 | undefined, write: (i: number, v: Vec3) => void) => {
-        const vals = keys.map((_, i) => read(i));
-        for (let i = 0; i < n; i++) {
-          if (!want.has(+keys[i].t.toFixed(4)) || !vals[i]) continue;
-          let wsum = 0;
-          const acc: Vec3 = [0, 0, 0];
-          for (let j = 0; j < n; j++) {
-            const v = vals[j];
-            if (!v) continue;
-            const w = weight(i, j);
-            wsum += w;
-            acc[0] += w * v[0];
-            acc[1] += w * v[1];
-            acc[2] += w * v[2];
-          }
-          if (wsum > 1e-9) write(i, [acc[0] / wsum, acc[1] / wsum, acc[2] / wsum]);
-        }
+      type Comp = "position" | "rotation" | "scale" | "target";
+      const ks = keys as Array<TransformKey & CameraKey>;
+      const readComp = (k: TransformKey & CameraKey, chan: Comp | "fov", index: number): number | undefined => {
+        if (chan === "fov") return k.fov;
+        const v = k[chan];
+        return v ? v[index] : undefined;
       };
-      const smoothScalar = (read: (i: number) => number | undefined, write: (i: number, v: number) => void) => {
-        const vals = keys.map((_, i) => read(i));
-        for (let i = 0; i < n; i++) {
-          if (!want.has(+keys[i].t.toFixed(4)) || vals[i] === undefined) continue;
+      const writeComp = (i: number, chan: Comp | "fov", index: number, v: number) => {
+        if (chan === "fov") {
+          ks[i] = { ...ks[i], fov: v };
+          return;
+        }
+        const arr = [...(ks[i][chan] as Vec3)] as Vec3;
+        arr[index] = v;
+        ks[i] = { ...ks[i], [chan]: arr };
+      };
+      // One weighted average per channel; every key defining that channel
+      // (selected or not) contributes as a neighbor.
+      const groups = new Map<string, Set<number>>();
+      for (const p of points) {
+        const gk = `${p.chan}.${p.index}`;
+        if (!groups.has(gk)) groups.set(gk, new Set());
+        groups.get(gk)!.add(+p.t.toFixed(4));
+      }
+      for (const [gk, times] of groups) {
+        const split = gk.lastIndexOf(".");
+        const chan = gk.slice(0, split) as Comp | "fov";
+        const index = +gk.slice(split + 1);
+        const defined: Array<{ i: number; v: number }> = [];
+        ks.forEach((k, i) => {
+          const v = readComp(k, chan, index);
+          if (v !== undefined) defined.push({ i, v });
+        });
+        if (!defined.length) continue;
+        for (const t of times) {
+          const i = keys.findIndex((k) => Math.abs(k.t - t) < 1e-4);
+          if (i < 0) continue;
           let wsum = 0;
           let acc = 0;
-          for (let j = 0; j < n; j++) {
-            const v = vals[j];
-            if (v === undefined) continue;
+          for (const { i: j, v } of defined) {
             const w = weight(i, j);
             wsum += w;
             acc += w * v;
           }
-          if (wsum > 1e-9) write(i, acc / wsum);
+          if (wsum > 1e-9) writeComp(i, chan, index, acc / wsum);
         }
-      };
-      if ("camera" in target) {
-        const ks = keys as CameraKey[];
-        smoothV3((i) => ks[i].position, (i, v) => { ks[i] = { ...ks[i], position: [...v] as Vec3 }; });
-        smoothV3((i) => ks[i].target, (i, v) => { ks[i] = { ...ks[i], target: [...v] as Vec3 }; });
-        smoothScalar((i) => ks[i].fov, (i, v) => { ks[i] = { ...ks[i], fov: v }; });
-      } else {
-        const ks = keys as TransformKey[];
-        smoothV3((i) => ks[i].position, (i, v) => { ks[i] = { ...ks[i], position: [...v] as Vec3 }; });
-        smoothV3((i) => ks[i].rotation, (i, v) => { ks[i] = { ...ks[i], rotation: [...v] as Vec3 }; });
-        smoothV3((i) => ks[i].scale, (i, v) => { ks[i] = { ...ks[i], scale: [...v] as Vec3 }; });
       }
     });
   },

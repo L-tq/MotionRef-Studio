@@ -411,9 +411,9 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .graph-eye { background: none; border: none; color: var(--text-3); cursor: pointer; font-size: 11px; padding: 0 2px; }
 .graph-eye:hover { color: var(--text); }
 .graph-eye.off { opacity: 0.45; }
-/* Per-channel select-all / deselect buttons (graph editor sidebar). */
-.graph-sel { background: none; border: none; color: var(--text-3); cursor: pointer; font-size: 10px; padding: 0 2px; }
-.graph-sel:hover { color: var(--text); }
+/* Select all / deselect all buttons above the channel list. */
+.graph-actions { display: flex; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.graph-actions .btn { flex: 1; min-width: 0; padding: 2px 6px; font-size: 11px; }
 /* Gaussian smooth row below the channel list. */
 .graph-smooth {
   display: flex;

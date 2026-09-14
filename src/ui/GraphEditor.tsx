@@ -7,10 +7,11 @@
  *  ignoring onFrame overlays, so points always lie on their curves.
  *
  *  Multi-selection: drag a rubber-band box over the plot (Shift adds), or use
- *  the ⊞ / ⊠ buttons beside a channel to select / deselect all its keys.
- *  Dragging any selected point moves the whole selection in time (and shifts
- *  selected values vertically); Delete removes selected keys; "≈" applies a
- *  Gaussian smooth (σ = kernel width in key count) to the selected keys.
+ *  the Select all / Deselect all buttons atop the channel list. Dragging any
+ *  selected point moves the whole selection in time (and shifts selected
+ *  values vertically, 1:1 with the mouse); Delete removes selected keys;
+ *  "≈" applies a Gaussian smooth (σ = kernel width in key count) to exactly
+ *  the selected points.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "../state/store";
@@ -32,6 +33,8 @@ interface ChannelDef {
   /** Build a setKeyValues patch that sets this channel to `value` (display
    *  units) while keeping the key's other components. */
   makePatch(doc: SceneDocument, target: KeyTarget, atT: number, value: number): Parameters<ReturnType<typeof useStore.getState>["setKeyValues"]>[2];
+  /** SceneDocument component this channel maps to (for smoothKeys). */
+  comp: { chan: "position" | "rotation" | "scale" | "target" | "fov"; index: number };
 }
 
 function objectChannels(objectId: string, basePos: Vec3, baseRot: Vec3, baseScl: Vec3): ChannelDef[] {
@@ -56,6 +59,7 @@ function objectChannels(objectId: string, basePos: Vec3, baseRot: Vec3, baseScl:
         group: g.group,
         color: c,
         scale: g.group === "Rotation" ? 180 / Math.PI : 1,
+        comp: { chan: g.prefix === "pos" ? "position" : g.prefix === "rot" ? "rotation" : "scale", index: i },
         read: (k) => {
           const v = g.sel(k as TransformKey);
           return v ? v[i] : undefined;
@@ -97,6 +101,7 @@ function cameraChannels(): ChannelDef[] {
         group: g.group,
         color: c,
         scale: 1,
+        comp: { chan: g.prefix === "cpos" ? "position" : "target", index: i },
         read: (k) => g.sel(k as CameraKey)[i],
         base: (doc) => (g.prefix === "cpos" ? doc.camera.position[i] : doc.camera.target[i]),
         makePatch: (doc, _target, atT, value) => {
@@ -115,6 +120,7 @@ function cameraChannels(): ChannelDef[] {
     group: "Cam FOV",
     color: "#ffb020",
     scale: 1,
+    comp: { chan: "fov", index: 0 },
     read: (k) => (k as CameraKey).fov,
     base: (doc) => doc.camera.fov,
     makePatch: (_doc, _target, _atT, value) => ({ fov: value }),
@@ -196,6 +202,9 @@ export function GraphEditor() {
   const [selKeys, setSelKeys] = useState<Set<string>>(new Set());
   const [sigma, setSigma] = useState(1);
   const [rubber, setRubber] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  /** Value range frozen while a point drag is active, so the dragged point
+   *  stays 1:1 under the cursor instead of the auto-fit range rescaling. */
+  const [rangeOverride, setRangeOverride] = useState<{ min: number; max: number } | null>(null);
 
   useEffect(() => {
     const el = areaRef.current;
@@ -241,24 +250,31 @@ export function GraphEditor() {
     [selKeys],
   );
 
-  /** Select / deselect every key of one channel (sidebar ⊞ / ⊠ buttons). */
-  const selectChannel = (chanId: string, add: boolean) => {
-    const c = channelById.get(chanId);
-    if (!c) return;
-    setSelKeys((prev) => {
-      const next = new Set(prev);
-      for (const k of keys) {
-        if (c.read(k) === undefined) continue;
-        const id = keyId(chanId, k.t);
-        if (add) next.add(id);
-        else next.delete(id);
-      }
-      return next;
-    });
-  };
+  /** Selected points mapped to store-level components, for Gaussian smoothing. */
+  const selPoints = useMemo(
+    () =>
+      [...selKeys].flatMap((id) => {
+        const [cid, ts] = id.split("|");
+        const c = channelById.get(cid);
+        return c ? [{ chan: c.comp.chan, index: c.comp.index, t: parseFloat(ts) }] : [];
+      }),
+    [selKeys, channelById],
+  );
 
   // Value range over visible channels (display units), sampled across the clip.
   const visible = channels.filter((c) => !hidden.has(c.id));
+
+  /** Select every point of every visible channel (header button). */
+  const selectAllPoints = () => {
+    const next = new Set<string>();
+    for (const c of visible) {
+      for (const k of keys) {
+        if (c.read(k) === undefined) continue;
+        next.add(keyId(c.id, k.t));
+      }
+    }
+    setSelKeys(next);
+  };
   const valueRange = useMemo(() => {
     let min = Infinity;
     let max = -Infinity;
@@ -280,12 +296,13 @@ export function GraphEditor() {
     return { min: min - pad, max: max + pad };
   }, [visible, keys, doc, selectedObj]);
 
+  const effRange = rangeOverride ?? valueRange;
   const yFor = useCallback(
     (v: number) => {
-      const { min, max } = valueRange;
+      const { min, max } = effRange;
       return 6 + ((max - v) / (max - min)) * (plotH - 12);
     },
-    [valueRange, plotH],
+    [effRange, plotH],
   );
 
   // Wheel: ctrl = zoom (anchored), otherwise pan horizontally.
@@ -361,6 +378,9 @@ export function GraphEditor() {
       sel = new Set([id]);
       setSelKeys(sel);
     }
+    // Freeze the y-scale for the whole drag: the display range the dv formula
+    // uses stays the one on screen, so the point follows the cursor exactly.
+    setRangeOverride(valueRange);
     const entries = [...sel].map((s) => {
       const [cid, ts] = s.split("|");
       return { chanId: cid, origT: parseFloat(ts) };
@@ -370,26 +390,47 @@ export function GraphEditor() {
     const keysOf = (d: SceneDocument) => ("camera" in target ? d.cameraKeys : d.tracks[(target as { objectId: string }).objectId] ?? []);
     const startX = e.clientX;
     const startY = e.clientY;
+    // Start-of-drag values (display units) and actual current times: every
+    // move sets value = v0 + dv and time = t0 + dt absolutely, so the drag
+    // follows the mouse 1:1 no matter how many move events fire, and time
+    // clamping cannot accumulate drift.
+    const docStart = useStore.getState().doc;
+    const startVals = entries.map((en) => {
+      const ch = channelById.get(en.chanId);
+      const k = keysOf(docStart).find((kk) => Math.abs(kk.t - en.origT) < 1e-4);
+      const raw = k && ch ? ch.read(k) : undefined;
+      return ch && raw !== undefined ? raw * ch.scale : null;
+    });
+    const curT = new Map(uniqT.map((t0) => [t0, t0]));
     let curDt = 0;
     let curDv = 0;
     const move = (ev: PointerEvent) => {
       const dt = (ev.clientX - startX) / zoom;
       const dv = (-(ev.clientY - startY) / Math.max(plotH - 12, 1)) * (valueRange.max - valueRange.min);
       if (Math.abs(dt - curDt) > 1e-4) {
-        for (const t0 of uniqT) retimeKey(target, clampT(t0 + curDt), clampT(t0 + dt));
+        for (const t0 of uniqT) {
+          const from = curT.get(t0)!;
+          const to = clampT(t0 + dt);
+          if (Math.abs(to - from) > 1e-6) {
+            retimeKey(target, from, to);
+            curT.set(t0, to);
+          }
+        }
         curDt = dt;
+        // Keep selection ids in step with the moved times so dragged points
+        // stay highlighted (and remain grabbed) mid-drag.
+        setSelKeys(new Set(entries.map((en) => keyId(en.chanId, curT.get(en.origT)!))));
       }
       if (Math.abs(dv - curDv) > 1e-6) {
-        const docNow = useStore.getState().doc;
-        for (const en of entries) {
+        for (let i = 0; i < entries.length; i++) {
+          const en = entries[i];
+          const v0 = startVals[i];
           const ch = channelById.get(en.chanId);
-          if (!ch) continue;
-          const newT = clampT(en.origT + dt);
-          const k = keysOf(docNow).find((kk) => Math.abs(kk.t - newT) < 1e-4);
-          if (!k) continue;
-          const cur = ch.read(k);
-          if (cur === undefined) continue;
-          setKeyValues(target, newT, ch.makePatch(docNow, target, newT, cur * ch.scale + dv));
+          if (!ch || v0 === null) continue;
+          const newT = clampT(en.origT + curDt);
+          // Fresh doc per entry: sibling-channel patches on one shared key
+          // must not clobber each other with stale components.
+          setKeyValues(target, newT, ch.makePatch(useStore.getState().doc, target, newT, v0 + dv));
         }
         curDv = dv;
       }
@@ -397,8 +438,9 @@ export function GraphEditor() {
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
+      setRangeOverride(null);
       // Re-key the selection to the moved times so the next drag keeps working.
-      setSelKeys(new Set(entries.map((en) => keyId(en.chanId, clampT(en.origT + curDt)))));
+      setSelKeys(new Set(entries.map((en) => keyId(en.chanId, curT.get(en.origT)!))));
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -495,7 +537,7 @@ export function GraphEditor() {
 
   // Grid lines with value labels
   const gridLines = [0, 1 / 3, 2 / 3, 1].map((f) => {
-    const v = valueRange.max - f * (valueRange.max - valueRange.min);
+    const v = effRange.max - f * (effRange.max - effRange.min);
     return { y: 6 + f * (plotH - 12), label: formatValue(v) };
   });
 
@@ -519,31 +561,24 @@ export function GraphEditor() {
             🎥 {t("timeline.camera")}
           </button>
         </div>
+        <div className="graph-actions">
+          <button className="btn small" onClick={selectAllPoints} title={t("graph.selectAll")}>
+            {t("graph.selectAll")}
+          </button>
+          <button
+            className="btn small"
+            onClick={() => setSelKeys(new Set())}
+            disabled={!selKeys.size}
+            title={t("graph.deselectAll")}
+          >
+            {t("graph.deselectAll")}
+          </button>
+        </div>
         {channels.map((c) => (
           <div key={c.id} className="graph-chan" onClick={() => select(selectedObj?.id ?? null, false)}>
             <span className="dot" style={{ background: c.color }} />
             <span className="name">{c.label}</span>
             <span style={{ flex: 1 }} />
-            <button
-              className="graph-sel"
-              title={t("graph.selectChannel")}
-              onClick={(e2) => {
-                e2.stopPropagation();
-                selectChannel(c.id, true);
-              }}
-            >
-              ⊞
-            </button>
-            <button
-              className="graph-sel"
-              title={t("graph.deselectChannel")}
-              onClick={(e2) => {
-                e2.stopPropagation();
-                selectChannel(c.id, false);
-              }}
-            >
-              ⊠
-            </button>
             <button
               className={`graph-eye ${hidden.has(c.id) ? "off" : ""}`}
               title={t("graph.toggleChannel")}
@@ -560,7 +595,7 @@ export function GraphEditor() {
           </div>
         ))}
         <div className="graph-smooth">
-          <span className="cnt">{t("graph.selected", { n: selUniqueTimes.length })}</span>
+          <span className="cnt">{t("graph.selected", { n: selPoints.length })}</span>
           <span style={{ flex: 1 }} />
           <label title={t("graph.smoothSigma")}>
             σ
@@ -575,9 +610,9 @@ export function GraphEditor() {
           </label>
           <button
             className="btn small"
-            disabled={!selUniqueTimes.length}
+            disabled={!selPoints.length}
             title={t("graph.smooth")}
-            onClick={() => smoothKeys(target, selUniqueTimes, sigma)}
+            onClick={() => smoothKeys(target, selPoints, sigma)}
           >
             ≈
           </button>
@@ -609,18 +644,23 @@ export function GraphEditor() {
               {visible.map((c) =>
                 keys
                   .filter((k) => c.read(k) !== undefined)
-                  .map((k) => (
-                    <circle
-                      key={`${c.id}@${k.t}`}
-                      cx={tToX(k.t)}
-                      cy={yFor(c.read(k)! * c.scale)}
-                      r={selKeys.has(keyId(c.id, k.t)) ? 5.5 : 4.5}
-                      fill={selKeys.has(keyId(c.id, k.t)) ? "#ffc24d" : c.color}
-                      stroke="#0b0b10"
-                      className="graph-point"
-                      onPointerDown={(e) => beginPointDrag(e, c, k.t)}
-                    />
-                  )),
+                  .map((k) => {
+                    const isSel = selKeys.has(keyId(c.id, k.t));
+                    return (
+                      <circle
+                        key={`${c.id}@${k.t}`}
+                        cx={tToX(k.t)}
+                        cy={yFor(c.read(k)! * c.scale)}
+                        r={isSel ? 5.5 : 4.5}
+                        fill={isSel ? "#ffc24d" : c.color}
+                        fillOpacity={isSel ? 1 : 0.3}
+                        stroke={isSel ? "#0b0b10" : "#0b0b10"}
+                        strokeOpacity={isSel ? 1 : 0.55}
+                        className="graph-point"
+                        onPointerDown={(e) => beginPointDrag(e, c, k.t)}
+                      />
+                    );
+                  }),
               )}
             </svg>
             {rubber && (

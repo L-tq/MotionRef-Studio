@@ -25,8 +25,8 @@ and override everything it does.
   **相机控制** —— FOV 与 35mm 焦距换算、位置/注视点、时间轴上的相机关键帧、实时取景预览。
 - ⏱ **Timeline** — per-object keyframes (position/rotation/scale/color/visibility, linear/smooth/step interpolation), draggable keys, playhead scrubbing, auto-key recording (● Add & Replace / Replace modes: transform an object while the timeline plays and every swept frame gets a key; a recording pass stops at the end instead of looping).
   **时间轴** —— 每对象关键帧（位置/旋转/缩放/颜色/可见性，linear/smooth/step 插值）、可拖动关键帧、播放头擦洗、自动关键帧录制（● 添加并替换 / 仅替换：播放中直接拖动物体即可逐帧录制关键帧；录制播放到末尾自动停止，不循环）。
-- 📈 **Curve graph editor** — per-channel value curves with box selection (drag on empty space, Shift adds), per-channel select/deselect buttons, multi-key drag in time and value, Delete for selected keys, and Gaussian smoothing (≈, adjustable σ) of selected keys.
-  **曲线图表编辑器** —— 按通道显示数值曲线，支持框选（空白处拖动，Shift 追加）、每通道选中/取消按钮、多关键帧整体调整时间与数值、Delete 删除选中关键帧，以及高斯平滑（≈，σ 可调）。
+- 📈 **Curve graph editor** — per-channel value curves with box selection (drag on empty space, Shift adds), Select all / Deselect all buttons, multi-key drag in time and value, Delete for selected keys, and Gaussian smoothing (≈, adjustable σ) applied to exactly the selected points.
+  **曲线图表编辑器** —— 按通道显示数值曲线，支持框选（空白处拖动，Shift 追加）、全选/取消全选按钮、多关键点整体调整时间与数值、Delete 删除选中关键帧，以及高斯平滑（≈，σ 可调，仅作用于选中的关键点）。
 - ⌨ **Sandboxed scripting** — the agent and you share one Scripting API (`api.add(...)`, `api.keyframes(...)`, `api.onFrame((t, f) => ...)`) running in a Web Worker sandbox (no DOM/network, 5s timeout).
   **沙箱脚本** —— 智能体与你共用一套脚本 API，运行于 Web Worker 沙箱（无 DOM/网络，5 秒超时）。
 - 🎬 **Deterministic video export** — frame-by-frame offscreen rendering at fixed timestep → MP4 (H.264 when supported) or WebM fallback; 16:9 / 9:16 / 1:1 presets.
