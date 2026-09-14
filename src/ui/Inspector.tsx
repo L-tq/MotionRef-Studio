@@ -1,6 +1,6 @@
-import { evaluate } from "../core/animation";
+import { evalCameraById } from "../core/animation";
 import { ASPECT_PRESETS, aspectLabel, clampAspect, focalToFov, fovToFocal, FOCAL_PRESETS } from "../core/cameraMath";
-import { docAspect, specOf, type ObjectDesc, type Vec3 } from "../core/types";
+import { docAspect, specOf, type CameraDesc, type ObjectDesc, type Vec3 } from "../core/types";
 import { useStore } from "../state/store";
 import { getLocale, useT } from "../i18n";
 import { useState } from "react";
@@ -149,22 +149,94 @@ function CameraInspector() {
   const setAspect = useStore((s) => s.setAspect);
   const setCameraKeyAtPlayhead = useStore((s) => s.setCameraKeyAtPlayhead);
   const mutateDoc = useStore((s) => s.mutateDoc);
+  const addCamera = useStore((s) => s.addCamera);
+  const removeCamera = useStore((s) => s.removeCamera);
+  const setActiveCamera = useStore((s) => s.setActiveCamera);
+  const camPanelSel = useStore((s) => s.camPanelSel);
+  const setUi = useStore((s) => s.setUi);
   const [focalInput, setFocalInput] = useState<number | null>(null);
   const [aspectInput, setAspectInput] = useState<number | null>(null);
 
-  const cam = evaluate(doc, playhead).camera;
-  const focal = fovToFocal(cam.fov);
+  // The panel edits ONE camera: the picked one, or the active camera by default.
+  const camDesc = doc.cameras.find((c) => c.id === camPanelSel) ?? doc.cameras[0];
+  const isLive = camDesc.id === doc.activeCameraId;
+  const ev = evalCameraById(doc, camDesc.id, playhead);
+  const focal = fovToFocal(ev.fov);
   const aspect = docAspect(doc);
+  const keyCount = doc.cameraKeys.filter((k) => k.cameraId === camDesc.id).length;
+
+  const patchCam = (fn: (c: CameraDesc) => void, label: string) =>
+    mutateDoc(label, (d) => {
+      const c = d.cameras.find((x) => x.id === camDesc.id);
+      if (c) fn(c);
+    });
+
+  // Blender "align active camera to view": copy the editor viewport pose.
+  const alignToView = () => {
+    const eng = (window as unknown as {
+      __mrsEngine?: {
+        getEditorCamera(): { position: { x: number; y: number; z: number } };
+        getOrbitTarget(): { x: number; y: number; z: number };
+      };
+    }).__mrsEngine;
+    if (!eng) return;
+    const p = eng.getEditorCamera().position;
+    const tg = eng.getOrbitTarget();
+    commitCamera({ position: [p.x, p.y, p.z], target: [tg.x, tg.y, tg.z] }, camDesc.id);
+  };
 
   return (
     <div className="insp-section">
       <h4>
-        {t("inspector.camera")}
+        {t("inspector.cameras")}
         <span className="spacer" />
         <span style={{ fontWeight: 400, textTransform: "none" }}>
-          {t("inspector.camKeys", { n: doc.cameraKeys.length })}
+          {t("inspector.camKeys", { n: keyCount })}
         </span>
       </h4>
+      <div className="insp-row">
+        <select
+          value={camDesc.id}
+          onChange={(e) => setUi("camPanelSel", e.target.value)}
+          style={{ flex: 1, minWidth: 0 }}
+          title={t("inspector.camSelect")}
+        >
+          {doc.cameras.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+              {c.id === doc.activeCameraId ? " ★" : ""}
+            </option>
+          ))}
+        </select>
+        <button className="btn small" title={t("inspector.addCamera")} onClick={addCamera}>
+          ＋
+        </button>
+      </div>
+      <div className="insp-row" style={{ gap: 4, flexWrap: "wrap" }}>
+        <button
+          className={`btn small ${isLive ? "active" : ""}`}
+          title={t("inspector.setActive")}
+          onClick={() => setActiveCamera(camDesc.id)}
+        >
+          ★ {isLive ? t("inspector.activeBadge") : t("inspector.setActiveShort")}
+        </button>
+        <button className="btn small" title={t("inspector.alignToView")} onClick={alignToView}>
+          {t("inspector.alignToViewShort")}
+        </button>
+        <span className="spacer" style={{ flex: 1 }} />
+        <button
+          className="btn small danger"
+          title={t("inspector.removeCamera")}
+          disabled={doc.cameras.length <= 1}
+          onClick={() => removeCamera(camDesc.id)}
+        >
+          🗑
+        </button>
+      </div>
+      <div className="field">
+        <label>{t("inspector.name")}</label>
+        <input type="text" value={camDesc.name} onChange={(e) => patchCam((c) => void (c.name = e.target.value), "rename-camera")} />
+      </div>
       <div className="field">
         <label>{t("inspector.fov")} ({t("common.deg")})</label>
         <input
@@ -172,11 +244,11 @@ function CameraInspector() {
           min={10}
           max={120}
           step={0.5}
-          value={cam.fov}
-          onChange={(e) => commitCamera({ fov: parseFloat(e.target.value) })}
+          value={ev.fov}
+          onChange={(e) => commitCamera({ fov: parseFloat(e.target.value) }, camDesc.id)}
         />
         <div className="insp-row">
-          <Num value={cam.fov} step={1} min={1} max={179} onChange={(v) => commitCamera({ fov: v })} />
+          <Num value={ev.fov} step={1} min={1} max={179} onChange={(v) => commitCamera({ fov: v }, camDesc.id)} />
           <span style={{ color: "var(--text-3)" }}>↔ {t("inspector.focal")}: </span>
           <Num
             value={focalInput ?? Math.round(focal)}
@@ -185,18 +257,31 @@ function CameraInspector() {
             max={800}
             onChange={(v) => {
               setFocalInput(v);
-              commitCamera({ fov: focalToFov(v) });
+              commitCamera({ fov: focalToFov(v) }, camDesc.id);
             }}
           />
           <span style={{ color: "var(--text-3)" }}>mm</span>
         </div>
         <div className="insp-row" style={{ gap: 4 }}>
           {FOCAL_PRESETS.map((f) => (
-            <button key={f} className="btn small" onClick={() => commitCamera({ fov: focalToFov(f) })}>
+            <button key={f} className="btn small" onClick={() => commitCamera({ fov: focalToFov(f) }, camDesc.id)}>
               {f}mm
             </button>
           ))}
         </div>
+      </div>
+      <div className="field">
+        <label>{t("inspector.cameraPosition")}</label>
+        <Vec3Input value={ev.position} onChange={(v) => commitCamera({ position: v }, camDesc.id)} />
+      </div>
+      <div className="field">
+        <label>{t("inspector.cameraTarget")}</label>
+        <Vec3Input value={ev.target} onChange={(v) => commitCamera({ target: v }, camDesc.id)} />
+      </div>
+      <div className="insp-row">
+        <button className="btn small" onClick={() => setCameraKeyAtPlayhead(camDesc.id)}>
+          ◆ {t("timeline.setCameraKey")}
+        </button>
       </div>
       <div className="field">
         <label>
@@ -227,19 +312,6 @@ function CameraInspector() {
           />
         </div>
         <span className="hint" style={{ color: "var(--text-3)" }}>{t("inspector.aspectHint")}</span>
-      </div>
-      <div className="field">
-        <label>{t("inspector.cameraPosition")}</label>
-        <Vec3Input value={cam.position} onChange={(v) => commitCamera({ position: v })} />
-      </div>
-      <div className="field">
-        <label>{t("inspector.cameraTarget")}</label>
-        <Vec3Input value={cam.target} onChange={(v) => commitCamera({ target: v })} />
-      </div>
-      <div className="insp-row">
-        <button className="btn small" onClick={() => setCameraKeyAtPlayhead()}>
-          ◆ {t("timeline.setCameraKey")}
-        </button>
       </div>
     </div>
   );

@@ -23,6 +23,7 @@ Never claim success without a verifying snapshot.
   - box: width, height, depth · sphere: radius · cylinder: radiusTop, radiusBottom, height · cone: radius, height · torus: radius, tube · plane: width, height · capsule: radius, length · ring: innerRadius, outerRadius · tetrahedron/octahedron/dodecahedron/icosahedron: radius · torusKnot: radius, tube
 - Colors: hex strings only. Choose distinct, harmonious solid colors; keep the background neutral.
 - Camera: position + lookAt target + vertical fov (degrees). fov 45 ≈ 50mm lens; smaller fov = more telephoto; larger = wider.
+- MULTIPLE CAMERAS (Blender-style): \`doc.cameras\` is a list; one camera is ACTIVE (\`doc.activeCameraId\`) and every snapshot/export renders it. \`api.addCamera({name, position, target, fov})\` returns a camera id; \`api.setActiveCamera(id)\` switches rendering to it; \`api.addCameraKeys(keys, cameraId?)\` keys that camera (default: the active one). Use a second camera for an alternate angle (e.g. wide master + close-up).
 - Timeline: duration (seconds, default 6) + fps (export rate, default 30).
 
 ## Animation semantics
@@ -38,8 +39,10 @@ Never claim success without a verifying snapshot.
 - \`add_object\` {object:{type, name?, params?, position?, rotation?, scale?, color?}} → returns the new id.
 - \`update_object\` {id, position?, rotation?, scale?, color?, visible?, params?, name?}.
 - \`remove_object\` {id}.
-- \`set_camera\` {position?, target?, fov?} → base camera pose.
-- \`add_camera_keyframes\` {keys:[{t, position?, target?, fov?, interp?}]}.
+- \`set_camera\` {position?, target?, fov?} → base pose of the ACTIVE camera.
+- \`add_camera\` {name?, position?, target?, fov?, setActive?} → new camera id.
+- \`set_active_camera\` {id} → make that camera the one snapshots/export render.
+- \`add_camera_keyframes\` {keys:[{t, position?, target?, fov?, interp?}], cameraId?} → keys the given camera (default: active).
 - \`add_keyframes\` {id, keys:[{t, position?, rotation?, scale?, color?, visible?, interp?}]}.
 - \`set_timeline\` {duration?, fps?}.
 - \`snapshot\` {time?, width?, height?} → renders the SCENE CAMERA at that time; the image arrives in your context as the next message. Default 1024x576.
@@ -56,11 +59,14 @@ api.keyframes(id, [
   { t: 2, position: [0, 0.5, 0] },            // falls
   { t: 3, position: [0, 0.5, 0], scale: [1.3, 0.7, 1.3] } // squash
 ]);
-api.setCamera({ position: [8, 5, 10], target: [0, 1, 0], fov: 40 });
+api.setCamera({ position: [8, 5, 10], target: [0, 1, 0], fov: 40 });   // ACTIVE camera
+const wide = api.addCamera({ name: "Wide", position: [12, 8, 14], target: [0, 1, 0], fov: 55 });
 api.addCameraKeys([
   { t: 0, position: [10, 3, 0], target: [0, 1, 0] },
   { t: 6, position: [0, 6, 10], target: [0, 1, 0], fov: 35 }
-]);
+]);                                     // keys the ACTIVE camera
+api.addCameraKeys([{ t: 0, position: [14, 2, 0] }, { t: 6, position: [-14, 2, 0] }], wide); // keys "Wide"
+api.setActiveCamera(wide);              // snapshots/export now render "Wide"
 api.onFrame((t, f) => {                       // continuous orbit for "Moon"
   const moon = f.find("Moon");                // ids: look up fresh each frame
   if (moon) f.update(moon, { position: [Math.cos(t) * 3, 1.5, Math.sin(t) * 3] });
@@ -107,6 +113,7 @@ api.log("done", id);
   - box: width, height, depth · sphere: radius · cylinder: radiusTop, radiusBottom, height · cone: radius, height · torus: radius, tube · plane: width, height · capsule: radius, length · ring: innerRadius, outerRadius · tetrahedron/octahedron/dodecahedron/icosahedron: radius · torusKnot: radius, tube
 - 颜色：仅十六进制字符串。选区分度好、和谐的纯色；背景保持中性。
 - 相机：位置 + 注视目标 target + 垂直视场角 fov（度）。fov 45 ≈ 50mm 镜头；更小更“长焦”，更大更“广角”。
+- 多相机（Blender 风格）：\`doc.cameras\` 是相机列表；其中一台是“活动”相机（\`doc.activeCameraId\`），所有快照/导出都渲染它。\`api.addCamera({name, position, target, fov})\` 返回相机 id；\`api.setActiveCamera(id)\` 切换渲染目标；\`api.addCameraKeys(keys, cameraId?)\` 为指定相机打关键帧（默认为活动相机）。可用第二台相机拍别的机位（如全景 + 特写）。
 - 时间轴：duration（秒，默认 6）+ fps（导出帧率，默认 30）。
 
 ## 动画语义
@@ -122,8 +129,10 @@ api.log("done", id);
 - \`add_object\` {object:{type, name?, params?, position?, rotation?, scale?, color?}} → 返回新 id。
 - \`update_object\` {id, position?, rotation?, scale?, color?, visible?, params?, name?}。
 - \`remove_object\` {id}。
-- \`set_camera\` {position?, target?, fov?} → 基础相机位姿。
-- \`add_camera_keyframes\` {keys:[{t, position?, target?, fov?, interp?}]}。
+- \`set_camera\` {position?, target?, fov?} → 活动相机的基础位姿。
+- \`add_camera\` {name?, position?, target?, fov?, setActive?} → 新相机 id。
+- \`set_active_camera\` {id} → 设为快照/导出渲染的“活动”相机。
+- \`add_camera_keyframes\` {keys:[{t, position?, target?, fov?, interp?}], cameraId?} → 为指定相机打关键帧（默认为活动相机）。
 - \`add_keyframes\` {id, keys:[{t, position?, rotation?, scale?, color?, visible?, interp?}]}。
 - \`set_timeline\` {duration?, fps?}。
 - \`snapshot\` {time?, width?, height?} → 按场景相机渲染该时刻画面；图片会作为下一条消息进入你的上下文。默认 1024x576。
@@ -140,11 +149,14 @@ api.keyframes(id, [
   { t: 2, position: [0, 0.5, 0] },            // 落地
   { t: 3, position: [0, 0.5, 0], scale: [1.3, 0.7, 1.3] } // 压扁
 ]);
-api.setCamera({ position: [8, 5, 10], target: [0, 1, 0], fov: 40 });
+api.setCamera({ position: [8, 5, 10], target: [0, 1, 0], fov: 40 });   // ACTIVE camera
+const wide = api.addCamera({ name: "Wide", position: [12, 8, 14], target: [0, 1, 0], fov: 55 });
 api.addCameraKeys([
   { t: 0, position: [10, 3, 0], target: [0, 1, 0] },
   { t: 6, position: [0, 6, 10], target: [0, 1, 0], fov: 35 }
-]);
+]);                                     // keys the ACTIVE camera
+api.addCameraKeys([{ t: 0, position: [14, 2, 0] }, { t: 6, position: [-14, 2, 0] }], wide); // keys "Wide"
+api.setActiveCamera(wide);              // snapshots/export now render "Wide"
 api.onFrame((t, f) => {                       // “月球”持续环绕
   const moon = f.find("月球");                 // id 每帧重新查找
   if (moon) f.update(moon, { position: [Math.cos(t) * 3, 1.5, Math.sin(t) * 3] });

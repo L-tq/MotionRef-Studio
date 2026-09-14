@@ -7,6 +7,7 @@ import {
   newId,
   randomPaletteColor,
   specOf,
+  activeCameraOf,
   type CameraKey,
   type GeometryType,
   type KeyVec3,
@@ -14,7 +15,7 @@ import {
   type TransformKey,
   type Vec3,
 } from "../core/types";
-import { evaluate, evalCamera } from "../core/animation";
+import { evaluate, evalCameraById } from "../core/animation";
 import type { GizmoMode } from "../core/engine";
 import { validateSceneDocument } from "../core/validate";
 import { clampAspect } from "../core/cameraMath";
@@ -33,6 +34,9 @@ export interface ProjectEntry {
   savedAt: number;
   doc: SceneDocument;
 }
+
+/** What a keyframe edit addresses: an object track or one scene camera. */
+export type KeyTarget = { objectId: string } | { cameraId: string };
 
 type KeyChan = "position" | "rotation" | "scale" | "target" | "fov";
 
@@ -178,6 +182,9 @@ export interface AppState {
   gizmo: GizmoMode;
   showGrid: boolean;
   cameraPreview: boolean;
+  /** Camera picked in the inspector/viewport for editing; null = follow the
+   *  active camera. */
+  camPanelSel: string | null;
 
   // UI
   settingsOpen: boolean;
@@ -220,21 +227,22 @@ export interface AppActions {
   duplicateObject(id: string): void;
   commitPose(id: string, pose: Partial<Pick<TransformKey, "position" | "rotation" | "scale">>): void;
   setKeyAtPlayhead(id?: string): void;
-  setCameraKeyAtPlayhead(): void;
-  retimeKey(target: { objectId: string } | { camera: true }, fromT: number, toT: number): void;
-  deleteKey(target: { objectId: string } | { camera: true }, atT: number): void;
+  /** Insert a full camera key (evaluated pose) for the given camera at the playhead. */
+  setCameraKeyAtPlayhead(cameraId?: string): void;
+  retimeKey(target: KeyTarget, fromT: number, toT: number): void;
+  deleteKey(target: KeyTarget, atT: number): void;
   /** Graph editor: remove the given channel axis at the given times from
    *  keys — a key left with no data is removed, other channels (and other
    *  axes of the same vector) keep their keys (unlike deleteKey, which always
    *  removes the whole shared key). */
   deleteKeyChans(
-    target: { objectId: string } | { camera: true },
+    target: KeyTarget,
     specs: Array<{ chan: "position" | "rotation" | "scale" | "target" | "fov"; index: number; t: number }>,
   ): void;
   /** Graph editor: move one channel axis in time, splitting the shared
    *  full-pose key so other channels/axes' keys stay where they are. */
   retimeKeyChan(
-    target: { objectId: string } | { camera: true },
+    target: KeyTarget,
     chan: "position" | "rotation" | "scale" | "target" | "fov",
     index: number,
     fromT: number,
@@ -243,25 +251,35 @@ export interface AppActions {
   /** Graph-editor edits: change channel values stored on one key. Vectors may
    *  carry nulls for axes this key does not key. */
   setKeyValues(
-    target: { objectId: string } | { camera: true },
+    target: KeyTarget,
     atT: number,
     patch: { position?: KeyVec3; rotation?: KeyVec3; scale?: KeyVec3; target?: KeyVec3; fov?: number },
   ): void;
-  /** Insert a full keyframe (evaluated pose at t) into an object track or the camera. */
-  insertKeyAt(target: { objectId: string } | { camera: true }, t: number): void;
+  /** Insert a full keyframe (evaluated pose at t) into an object track or a camera. */
+  insertKeyAt(target: KeyTarget, t: number): void;
   /** Graph editor: Gaussian-smooth exactly the selected curve points (σ in
    *  key count). `points` are channel-scoped — sibling channels of the same
    *  key and unselected keys keep their values. */
   smoothKeys(
-    target: { objectId: string } | { camera: true },
+    target: KeyTarget,
     points: Array<{ chan: "position" | "rotation" | "scale" | "target" | "fov"; index: number; t: number }>,
     sigma: number,
   ): void;
   clearTrack(objectId: string): void;
   applyDoc(doc: SceneDocument, label: string): void;
 
+  // Cameras (Blender-style multi-camera)
+  /** Add a scene camera above the active one; returns its id and selects it. */
+  addCamera(): void;
+  /** Delete a camera (and its keys); never removes the last one. */
+  removeCamera(id: string): void;
+  /** Make this camera the one previews/snapshots/exports render (Ctrl-click equivalent). */
+  setActiveCamera(id: string): void;
+
   // Camera / timeline
-  commitCamera(patch: { position?: [number, number, number]; target?: [number, number, number]; fov?: number }): void;
+  /** Edit a camera's pose/fov. With auto-key (or existing keys on that
+   *  camera) this writes a key at the playhead; otherwise the base pose. */
+  commitCamera(patch: { position?: [number, number, number]; target?: [number, number, number]; fov?: number }, cameraId?: string): void;
   setAspect(ratio: number): void;
   setDuration(d: number): void;
   setFps(f: number): void;
@@ -357,6 +375,7 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
   gizmo: "select",
   showGrid: true,
   cameraPreview: false,
+  camPanelSel: null,
 
   settingsOpen: false,
   onboarding: false,
@@ -536,14 +555,16 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     });
   },
 
-  setCameraKeyAtPlayhead() {
+  setCameraKeyAtPlayhead(cameraIdArg) {
     const state = get();
-    const cam = evaluate(state.doc, state.playhead).camera;
+    const cameraId = cameraIdArg ?? activeCameraOf(state.doc).id;
+    const cam = evalCameraById(state.doc, cameraId, state.playhead);
     state.mutateDoc("cam-key", (draft) => {
       const t = +state.playhead.toFixed(4);
-      const existing = draft.cameraKeys.find((k) => Math.abs(k.t - t) < 1e-4);
+      const existing = draft.cameraKeys.find((k) => k.cameraId === cameraId && Math.abs(k.t - t) < 1e-4);
       const entry = {
         t,
+        cameraId,
         position: [...cam.position] as [number, number, number],
         target: [...cam.target] as [number, number, number],
         fov: cam.fov,
@@ -559,11 +580,14 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
   retimeKey(target, fromT, toT) {
     const clamped = Math.min(Math.max(+toT.toFixed(4), 0), get().doc.duration);
     get().mutateDoc("retime-key", (draft) => {
-      const keys = "camera" in target ? draft.cameraKeys : draft.tracks[target.objectId];
+      const keys = "cameraId" in target
+        ? draft.cameraKeys
+        : draft.tracks[target.objectId];
       if (!keys?.length) return;
       let best = -1;
       let bestD = Infinity;
       keys.forEach((k, i) => {
+        if ("cameraId" in target && (k as CameraKey).cameraId !== target.cameraId) return;
         const d = Math.abs(k.t - fromT);
         if (d < bestD) {
           bestD = d;
@@ -579,11 +603,14 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
 
   deleteKey(target, atT) {
     get().mutateDoc("delete-key", (draft) => {
-      const keys = "camera" in target ? draft.cameraKeys : draft.tracks[target.objectId];
+      const keys = "cameraId" in target
+        ? draft.cameraKeys
+        : draft.tracks[target.objectId];
       if (!keys?.length) return;
       let best = -1;
       let bestD = Infinity;
       keys.forEach((k, i) => {
+        if ("cameraId" in target && (k as CameraKey).cameraId !== target.cameraId) return;
         const d = Math.abs(k.t - atT);
         if (d < bestD) {
           bestD = d;
@@ -598,10 +625,12 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     if (!specs.length) return;
     const want = specs.map((s) => ({ chan: s.chan, index: s.index, t: +s.t.toFixed(4) }));
     get().mutateDoc("delete-key", (draft) => {
-      const keys = "camera" in target ? draft.cameraKeys : draft.tracks[target.objectId];
+      const keys = "cameraId" in target
+        ? draft.cameraKeys
+        : draft.tracks[target.objectId];
       if (!keys?.length) return;
       for (const { chan, index, t } of want) {
-        const idx = keys.findIndex((k) => Math.abs(k.t - t) < 1e-4);
+        const idx = keys.findIndex((k) => (!("cameraId" in target) || (k as CameraKey).cameraId === target.cameraId) && Math.abs(k.t - t) < 1e-4);
         if (idx < 0) continue;
         const k = keys[idx] as TransformKey & CameraKey;
         if (chan === "fov" ? k.fov === undefined : !k[chan] || k[chan]![index] == null) continue;
@@ -616,9 +645,11 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     const to = Math.min(Math.max(+toT.toFixed(4), 0), get().doc.duration);
     if (Math.abs(to - from) < 1e-6) return;
     get().mutateDoc("retime-key", (draft) => {
-      const keys = "camera" in target ? draft.cameraKeys : draft.tracks[target.objectId];
+      const keys = "cameraId" in target
+        ? draft.cameraKeys
+        : draft.tracks[target.objectId];
       if (!keys?.length) return;
-      const idx = keys.findIndex((k) => Math.abs(k.t - from) < 1e-4);
+      const idx = keys.findIndex((k) => (!("cameraId" in target) || (k as CameraKey).cameraId === target.cameraId) && Math.abs(k.t - from) < 1e-4);
       if (idx < 0) return;
       const k = keys[idx] as TransformKey & CameraKey;
       let val: number;
@@ -633,7 +664,7 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
       nullKeyAxis(k, chan, index);
       if (keyIsEmpty(k)) keys.splice(idx, 1);
       const ks = keys as Array<TransformKey & CameraKey>;
-      const dst = ks.find((kk) => Math.abs(kk.t - to) < 1e-4);
+      const dst = ks.find((kk) => (!("cameraId" in target) || (kk as CameraKey).cameraId === target.cameraId) && Math.abs(kk.t - to) < 1e-4);
       if (dst) {
         if (chan === "fov") dst.fov = val;
         else {
@@ -641,7 +672,7 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
           dst[chan][index] = val;
         }
       } else {
-        const entry = { t: to, interp: k.interp ?? "linear" } as TransformKey & CameraKey;
+        const entry = { t: to, cameraId: k.cameraId, interp: k.interp ?? "linear" } as TransformKey & CameraKey;
         if (chan === "fov") {
           entry.fov = val;
         } else {
@@ -663,8 +694,8 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
 
   setKeyValues(target, atT, patch) {
     get().mutateDoc("edit-key", (draft) => {
-      if ("camera" in target) {
-        const key = draft.cameraKeys.find((k) => Math.abs(k.t - atT) < 1e-4);
+      if ("cameraId" in target) {
+        const key = draft.cameraKeys.find((k) => k.cameraId === target.cameraId && Math.abs(k.t - atT) < 1e-4);
         if (!key) return;
         if (patch.position) key.position = [...patch.position];
         if (patch.target) key.target = [...patch.target];
@@ -686,7 +717,11 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
   smoothKeys(target, points, sigma) {
     if (!points.length || !(sigma > 0)) return;
     get().mutateDoc("smooth-keys", (draft) => {
-      const keys = "camera" in target ? draft.cameraKeys : draft.tracks[target.objectId];
+      // Only this target's keys are the smoothing neighborhood — for a camera,
+      // other cameras' interleaved keys in the shared list must not contribute.
+      const keys = "cameraId" in target
+        ? draft.cameraKeys.filter((k) => k.cameraId === target.cameraId)
+        : draft.tracks[target.objectId];
       if (!keys?.length) return;
       const weight = (i: number, j: number) => Math.exp(-0.5 * ((i - j) / sigma) ** 2);
       type Comp = "position" | "rotation" | "scale" | "target";
@@ -697,15 +732,18 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
         const x = v ? v[index] : undefined;
         return x === undefined || x === null ? undefined : x;
       };
+      // In-place writes: `ks` may be a filtered view of draft.cameraKeys, and
+      // the elements are the same objects the document stores.
       const writeComp = (i: number, chan: Comp | "fov", index: number, v: number) => {
+        const k = ks[i];
         if (chan === "fov") {
-          ks[i] = { ...ks[i], fov: v };
+          k.fov = v;
           return;
         }
-        const cur = ks[i][chan];
+        const cur = k[chan];
         const arr: KeyVec3 = cur ? [...cur] : [null, null, null];
         arr[index] = v;
-        ks[i] = { ...ks[i], [chan]: arr };
+        k[chan] = arr;
       };
       // One weighted average per channel; every key defining that channel
       // (selected or not) contributes as a neighbor.
@@ -745,11 +783,11 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     const state = get();
     const time = Math.min(Math.max(t, 0), state.doc.duration);
     state.mutateDoc("insert-key", (draft) => {
-      if ("camera" in target) {
-        const cam = evalCamera(draft, time);
-        const existing = draft.cameraKeys.find((k) => Math.abs(k.t - time) < 1e-4);
+      if ("cameraId" in target) {
+        const cam = evalCameraById(draft, target.cameraId, time);
+        const existing = draft.cameraKeys.find((k) => k.cameraId === target.cameraId && Math.abs(k.t - time) < 1e-4);
         if (existing) return;
-        draft.cameraKeys.push({ t: +time.toFixed(4), position: cam.position, target: cam.target, fov: cam.fov, interp: "linear" });
+        draft.cameraKeys.push({ t: +time.toFixed(4), cameraId: target.cameraId, position: cam.position, target: cam.target, fov: cam.fov, interp: "linear" });
         draft.cameraKeys.sort((a, b) => a.t - b.t);
       } else {
         const obj = draft.objects.find((o) => o.id === target.objectId);
@@ -783,18 +821,20 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     });
   },
 
-  commitCamera(patch) {
+  commitCamera(patch, cameraIdArg) {
     const state = get();
-    const hasKeys = state.doc.cameraKeys.length > 0;
+    const cameraId = cameraIdArg ?? activeCameraOf(state.doc).id;
+    const camKeys = state.doc.cameraKeys.filter((k) => k.cameraId === cameraId);
     const t = +state.playhead.toFixed(4);
-    const hasKeyAtT = state.doc.cameraKeys.some((k) => Math.abs(k.t - t) < 1e-4);
+    const hasKeyAtT = camKeys.some((k) => Math.abs(k.t - t) < 1e-4);
     const replaceOnly = state.autoKey && state.autoKeyMode === "replace";
-    if (hasKeyAtT || (!replaceOnly && (hasKeys || state.autoKey))) {
+    if (hasKeyAtT || (!replaceOnly && (camKeys.length > 0 || state.autoKey))) {
       state.mutateDoc("camera", (draft) => {
-        const cam = evaluate(draft, t).camera;
-        const existing = draft.cameraKeys.find((k) => Math.abs(k.t - t) < 1e-4);
+        const cam = evalCameraById(draft, cameraId, t);
+        const existing = draft.cameraKeys.find((k) => k.cameraId === cameraId && Math.abs(k.t - t) < 1e-4);
         const entry = {
           t,
+          cameraId,
           position: (patch.position ?? [...cam.position]) as [number, number, number],
           target: (patch.target ?? [...cam.target]) as [number, number, number],
           fov: patch.fov ?? cam.fov,
@@ -807,11 +847,45 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
       });
     } else {
       state.mutateDoc("camera", (draft) => {
-        if (patch.position) draft.camera.position = [...patch.position];
-        if (patch.target) draft.camera.target = [...patch.target];
-        if (patch.fov !== undefined) draft.camera.fov = patch.fov;
+        const target = draft.cameras.find((c) => c.id === cameraId);
+        if (!target) return;
+        if (patch.position) target.position = [...patch.position];
+        if (patch.target) target.target = [...patch.target];
+        if (patch.fov !== undefined) target.fov = patch.fov;
       });
     }
+  },
+
+  addCamera() {
+    const id = newId("cam");
+    get().mutateDoc("add-camera", (draft) => {
+      const src = activeCameraOf(draft);
+      draft.cameras.push({
+        id,
+        name: `Camera ${draft.cameras.length + 1}`,
+        // Spawn slightly above the active camera so the new frustum is visible.
+        position: [src.position[0], src.position[1] + 1.5, src.position[2]],
+        target: [...src.target],
+        fov: src.fov,
+      });
+    });
+    set({ camPanelSel: id });
+  },
+
+  removeCamera(id) {
+    get().mutateDoc("remove-camera", (draft) => {
+      if (draft.cameras.length <= 1) return;
+      draft.cameras = draft.cameras.filter((c) => c.id !== id);
+      draft.cameraKeys = draft.cameraKeys.filter((k) => k.cameraId !== id);
+      if (draft.activeCameraId === id) draft.activeCameraId = draft.cameras[0].id;
+    });
+    if (get().camPanelSel === id) set({ camPanelSel: null });
+  },
+
+  setActiveCamera(id) {
+    get().mutateDoc("set-active-camera", (draft) => {
+      if (draft.cameras.some((c) => c.id === id)) draft.activeCameraId = id;
+    });
   },
 
   setAspect(ratio) {
@@ -982,9 +1056,12 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     const entry = get().projects.find((p) => p.id === id);
     if (!entry) return;
     get().mutateDoc("load-project", (draft) => {
-      Object.assign(draft, cloneDoc(entry.doc));
+      // Normalize through the validator so pre-multi-camera projects (plain
+      // `camera` + cameraId-less keys) migrate; fall back to the raw doc.
+      const result = validateSceneDocument(cloneDoc(entry.doc));
+      Object.assign(draft, "doc" in result ? result.doc : cloneDoc(entry.doc));
     });
-    set({ playhead: 0, playing: false, selection: [], projectsOpen: false });
+    set({ playhead: 0, playing: false, selection: [], projectsOpen: false, camPanelSel: null });
     get().setProjectId(id);
   },
 

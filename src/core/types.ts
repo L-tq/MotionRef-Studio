@@ -54,6 +54,8 @@ export interface TransformKey {
 
 export interface CameraKey {
   t: number;
+  /** Which scene camera (doc.cameras id) this key belongs to. */
+  cameraId: string;
   /** Components are optional: the graph editor splits shared keys when one
    *  channel is retimed or deleted alone. Missing components fall back to the
    *  base camera during evaluation. */
@@ -71,6 +73,17 @@ export interface CameraState {
   fov: number;
 }
 
+/** A named scene camera (Blender-style multi-camera support). */
+export interface CameraDesc {
+  id: string;
+  name: string;
+  position: Vec3;
+  /** lookAt target. */
+  target: Vec3;
+  /** Vertical field of view in degrees. */
+  fov: number;
+}
+
 export interface SceneDocument {
   version: 1;
   name: string;
@@ -84,9 +97,13 @@ export interface SceneDocument {
    *  scene-camera preview letterbox and aspect-aware snapshots. */
   aspect: number;
   objects: ObjectDesc[];
-  /** Base (static) camera pose — used when no cameraKeys exist. */
-  camera: CameraState;
-  /** Camera keyframes, kept sorted by t. */
+  /** Scene cameras; the first entry is the legacy default camera. Previews,
+   *  snapshots and video export always render the ACTIVE camera. */
+  cameras: CameraDesc[];
+  /** id of the camera used for preview/snapshot/export (Blender "active camera"). */
+  activeCameraId: string;
+  /** Camera keyframes for all cameras, kept sorted by t; each key names its
+   *  camera via `cameraId`. */
   cameraKeys: CameraKey[];
   /** Per-object keyframe tracks, keyed by object id. */
   tracks: Record<string, TransformKey[]>;
@@ -109,6 +126,14 @@ export function defaultCamera(): CameraState {
   return { position: [8, 6, 10], target: [0, 1, 0], fov: 45 };
 }
 
+/** Stable id of the legacy default camera — old documents' camera keys
+ *  (which predate `cameraId`) migrate to it. */
+export const DEFAULT_CAMERA_ID = "camera";
+
+export function defaultCameraDesc(): CameraDesc {
+  return { id: DEFAULT_CAMERA_ID, name: "Camera", ...defaultCamera() };
+}
+
 export function createEmptyDocument(name = "Untitled"): SceneDocument {
   return {
     version: 1,
@@ -118,11 +143,22 @@ export function createEmptyDocument(name = "Untitled"): SceneDocument {
     fps: 30,
     aspect: 16 / 9,
     objects: [],
-    camera: defaultCamera(),
+    cameras: [defaultCameraDesc()],
+    activeCameraId: DEFAULT_CAMERA_ID,
     cameraKeys: [],
     tracks: {},
     onFrameScripts: [],
   };
+}
+
+/** The camera a render/preview currently shows (falls back to the first). */
+export function activeCameraOf(doc: SceneDocument): CameraDesc {
+  return doc.cameras.find((c) => c.id === doc.activeCameraId) ?? doc.cameras[0];
+}
+
+/** The keyframes of one camera within the shared, time-sorted cameraKeys list. */
+export function cameraKeysOf(doc: SceneDocument, cameraId: string): CameraKey[] {
+  return doc.cameraKeys.filter((k) => k.cameraId === cameraId);
 }
 
 /** Accept documents saved before `aspect` existed. */

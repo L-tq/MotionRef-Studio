@@ -90,6 +90,8 @@ export function Viewport() {
       onWalkChange: (active, speedPct, cameraMode) => setWalk({ active, speed: speedPct, cameraMode }),
       onWalkSpeed: (speedPct) => setWalk((w) => (w.speed === speedPct ? w : { ...w, speed: speedPct })),
       onWalkCommitCamera: (pose) => store.getState().commitCamera({ position: pose.position, target: pose.target }),
+      // Clicking a camera marker selects it for editing in the inspector.
+      onSelectCamera: (cameraId) => store.getState().setUi("camPanelSel", cameraId),
     });
     engine.setSource(() => {
       const s = store.getState();

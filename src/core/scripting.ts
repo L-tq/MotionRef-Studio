@@ -8,7 +8,7 @@
  *   - overlay: created by animation.ts FrameApi during evaluation instead.
  */
 import type { CameraState, GeometryType, KeyVec3, SceneDocument, TransformKey, Vec3 } from "./types";
-import { isGeometryType, newId, specOf } from "./types";
+import { activeCameraOf, isGeometryType, newId, specOf } from "./types";
 
 export interface ScriptTarget {
   /** Mutating handles over a SceneDocument owned by the caller. */
@@ -37,8 +37,17 @@ export interface ScriptTarget {
   remove(id: string): void;
   clear(): void;
   get(): SceneDocument;
+  /** Patch the ACTIVE camera's base pose. */
   setCamera(patch: Partial<CameraState>): void;
-  addCameraKeys(keys: Array<{ t: number; position?: Vec3; target?: Vec3; fov?: number; interp?: string }>): void;
+  /** Add a scene camera; returns its id. */
+  addCamera(cam: { name?: string; position?: Vec3; target?: Vec3; fov?: number }): string;
+  /** Patch a camera's name/base pose/fov. */
+  updateCamera(id: string, patch: { name?: string; position?: Vec3; target?: Vec3; fov?: number }): void;
+  /** Delete a camera and its keys (the last camera cannot be removed). */
+  removeCamera(id: string): void;
+  /** Make this camera the active one (what preview/export renders). */
+  setActiveCamera(id: string): void;
+  addCameraKeys(keys: Array<{ t: number; position?: Vec3; target?: Vec3; fov?: number; interp?: string }>, cameraId?: string): void;
   addKeyframes(id: string, keys: TransformKey[]): void;
   setDuration(seconds: number): void;
   setFps(fps: number): void;
@@ -145,7 +154,7 @@ export function createScriptingAPI(target: ScriptTarget, log: (...args: unknown[
       return null;
     },
 
-    /** Set the base camera pose (used when no camera keyframes exist). */
+    /** Patch the ACTIVE camera's base pose (used when it has no keyframes). */
     setCamera(patch: { position?: Vec3; target?: Vec3; fov?: number }): void {
       if (patch?.position) checkVec3(patch.position, "camera position");
       if (patch?.target) checkVec3(patch.target, "camera target");
@@ -154,9 +163,42 @@ export function createScriptingAPI(target: ScriptTarget, log: (...args: unknown[
       target.setCamera(patch ?? {});
     },
 
-    /** Append camera keyframes: {t, position, target, fov, interp?}. */
+    /** Add a scene camera; returns its id. setActiveCamera switches rendering to it. */
+    addCamera(opts: { name?: string; position?: Vec3; target?: Vec3; fov?: number } = {}): string {
+      if (opts.position) checkVec3(opts.position, "camera position");
+      if (opts.target) checkVec3(opts.target, "camera target");
+      if (opts.fov !== undefined && (typeof opts.fov !== "number" || opts.fov <= 0 || opts.fov >= 180))
+        throw new Error("camera fov must be a number in (0, 180)");
+      return target.addCamera(opts);
+    },
+
+    /** Patch an existing camera: name?, position?, target?, fov?. */
+    updateCamera(id: string, patch: { name?: string; position?: Vec3; target?: Vec3; fov?: number }): void {
+      if (typeof id !== "string") throw new Error("api.updateCamera expects (id, patch)");
+      if (patch?.position) checkVec3(patch.position, "camera position");
+      if (patch?.target) checkVec3(patch.target, "camera target");
+      if (patch?.fov !== undefined && (typeof patch.fov !== "number" || patch.fov <= 0 || patch.fov >= 180))
+        throw new Error("camera fov must be a number in (0, 180)");
+      target.updateCamera(id, patch ?? {});
+    },
+
+    /** Remove a scene camera and its keyframes (the last camera is protected). */
+    removeCamera(id: string): void {
+      if (typeof id !== "string") throw new Error("api.removeCamera expects a camera id");
+      target.removeCamera(id);
+    },
+
+    /** Set which camera preview/snapshot/export render. */
+    setActiveCamera(id: string): void {
+      if (typeof id !== "string") throw new Error("api.setActiveCamera expects a camera id");
+      target.setActiveCamera(id);
+    },
+
+    /** Append camera keyframes: {t, position, target, fov, interp?}. Keys go to
+     *  the given camera, or to the ACTIVE camera when cameraId is omitted. */
     addCameraKeys(
       keys: Array<{ t: number; position?: Vec3; target?: Vec3; fov?: number; interp?: string }>,
+      cameraId?: string,
     ): void {
       if (!Array.isArray(keys)) throw new Error("api.addCameraKeys expects an array of keys");
       for (const k of keys) {
@@ -167,7 +209,7 @@ export function createScriptingAPI(target: ScriptTarget, log: (...args: unknown[
         if (k.fov !== undefined && (typeof k.fov !== "number" || k.fov <= 0 || k.fov >= 180))
           throw new Error(`Camera key fov must be in (0, 180), got ${String(k.fov)}`);
       }
-      target.addCameraKeys(keys);
+      target.addCameraKeys(keys, cameraId);
     },
 
     /** Append object keyframes: {t, position?, rotation?, scale?, color?, visible?, interp?}. */
@@ -294,18 +336,55 @@ export function createScriptTarget(doc: SceneDocument): ScriptTarget {
       return doc;
     },
     setCamera(patch) {
-      if (patch.position) doc.camera.position = [...patch.position];
-      if (patch.target) doc.camera.target = [...patch.target];
-      if (patch.fov !== undefined) doc.camera.fov = patch.fov;
+      const cam = activeCameraOf(doc);
+      if (patch.position) cam.position = [...patch.position];
+      if (patch.target) cam.target = [...patch.target];
+      if (patch.fov !== undefined) cam.fov = patch.fov;
     },
-    addCameraKeys(keys) {
-      const prev = doc.cameraKeys.length ? doc.cameraKeys[doc.cameraKeys.length - 1] : null;
+    addCamera(c) {
+      const id = newId("cam");
+      const src = activeCameraOf(doc);
+      doc.cameras.push({
+        id,
+        name: c.name ?? `Camera ${doc.cameras.length + 1}`,
+        position: c.position ? [...c.position] : [src.position[0], src.position[1] + 1.5, src.position[2]],
+        target: c.target ? [...c.target] : [...src.target],
+        fov: c.fov ?? src.fov,
+      });
+      return id;
+    },
+    updateCamera(id, patch) {
+      const cam = doc.cameras.find((c) => c.id === id);
+      if (!cam) throw new Error(`No camera with id "${id}"`);
+      if (patch.name !== undefined) cam.name = String(patch.name);
+      if (patch.position) cam.position = [...patch.position];
+      if (patch.target) cam.target = [...patch.target];
+      if (patch.fov !== undefined) cam.fov = patch.fov;
+    },
+    removeCamera(id) {
+      if (doc.cameras.length <= 1) throw new Error("Cannot remove the last camera — a scene needs at least one");
+      const n = doc.cameras.length;
+      doc.cameras = doc.cameras.filter((c) => c.id !== id);
+      doc.cameraKeys = doc.cameraKeys.filter((k) => k.cameraId !== id);
+      if (doc.activeCameraId === id) doc.activeCameraId = doc.cameras[0].id;
+      if (doc.cameras.length === n) throw new Error(`No camera with id "${id}"`);
+    },
+    setActiveCamera(id) {
+      if (!doc.cameras.some((c) => c.id === id)) throw new Error(`No camera with id "${id}"`);
+      doc.activeCameraId = id;
+    },
+    addCameraKeys(keys, cameraId) {
+      const camId = cameraId ?? activeCameraOf(doc).id;
+      const base = doc.cameras.find((c) => c.id === camId);
+      if (!base) throw new Error(`No camera with id "${camId}"`);
+      const prev = doc.cameraKeys.filter((k) => k.cameraId === camId).slice(-1)[0] ?? null;
       for (const k of keys) {
         doc.cameraKeys.push({
           t: k.t,
-          position: k.position ? [...k.position] : [...(prev?.position ?? doc.camera.position)],
-          target: k.target ? [...k.target] : [...(prev?.target ?? doc.camera.target)],
-          fov: k.fov ?? prev?.fov ?? doc.camera.fov,
+          cameraId: camId,
+          position: k.position ? [...k.position] : [...(prev?.position ?? base.position)],
+          target: k.target ? [...k.target] : [...(prev?.target ?? base.target)],
+          fov: k.fov ?? prev?.fov ?? base.fov,
           interp: (k.interp as TransformKey["interp"]) ?? "linear",
         });
       }

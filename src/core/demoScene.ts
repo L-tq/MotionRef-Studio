@@ -85,11 +85,12 @@ export function demoDocument(): SceneDocument {
     visible: true,
   });
 
-  doc.camera = { position: [10, 6, 12], target: [0, 1, 0], fov: 42 };
+  doc.cameras = [{ id: "camera", name: "Camera", position: [10, 6, 12], target: [0, 1, 0], fov: 42 }];
+  doc.activeCameraId = "camera";
   doc.cameraKeys = [
-    { t: 0, position: [12, 3, 0.5], target: [0, 1, 0], fov: 38, interp: "smooth" },
-    { t: 3, position: [4, 5, 11], target: [0, 1.2, 0], fov: 42, interp: "smooth" },
-    { t: 6, position: [-6, 7, 9], target: [1, 1, 0], fov: 46, interp: "smooth" },
+    { t: 0, cameraId: "camera", position: [12, 3, 0.5], target: [0, 1, 0], fov: 38, interp: "smooth" },
+    { t: 3, cameraId: "camera", position: [4, 5, 11], target: [0, 1.2, 0], fov: 42, interp: "smooth" },
+    { t: 6, cameraId: "camera", position: [-6, 7, 9], target: [1, 1, 0], fov: 46, interp: "smooth" },
   ];
 
   return doc;

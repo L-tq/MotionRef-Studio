@@ -1,7 +1,7 @@
 /** Strict validation for SceneDocuments coming from untrusted sources
  *  (agent tool calls, JSON imports). Returns a normalized document or a
  *  human-readable error string. */
-import { createEmptyDocument, isGeometryType, specOf, type KeyVec3, type SceneDocument, type Vec3 } from "./types";
+import { createEmptyDocument, isGeometryType, specOf, DEFAULT_CAMERA_ID, type CameraDesc, type KeyVec3, type SceneDocument, type Vec3 } from "./types";
 import { clampAspect } from "./cameraMath";
 
 const HEX_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
@@ -38,20 +38,57 @@ export function validateSceneDocument(input: unknown): { doc: SceneDocument } | 
   if (typeof raw.fps === "number" && Number.isFinite(raw.fps)) doc.fps = Math.min(Math.max(Math.round(raw.fps), 1), 120);
   if (typeof raw.aspect === "number" && Number.isFinite(raw.aspect)) doc.aspect = +clampAspect(raw.aspect).toFixed(4);
 
-  // Camera base
-  if (raw.camera && typeof raw.camera === "object") {
-    const cam = raw.camera as Record<string, unknown>;
-    const p = asVec3(cam.position, "camera.position");
+  // Cameras (Blender-style multi-camera). Legacy documents only carry the
+  // single `camera` base pose — synthesize one CameraDesc from it so old
+  // saves/imports keep working, with their id = DEFAULT_CAMERA_ID.
+  const cameras: CameraDesc[] = [];
+  if (raw.cameras !== undefined) {
+    if (!Array.isArray(raw.cameras)) return { error: "cameras must be an array" };
+    if (raw.cameras.length > 64) return { error: "too many cameras (max 64)" };
+    const seenCam = new Set<string>();
+    for (const [i, c] of raw.cameras.entries()) {
+      if (!c || typeof c !== "object") return { error: `cameras[${i}] must be an object` };
+      const cam = c as Record<string, unknown>;
+      const p = asVec3(cam.position ?? [8, 6, 10], `cameras[${i}].position`);
+      if (typeof p === "string") return { error: p };
+      const tg = asVec3(cam.target ?? [0, 1, 0], `cameras[${i}].target`);
+      if (typeof tg === "string") return { error: tg };
+      let fov = 45;
+      if (cam.fov !== undefined) {
+        if (typeof cam.fov !== "number" || cam.fov <= 0 || cam.fov >= 180) return { error: `cameras[${i}].fov must be in (0, 180)` };
+        fov = cam.fov;
+      }
+      let id = typeof cam.id === "string" && cam.id ? cam.id.slice(0, 64) : "";
+      if (!id || seenCam.has(id)) id = `cam${i}_${Math.random().toString(36).slice(2, 8)}`;
+      seenCam.add(id);
+      cameras.push({
+        id,
+        name: typeof cam.name === "string" && cam.name.trim() ? cam.name.slice(0, 80) : `Camera ${i + 1}`,
+        position: p,
+        target: tg,
+        fov,
+      });
+    }
+  }
+  if (cameras.length === 0) {
+    const legacy = raw.camera && typeof raw.camera === "object" ? (raw.camera as Record<string, unknown>) : {};
+    const p = asVec3(legacy.position ?? [8, 6, 10], "camera.position");
     if (typeof p === "string") return { error: p };
-    const tg = asVec3(cam.target, "camera.target");
+    const tg = asVec3(legacy.target ?? [0, 1, 0], "camera.target");
     if (typeof tg === "string") return { error: tg };
     let fov = 45;
-    if (cam.fov !== undefined) {
-      if (typeof cam.fov !== "number" || cam.fov <= 0 || cam.fov >= 180) return { error: "camera.fov must be in (0, 180)" };
-      fov = cam.fov;
+    if (legacy.fov !== undefined) {
+      if (typeof legacy.fov !== "number" || legacy.fov <= 0 || legacy.fov >= 180) return { error: "camera.fov must be in (0, 180)" };
+      fov = legacy.fov;
     }
-    doc.camera = { position: p, target: tg, fov };
+    cameras.push({ id: DEFAULT_CAMERA_ID, name: "Camera", position: p, target: tg, fov });
   }
+  doc.cameras = cameras;
+  doc.activeCameraId =
+    typeof raw.activeCameraId === "string" && cameras.some((c) => c.id === raw.activeCameraId)
+      ? raw.activeCameraId
+      : cameras[0].id;
+  const cameraIds = new Set(cameras.map((c) => c.id));
 
   // Objects
   if (raw.objects !== undefined) {
@@ -153,6 +190,9 @@ export function validateSceneDocument(input: unknown): { doc: SceneDocument } | 
       }
       doc.cameraKeys.push({
         t: key.t,
+        // Every key names its camera; legacy keys (no cameraId) attach to the
+        // default camera, matching the legacy migration above.
+        cameraId: typeof key.cameraId === "string" && cameraIds.has(key.cameraId) ? key.cameraId : cameras[0].id,
         position,
         target,
         fov,

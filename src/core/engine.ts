@@ -8,8 +8,8 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
-import { evaluate, type EvaluatedState, type HookError } from "./animation";
-import { docAspect, type ObjectDesc, type SceneDocument } from "./types";
+import { evaluate, evalCameraById, type EvaluatedState, type HookError } from "./animation";
+import { docAspect, defaultCameraDesc, type ObjectDesc, type SceneDocument } from "./types";
 
 export type GizmoMode = "select" | "translate" | "rotate" | "scale";
 
@@ -38,6 +38,8 @@ export interface EngineCallbacks {
   onWalkSpeed?(speedPct: number): void;
   /** Walk confirmed with a left click in scene-camera mode: bake the pose into the doc. */
   onWalkCommitCamera?(pose: { position: [number, number, number]; target: [number, number, number] }): void;
+  /** Clicked a camera's marker in the viewport (opens it in the inspector). */
+  onSelectCamera?(cameraId: string): void;
 }
 
 export type ViewAxis = "px" | "nx" | "py" | "ny" | "pz" | "nz";
@@ -292,6 +294,9 @@ export class Engine {
   private grid: THREE.GridHelper;
   private axes: THREE.AxesHelper;
   private cameraHelper: THREE.CameraHelper | null = null;
+  /** Editor-only frustum wireframe + click target for each NON-active camera
+   *  (the active one already gets `cameraHelper`). Blender-style camera markers. */
+  private camGizmos = new Map<string, { cam: THREE.PerspectiveCamera; helper: THREE.CameraHelper; pick: THREE.Mesh }>();
   private selectionBox: THREE.BoxHelper | null = null;
   private raycaster = new THREE.Raycaster();
   private source: () => FrameSource | null = () => null;
@@ -308,7 +313,7 @@ export class Engine {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
-    this.docScene = new DocScene({ version: 1, name: "", background: "#191922", duration: 1, fps: 30, aspect: 16 / 9, objects: [], camera: { position: [8, 6, 10], target: [0, 1, 0], fov: 45 }, cameraKeys: [], tracks: {}, onFrameScripts: [] });
+    this.docScene = new DocScene({ version: 1, name: "", background: "#191922", duration: 1, fps: 30, aspect: 16 / 9, objects: [], cameras: [defaultCameraDesc()], activeCameraId: defaultCameraDesc().id, cameraKeys: [], tracks: {}, onFrameScripts: [] });
 
     this.editorCamera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000);
     this.editorCamera.position.set(10, 8, 12);
@@ -420,6 +425,7 @@ export class Engine {
       this.axes.visible = frame.showGrid;
 
       this.updateCameraHelper(frame);
+      this.updateCameraGizmos(frame);
       this.updateSelectionBox(frame);
       this.updateGizmoAttachment(frame);
 
@@ -472,6 +478,61 @@ export class Engine {
     this.cameraHelper.update();
   }
 
+  /** Wireframe frustum + invisible pick sphere per non-active camera, following
+   *  its EVALUATED pose so keyed cameras visibly fly during playback. */
+  private updateCameraGizmos(frame: FrameSource): void {
+    const doc = frame.doc;
+    const activeId = doc.cameras.find((c) => c.id === doc.activeCameraId)?.id ?? doc.cameras[0]?.id;
+    for (const [id, g] of this.camGizmos) {
+      if (!doc.cameras.some((c) => c.id === id)) {
+        this.docScene.scene.remove(g.helper);
+        g.helper.dispose();
+        this.docScene.scene.remove(g.pick);
+        g.pick.geometry.dispose();
+        (g.pick.material as THREE.Material).dispose();
+        this.camGizmos.delete(id);
+      }
+    }
+    if (frame.cameraPreview) {
+      for (const g of this.camGizmos.values()) {
+        g.helper.visible = false;
+        g.pick.visible = false;
+      }
+      return;
+    }
+    for (const c of doc.cameras) {
+      if (c.id === activeId) continue; // the sceneCamera helper covers the active one
+      let g = this.camGizmos.get(c.id);
+      if (!g) {
+        const cam = new THREE.PerspectiveCamera(c.fov, 16 / 9, 0.35, 3);
+        const helper = new THREE.CameraHelper(cam);
+        (helper.material as THREE.Material).transparent = true;
+        (helper.material as THREE.Material).opacity = 0.4;
+        this.docScene.scene.add(helper);
+        const pick = new THREE.Mesh(
+          new THREE.SphereGeometry(0.32, 8, 8),
+          // Invisible to the renderer but still raycastable (click to inspect).
+          new THREE.MeshBasicMaterial({ visible: false }),
+        );
+        pick.userData.camId = c.id;
+        this.docScene.scene.add(pick);
+        g = { cam, helper, pick };
+        this.camGizmos.set(c.id, g);
+      }
+      const pose = evalCameraById(doc, c.id, frame.time);
+      g.cam.position.set(pose.position[0], pose.position[1], pose.position[2]);
+      g.cam.lookAt(pose.target[0], pose.target[1], pose.target[2]);
+      if (Math.abs(g.cam.fov - pose.fov) > 1e-6) {
+        g.cam.fov = pose.fov;
+        g.cam.updateProjectionMatrix();
+      }
+      g.helper.update();
+      g.helper.visible = true;
+      g.pick.position.copy(g.cam.position);
+      g.pick.visible = true;
+    }
+  }
+
   private updateSelectionBox(frame: FrameSource): void {
     const id = frame.selection[0];
     const mesh = id ? this.docScene.meshFor(id) : undefined;
@@ -520,8 +581,13 @@ export class Engine {
       -((e.clientY - rect.top) / rect.height) * 2 + 1,
     );
     this.raycaster.setFromCamera(ndc, this.editorCamera);
-    const hits = this.raycaster.intersectObjects(this.docScene.pickables, false);
+    const camPicks = [...this.camGizmos.values()].map((g) => g.pick);
+    const hits = this.raycaster.intersectObjects([...this.docScene.pickables, ...camPicks], false);
     const hit = hits.find((h) => (h.object as THREE.Mesh).visible);
+    if (hit && hit.object.userData.camId) {
+      this.callbacks.onSelectCamera?.(hit.object.userData.camId as string);
+      return;
+    }
     this.callbacks.onSelect(hit ? ((hit.object as THREE.Mesh).userData.id as string) : null, e.shiftKey);
   };
 
@@ -578,6 +644,12 @@ export class Engine {
 
   getSceneCamera(): THREE.PerspectiveCamera {
     return this.docScene.sceneCamera;
+  }
+
+  /** Orbit pivot of the editor view — the "align camera to view" action maps
+   *  (editorCamera.position → getEditorCamera(), this → lookAt target). */
+  getOrbitTarget(): THREE.Vector3 {
+    return this.orbit.target.clone();
   }
 
   isWalking(): boolean {
@@ -878,6 +950,12 @@ export class Engine {
     this.canvas.removeEventListener("pointerup", this.onPointerUp);
     this.transform.dispose();
     this.orbit.dispose();
+    for (const g of this.camGizmos.values()) {
+      g.helper.dispose();
+      g.pick.geometry.dispose();
+      (g.pick.material as THREE.Material).dispose();
+    }
+    this.camGizmos.clear();
     this.docScene.dispose();
     this.renderer.dispose();
   }

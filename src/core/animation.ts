@@ -8,6 +8,7 @@
  *  This module is THREE-free so it can also run inside the sandbox worker.
  */
 import type {
+  CameraDesc,
   CameraKey,
   CameraState,
   Interp,
@@ -15,6 +16,7 @@ import type {
   TransformKey,
   Vec3,
 } from "./types";
+import { activeCameraOf } from "./types";
 
 export interface EvaluatedObject {
   id: string;
@@ -149,22 +151,36 @@ function evalObjectTrack(base: import("./types").ObjectDesc, rawKeys: TransformK
 
 // --- camera evaluation ---------------------------------------------------------
 
-export function evalCamera(doc: SceneDocument, t: number): CameraState {
-  const keys = doc.cameraKeys as Array<TransformKey & CameraKey>;
+/** Interpolate one camera's keys (position/target per axis, fov scalar) over
+ *  its base pose. Keys are pre-filtered to the camera. */
+function evalCameraDesc(base: CameraDesc, keys: CameraKey[], t: number): CameraState {
+  const raw = keys as Array<TransformKey & CameraKey>;
   const out: CameraState = {
-    position: [...doc.camera.position] as Vec3,
-    target: [...doc.camera.target] as Vec3,
-    fov: doc.camera.fov,
+    position: [...base.position] as Vec3,
+    target: [...base.target] as Vec3,
+    fov: base.fov,
   };
   (["position", "target"] as const).forEach((comp) => {
     for (let axis = 0; axis < 3; axis++) {
-      const v = evalAxis(keys, comp, axis, t);
+      const v = evalAxis(raw, comp, axis, t);
       if (v !== null) out[comp][axis] = v;
     }
   });
-  const segFov = segment(keys.filter((k) => k.fov !== undefined), t);
+  const segFov = segment(raw.filter((k) => k.fov !== undefined), t);
   if (segFov) out.fov = lerp(segFov.a.fov!, segFov.b.fov!, segFov.u);
   return out;
+}
+
+/** Evaluated pose of ANY camera by id at time t. */
+export function evalCameraById(doc: SceneDocument, cameraId: string, t: number): CameraState {
+  const cam = doc.cameras.find((c) => c.id === cameraId) ?? doc.cameras[0];
+  if (!cam) return { position: [0, 0, 0], target: [0, 0, 0], fov: 45 };
+  return evalCameraDesc(cam, doc.cameraKeys.filter((k) => k.cameraId === cam.id), t);
+}
+
+/** Evaluated pose of the ACTIVE scene camera (what preview/export renders). */
+export function evalCamera(doc: SceneDocument, t: number): CameraState {
+  return evalCameraById(doc, activeCameraOf(doc).id, t);
 }
 
 // --- onFrame hooks -------------------------------------------------------------

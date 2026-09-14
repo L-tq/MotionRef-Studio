@@ -18,11 +18,10 @@
  *  shared key so other properties keep their own keys at their own times.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useStore } from "../state/store";
+import { useStore, type KeyTarget } from "../state/store";
 import { useT } from "../i18n";
-import type { CameraKey, KeyVec3, SceneDocument, TransformKey, Vec3 } from "../core/types";
+import { activeCameraOf, type CameraKey, type KeyVec3, type SceneDocument, type TransformKey, type Vec3 } from "../core/types";
 
-type KeyTarget = { objectId: string } | { camera: true };
 type AnyKey = TransformKey | CameraKey;
 
 interface ChannelDef {
@@ -85,23 +84,25 @@ function objectChannels(objectId: string, basePos: Vec3, baseRot: Vec3, baseScl:
   return chans;
 }
 
-function cameraChannels(): ChannelDef[] {
+function cameraChannels(cameraId: string): ChannelDef[] {
   const CH: Array<{ i: number; c: string }> = [
     { i: 0, c: "#ff6b6b" },
     { i: 1, c: "#3ddc97" },
     { i: 2, c: "#38bdf8" },
   ];
+  const camOf = (doc: SceneDocument) => doc.cameras.find((c) => c.id === cameraId);
   const keyAt = (doc: SceneDocument, atT: number): CameraKey | undefined =>
-    doc.cameraKeys.find((k) => Math.abs(k.t - atT) < 1e-4);
+    doc.cameraKeys.find((k) => k.cameraId === cameraId && Math.abs(k.t - atT) < 1e-4);
   const chans: ChannelDef[] = [];
-  const groups: Array<{ group: string; prefix: string; sel: (k: CameraKey) => KeyVec3 | undefined }> = [
-    { group: "Cam Position", prefix: "cpos", sel: (k) => k.position },
-    { group: "Cam Target", prefix: "ctgt", sel: (k) => k.target },
+  // Channel ids embed the camera id so selections never mix two cameras.
+  const groups: Array<{ group: string; prefix: string; sel: (k: CameraKey) => KeyVec3 | undefined; base: (c: import("../core/types").CameraDesc) => Vec3 }> = [
+    { group: "Cam Position", prefix: "cpos", sel: (k) => k.position, base: (c) => c.position },
+    { group: "Cam Target", prefix: "ctgt", sel: (k) => k.target, base: (c) => c.target },
   ];
   for (const g of groups) {
     for (const { i, c } of CH) {
       chans.push({
-        id: `${g.prefix}.${i}`,
+        id: `${cameraId}:${g.prefix}.${i}`,
         label: `${g.group} ${"XYZ"[i]}`,
         group: g.group,
         color: c,
@@ -112,12 +113,10 @@ function cameraChannels(): ChannelDef[] {
           const x = v ? v[i] : undefined;
           return x === undefined || x === null ? undefined : x;
         },
-        base: (doc) => (g.prefix === "cpos" ? doc.camera.position[i] : doc.camera.target[i]),
+        base: (doc) => camOf(doc)?.[g.prefix === "cpos" ? "position" : "target"][i] ?? 0,
         makePatch: (doc, _target, atT, value) => {
           const k = keyAt(doc, atT);
-          const cur =
-            (k && g.sel(k)) ||
-            (g.prefix === "cpos" ? [...doc.camera.position] : [...doc.camera.target]);
+          const cur = (k && g.sel(k)) || (camOf(doc) ? [...g.base(camOf(doc)!)] : [0, 0, 0]);
           const next = [...cur] as KeyVec3;
           next[i] = value;
           return g.prefix === "cpos" ? { position: next } : { target: next };
@@ -126,14 +125,14 @@ function cameraChannels(): ChannelDef[] {
     }
   }
   chans.push({
-    id: "fov",
+    id: `${cameraId}:fov`,
     label: "Cam FOV",
     group: "Cam FOV",
     color: "#ffb020",
     scale: 1,
     comp: { chan: "fov", index: 0 },
     read: (k) => (k as CameraKey).fov,
-    base: (doc) => doc.camera.fov,
+    base: (doc) => camOf(doc)?.fov ?? 45,
     makePatch: (_doc, _target, _atT, value) => ({ fov: value }),
   });
   return chans;
@@ -198,8 +197,12 @@ export function GraphEditor() {
   const select = useStore((s) => s.select);
 
   const selectedObj = useStore((s) => s.doc.objects.find((o) => o.id === s.selection[0]));
+  const activeCamId = useStore((s) => activeCameraOf(s.doc).id);
   const [kind, setKind] = useState<"object" | "camera">(selection.length ? "object" : "camera");
+  /** Which camera the graph editor shows when kind === "camera"; null = active. */
+  const [camSel, setCamSel] = useState<string | null>(null);
   const effectiveKind = kind === "object" && !selectedObj ? "camera" : kind;
+  const camId = camSel && doc.cameras.some((c) => c.id === camSel) ? camSel : activeCamId;
 
   const areaRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -235,19 +238,19 @@ export function GraphEditor() {
     return () => ro.disconnect();
   }, []);
 
-  const target: KeyTarget = effectiveKind === "camera" ? { camera: true } : { objectId: selectedObj!.id };
-  const keys: AnyKey[] = effectiveKind === "camera" ? doc.cameraKeys : doc.tracks[selectedObj!.id] ?? [];
+  const target: KeyTarget = effectiveKind === "camera" ? { cameraId: camId } : { objectId: selectedObj!.id };
+  const keys: AnyKey[] = effectiveKind === "camera" ? doc.cameraKeys.filter((k) => k.cameraId === camId) : doc.tracks[selectedObj!.id] ?? [];
   const channels = useMemo(
     () =>
       effectiveKind === "camera"
-        ? cameraChannels()
+        ? cameraChannels(camId)
         : objectChannels(
             selectedObj!.id,
             selectedObj!.position,
             selectedObj!.rotation,
             selectedObj!.scale,
           ),
-    [effectiveKind, selectedObj],
+    [effectiveKind, selectedObj, camId],
   );
 
   const contentWidth = Math.max(width, doc.duration * zoom);
@@ -407,7 +410,10 @@ export function GraphEditor() {
       ).values(),
     ];
     const clampT = (v: number) => Math.min(Math.max(v, 0), doc.duration);
-    const keysOf = (d: SceneDocument) => ("camera" in target ? d.cameraKeys : d.tracks[(target as { objectId: string }).objectId] ?? []);
+    const keysOf = (d: SceneDocument) =>
+      "cameraId" in target
+        ? d.cameraKeys.filter((k) => k.cameraId === target.cameraId)
+        : d.tracks[(target as { objectId: string }).objectId] ?? [];
     const startX = e.clientX;
     const startY = e.clientY;
     // Start-of-drag values (display units) and actual current times: every
@@ -591,12 +597,23 @@ export function GraphEditor() {
           >
             {selectedObj ? selectedObj.name : t("graph.noObject")}
           </button>
-          <button
-            className={`btn small ${effectiveKind === "camera" ? "active" : ""}`}
-            onClick={() => setKind("camera")}
+          <select
+            className={`graph-camsel ${effectiveKind === "camera" ? "active" : ""}`}
+            value={camId}
+            title={t("graph.cameraTarget")}
+            onChange={(e) => {
+              setKind("camera");
+              setCamSel(e.target.value);
+              setSelKeys(new Set());
+            }}
           >
-            🎥 {t("timeline.camera")}
-          </button>
+            {doc.cameras.map((c) => (
+              <option key={c.id} value={c.id}>
+                🎥 {c.name}
+                {c.id === doc.activeCameraId ? " ★" : ""}
+              </option>
+            ))}
+          </select>
         </div>
         <div className="graph-actions">
           <button className="btn small" onClick={selectAllPoints} title={t("graph.selectAll")}>

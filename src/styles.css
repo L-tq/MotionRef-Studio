@@ -393,6 +393,29 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .graph-labels { border-right: 1px solid var(--border); overflow-y: auto; overflow-x: hidden; }
 .graph-target { display: flex; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--border); }
 .graph-target .btn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.graph-camsel {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--bg-3);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-s);
+  padding: 2px 4px;
+}
+.graph-camsel.active { color: var(--text-1); border-color: var(--accent); }
+/* Timeline camera rows: the star marks the active camera. */
+.tl-cam-star {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-3);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.tl-cam-star.on { color: #ffc24d; }
 .graph-chan {
   height: 24px;
   display: flex;

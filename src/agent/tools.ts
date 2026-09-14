@@ -191,8 +191,8 @@ export function buildTools(): AgentTool[] {
     {
       name: "set_camera",
       description: {
-        en: "Set the BASE camera pose (used when no camera keyframes exist): position [x,y,z], target [x,y,z] (lookAt), fov (vertical degrees, 45≈50mm).",
-        zh: "设置基础相机位姿（无相机关键帧时生效）：position [x,y,z]、target [x,y,z]（注视点）、fov（垂直角度，45≈50mm）。",
+        en: "Set the ACTIVE camera's base pose (used when it has no keyframes): position [x,y,z], target [x,y,z] (lookAt), fov (vertical degrees, 45≈50mm). Preview/snapshot/export always render the active camera.",
+        zh: "设置活动相机的基础位姿（该相机无关键帧时生效）：position [x,y,z]、target [x,y,z]（注视点）、fov（垂直角度，45≈50mm）。预览/快照/导出始终使用活动相机。",
       },
       parameters: {
         type: "object",
@@ -210,10 +210,59 @@ export function buildTools(): AgentTool[] {
       },
     },
     {
+      name: "add_camera",
+      description: {
+        en: "Add a new scene camera: {name?, position?, target?, fov?, setActive?}. Cameras are Blender-style; the ACTIVE one is what snapshots render. Returns the new camera id.",
+        zh: "添加一台新的场景相机：{name?, position?, target?, fov?, setActive?}。相机为 Blender 风格；快照渲染“活动”相机。返回新相机 id。",
+      },
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          position: { type: "array", items: { type: "number" }, minItems: 3, maxItems: 3 },
+          target: { type: "array", items: { type: "number" }, minItems: 3, maxItems: 3 },
+          fov: { type: "number" },
+          setActive: { type: "boolean", description: "Also make it the active camera (default false)" },
+        },
+        additionalProperties: false,
+      },
+      async handler(args, ctx) {
+        let camId = "";
+        const result = withDoc(ctx, "agent:add_camera", (target) => {
+          const { setActive, ...cam } = args as { setActive?: boolean };
+          camId = target.addCamera(cam as Parameters<typeof target.addCamera>[0]);
+          if (setActive) target.setActiveCamera(camId);
+        });
+        if (result.isError) return result;
+        return ok(`Added camera id "${camId}"${args.setActive ? " (now active)" : ""}.`);
+      },
+    },
+    {
+      name: "set_active_camera",
+      description: {
+        en: "Set which scene camera is ACTIVE — preview, snapshots and export render it. Pass a camera id from get_scene_state (doc.cameras).",
+        zh: "设置哪台场景相机是“活动”相机——预览、快照和导出都渲染它。传入 get_scene_state 中的相机 id（doc.cameras）。",
+      },
+      parameters: {
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"],
+        additionalProperties: false,
+      },
+      async handler(args, ctx) {
+        const result = withDoc(ctx, "agent:set_active_camera", (target) => {
+          target.setActiveCamera(args.id as string);
+        });
+        if (result.isError) return result;
+        const cam = ctx.getDoc().cameras.find((c) => c.id === args.id);
+        return ok(`Active camera: "${cam?.name ?? args.id}".`);
+      },
+    },
+    {
       name: "add_camera_keyframes",
       description: {
-        en: "Append camera keyframes: keys: [{t (s), position?, target?, fov?, interp? (linear|smooth|step)}]. Missing fields inherit from the previous key.",
-        zh: "追加相机关键帧：keys: [{t（秒）, position?, target?, fov?, interp?（linear|smooth|step）}]。缺省字段继承上一帧。",
+        en: "Append camera keyframes: keys: [{t (s), position?, target?, fov?, interp? (linear|smooth|step)}]. Missing fields inherit from the previous key of that camera. cameraId? targets one scene camera; default is the ACTIVE camera.",
+        zh: "追加相机关键帧：keys: [{t（秒）, position?, target?, fov?, interp?（linear|smooth|step）}]。缺省字段继承该相机上一帧。cameraId? 可指定某台场景相机；默认为活动相机。",
       },
       parameters: {
         type: "object",
@@ -232,17 +281,23 @@ export function buildTools(): AgentTool[] {
               required: ["t"],
             },
           },
+          cameraId: { type: "string", description: "Target camera id (default: active camera)" },
         },
         required: ["keys"],
         additionalProperties: false,
       },
       async handler(args, ctx) {
         const keys = (args.keys ?? []) as Parameters<ReturnType<typeof createScriptTarget>["addCameraKeys"]>[0];
+        const cameraId = typeof args.cameraId === "string" ? args.cameraId : undefined;
         const result = withDoc(ctx, "agent:camera_keys", (target) => {
-          target.addCameraKeys(keys);
+          target.addCameraKeys(keys, cameraId);
         });
         if (result.isError) return result;
-        return ok(`Camera now has ${ctx.getDoc().cameraKeys.length} key(s).`);
+        const doc = ctx.getDoc();
+        const cid = cameraId ?? doc.activeCameraId;
+        const count = doc.cameraKeys.filter((k) => k.cameraId === cid).length;
+        const cam = doc.cameras.find((c) => c.id === cid);
+        return ok(`Camera "${cam?.name ?? cid}" now has ${count} key(s).`);
       },
     },
     {
@@ -332,8 +387,8 @@ export function buildTools(): AgentTool[] {
     {
       name: "execute_code",
       description: {
-        en: "Run JavaScript in the sandbox to build/animate the scene. Global `api`: add/update/remove/clear/get/find/list/keyframes/setCamera/addCameraKeys/setDuration/setFps/setAspect(ratio)/onFrame(fn)/log/params/uniqueName. See the Skill Guide for the full reference. No DOM/network/imports; 5s timeout.",
-        zh: "在沙箱中运行 JavaScript 来搭建/动画化场景。全局 `api`：add/update/remove/clear/get/find/list/keyframes/setCamera/addCameraKeys/setDuration/setFps/setAspect(比例)/onFrame(fn)/log/params/uniqueName。完整参考见技能指南。无 DOM/网络/导入；5 秒超时。",
+        en: "Run JavaScript in the sandbox to build/animate the scene. Global `api`: add/update/remove/clear/get/find/list/keyframes/setCamera/addCamera/addCameraKeys(setActiveCamera)/updateCamera/removeCamera/setDuration/setFps/setAspect(ratio)/onFrame(fn)/log/params/uniqueName. See the Skill Guide for the full reference. No DOM/network/imports; 5s timeout.",
+        zh: "在沙箱中运行 JavaScript 来搭建/动画化场景。全局 `api`：add/update/remove/clear/get/find/list/keyframes/setCamera/addCamera/addCameraKeys(setActiveCamera)/updateCamera/removeCamera/setDuration/setFps/setAspect(比例)/onFrame(fn)/log/params/uniqueName。完整参考见技能指南。无 DOM/网络/导入；5 秒超时。",
       },
       parameters: {
         type: "object",

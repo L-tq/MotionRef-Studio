@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { useStore } from "../state/store";
+import { useStore, type KeyTarget } from "../state/store";
 import { useT } from "../i18n";
 import type { SceneDocument } from "../core/types";
 import { GraphEditor } from "./GraphEditor";
@@ -7,26 +7,31 @@ import { GraphEditor } from "./GraphEditor";
 interface TrackRow {
   key: string;
   label: string;
-  camera: boolean;
+  /** Present on camera rows. */
+  cameraId?: string;
+  /** Cameras only: is this the active camera (renders/exports). */
+  active?: boolean;
   objectId?: string;
   color?: string;
   keys: Array<{ t: number }>;
 }
 
 function buildRows(doc: SceneDocument, selection: string[]): TrackRow[] {
-  const rows: TrackRow[] = [
-    { key: "__camera", label: "🎥 Camera", camera: true, keys: doc.cameraKeys },
-  ];
+  const rows: TrackRow[] = doc.cameras.map((c) => ({
+    key: `cam:${c.id}`,
+    label: `🎥 ${c.name}`,
+    cameraId: c.id,
+    active: c.id === doc.activeCameraId,
+    keys: doc.cameraKeys.filter((k) => k.cameraId === c.id),
+  }));
   for (const obj of doc.objects) {
     const keys = doc.tracks[obj.id] ?? [];
     if (keys.length > 0 || selection.includes(obj.id)) {
-      rows.push({ key: obj.id, label: obj.name, camera: false, objectId: obj.id, color: obj.color, keys });
+      rows.push({ key: obj.id, label: obj.name, objectId: obj.id, color: obj.color, keys });
     }
   }
   return rows;
 }
-
-type KeyTarget = { objectId: string } | { camera: true };
 
 const ZOOM_MIN = 20;
 const ZOOM_MAX = 500;
@@ -62,6 +67,7 @@ export function Timeline() {
   const retimeKey = useStore((s) => s.retimeKey);
   const deleteKey = useStore((s) => s.deleteKey);
   const select = useStore((s) => s.select);
+  const setActiveCamera = useStore((s) => s.setActiveCamera);
 
   const rows = buildRows(doc, selection);
   const areaRef = useRef<HTMLDivElement>(null);
@@ -160,11 +166,11 @@ export function Timeline() {
   );
 
   // --- keyframe dragging (time-addressed, robust against re-sorting) ---
-  const beginKeyDrag = (e: React.PointerEvent, target: KeyTarget, startT: number) => {
+  const beginKeyDrag = (e: React.PointerEvent, target: KeyTarget, rowKey: string, startT: number) => {
     e.stopPropagation();
     e.preventDefault();
     pause();
-    setSelectedKey({ rowKey: "camera" in target ? "__camera" : target.objectId, t: startT });
+    setSelectedKey({ rowKey, t: startT });
     let lastT = startT;
     const content = contentRef.current;
     const move = (ev: PointerEvent) => {
@@ -191,8 +197,10 @@ export function Timeline() {
       if (active && ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName)) return;
       if (e.key === "Delete" || e.key === "Backspace") {
         e.preventDefault();
-        if (selectedKey.rowKey === "__camera") deleteKey({ camera: true }, selectedKey.t);
-        else deleteKey({ objectId: selectedKey.rowKey }, selectedKey.t);
+        const target: KeyTarget = selectedKey.rowKey.startsWith("cam:")
+          ? { cameraId: selectedKey.rowKey.slice(4) }
+          : { objectId: selectedKey.rowKey };
+        deleteKey(target, selectedKey.t);
         setSelectedKey(null);
       }
     };
@@ -269,7 +277,7 @@ export function Timeline() {
         <button className="btn small" onClick={() => setKeyAtPlayhead()} disabled={selection.length === 0}>
           ◆ {t("timeline.setKey")}
         </button>
-        <button className="btn small" onClick={setCameraKeyAtPlayhead}>
+        <button className="btn small" onClick={() => setCameraKeyAtPlayhead()}>
           🎥◆ {t("timeline.setCameraKey")}
         </button>
         <span className="spacer" />
@@ -313,12 +321,27 @@ export function Timeline() {
                 {rows.map((row) => (
                   <div
                     key={row.key}
-                    className={`track-label ${row.camera ? "camera" : ""}`}
+                    className={`track-label ${row.cameraId ? "camera" : ""}`}
+                    title={row.cameraId ? t("timeline.camRowHint") : undefined}
                     onClick={() => {
                       if (row.objectId) select(row.objectId, false);
+                      else if (row.cameraId) setUi("camPanelSel", row.cameraId);
                     }}
                   >
-                    {!row.camera && (
+                    {row.cameraId && (
+                      <button
+                        className={`tl-cam-star ${row.active ? "on" : ""}`}
+                        title={t("inspector.setActive")}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setActiveCamera(row.cameraId!);
+                        }}
+                      >
+                        {row.active ? "★" : "☆"}
+                      </button>
+                    )}
+                    {!row.cameraId && (
                       <span
                         style={{ width: 8, height: 8, borderRadius: 2, background: row.color, flexShrink: 0 }}
                       />
@@ -353,16 +376,16 @@ export function Timeline() {
                     onPointerDown={beginScrub}
                   >
                     {row.keys.map((key, index) => {
-                      const target: KeyTarget = row.camera ? { camera: true } : { objectId: row.objectId! };
-                      const rowKey = row.camera ? "__camera" : row.objectId!;
+                      const target: KeyTarget = row.cameraId ? { cameraId: row.cameraId } : { objectId: row.objectId! };
+                      const rowKey = row.key;
                       const isSelected = selectedKey?.rowKey === rowKey && Math.abs(selectedKey.t - key.t) < 1e-4;
                       return (
                         <div
                           key={`${key.t}-${index}`}
-                          className={`keyframe ${row.camera ? "camera-key" : ""} ${isSelected ? "selected-key" : ""}`}
+                          className={`keyframe ${row.cameraId ? "camera-key" : ""} ${isSelected ? "selected-key" : ""}`}
                           style={{ left: `${tToX(key.t)}px` }}
                           title={t("timeline.deleteKey")}
-                          onPointerDown={(e) => beginKeyDrag(e, target, key.t)}
+                          onPointerDown={(e) => beginKeyDrag(e, target, rowKey, key.t)}
                         />
                       );
                     })}

@@ -21,8 +21,8 @@ and override everything it does.
   **手动 3D 编辑** —— 13 种基础几何体的增删改、变换手柄、属性检查器、层级面板、撤销/重做。
 - 🪟 **Collapsible layout** — small triangle tabs on the viewport edges toggle the left, right, and timeline panels; panel sizes and visibility are remembered.
   **可折叠布局** —— 视口边缘的小三角形按钮可收起/展开左、右面板与时间线，面板尺寸与可见性会自动记忆。
-- 🎥 **Camera control** — FOV ↔ 35mm focal-length conversion, position/target, camera keyframes on the timeline, live "scene camera preview" (exact export framing).
-  **相机控制** —— FOV 与 35mm 焦距换算、位置/注视点、时间轴上的相机关键帧、实时取景预览。
+- 🎥 **Camera control** — multiple scene cameras with an active one (Blender-style: the active camera is what preview/snapshot/export render), FOV ↔ 35mm focal-length conversion, position/target, per-camera keyframes on the timeline and in the graph editor, editor frustum markers for every camera, live "scene camera preview" (exact export framing).
+  **相机控制** —— 多场景相机 + 活动相机（Blender 风格：预览/快照/导出始终渲染活动相机）、FOV 与 35mm 焦距换算、位置/注视点、时间轴与曲线编辑器中的分相机关键帧、每台相机的编辑器取景线框、实时取景预览。
 - ⏱ **Timeline** — per-object keyframes (position/rotation/scale/color/visibility, linear/smooth/step interpolation), draggable keys, playhead scrubbing, auto-key recording (● Add & Replace / Replace modes: transform an object while the timeline plays and every swept frame gets a key; a recording pass stops at the end instead of looping).
   **时间轴** —— 每对象关键帧（位置/旋转/缩放/颜色/可见性，linear/smooth/step 插值）、可拖动关键帧、播放头擦洗、自动关键帧录制（● 添加并替换 / 仅替换：播放中直接拖动物体即可逐帧录制关键帧；录制播放到末尾自动停止，不循环）。
 - 📈 **Curve graph editor** — per-channel value curves with box selection (drag on empty space, Shift adds), Select all / Deselect all buttons, multi-key drag in time and value, per-axis Delete/retime (moving or deleting e.g. Position X leaves every other axis and property keyed where it was), and Gaussian smoothing (≈, adjustable σ) applied to exactly the selected points.
@@ -83,7 +83,7 @@ Inspired by the lightweight core of
 - **Agent Skill Guide** — a bilingual, in-app document (see Settings → preview) that becomes the system prompt and teaches the agent the tools, the Scripting API, animation semantics and the verify-with-snapshots workflow.
 
 Tools: `get_scene_state`, `set_scene`, `add_object`, `update_object`,
-`remove_object`, `set_camera`, `add_camera_keyframes`, `add_keyframes`,
+`add_camera`, `set_active_camera`, `set_camera`, `add_camera_keyframes`, `add_keyframes`,
 `set_timeline`, `snapshot` (image feedback), `execute_code`.
 
 ## Keyboard shortcuts / 快捷键
