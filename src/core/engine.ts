@@ -13,6 +13,13 @@ import { docAspect, defaultCameraDesc, type ObjectDesc, type SceneDocument } fro
 
 export type GizmoMode = "select" | "translate" | "rotate" | "scale";
 
+/** One object's gizmo-driven pose. Multi-selections emit one entry per
+ *  selected object (the gizmo anchor first). */
+export interface GizmoEdit {
+  id: string;
+  pose: { position: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number] };
+}
+
 export interface FrameSource {
   doc: SceneDocument;
   time: number;
@@ -28,7 +35,7 @@ export interface FrameSource {
 
 export interface EngineCallbacks {
   onSelect(id: string | null, additive: boolean): void;
-  onGizmoEdit(id: string, pose: { position: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number] }): void;
+  onGizmoEdit(edits: GizmoEdit[]): void;
   onGizmoDragEnd(): void;
   onTimeAdvance(t: number): void;
   /** Playback clamped at the end of the timeline (auto-key recording pass). */
@@ -138,9 +145,10 @@ export class DocScene {
     this.sync(doc, evaluate(doc, 0));
   }
 
-  /** skipId keeps one object's mesh untouched (a gizmo drag holds it), while
-   *  the rest of the scene still animates during a recording pass. */
-  sync(doc: SceneDocument, state: EvaluatedState, skipId?: string): void {
+  /** skipIds keeps some meshes untouched (a gizmo drag holds the whole
+   *  selection), while the rest of the scene still animates during a
+   *  recording pass. */
+  sync(doc: SceneDocument, state: EvaluatedState, skipIds?: ReadonlySet<string> | ReadonlyMap<string, unknown>): void {
     this.scene.background = new THREE.Color(doc.background);
 
     const alive = new Set<string>();
@@ -182,7 +190,7 @@ export class DocScene {
 
     // Apply evaluated poses.
     for (const obj of doc.objects) {
-      if (obj.id === skipId) continue;
+      if (skipIds?.has(obj.id)) continue;
       const mesh = this.meshes.get(obj.id);
       const ev = state.objects.get(obj.id);
       if (!mesh || !ev) continue;
@@ -297,7 +305,12 @@ export class Engine {
   /** Editor-only frustum wireframe + click target for each NON-active camera
    *  (the active one already gets `cameraHelper`). Blender-style camera markers. */
   private camGizmos = new Map<string, { cam: THREE.PerspectiveCamera; helper: THREE.CameraHelper; pick: THREE.Mesh }>();
-  private selectionBox: THREE.BoxHelper | null = null;
+  /** One outline box per selected object. */
+  private selectionBoxes = new Map<string, THREE.BoxHelper>();
+  /** Selected meshes' poses at gizmo-drag start: the anchor's delta carries
+   *  the whole selection (translate by the same offset; rotate/scale about
+   *  the anchor's pivot). */
+  private dragStart = new Map<string, { pos: THREE.Vector3; quat: THREE.Quaternion; scale: THREE.Vector3 }>();
   private raycaster = new THREE.Raycaster();
   private source: () => FrameSource | null = () => null;
   private raf = 0;
@@ -334,17 +347,11 @@ export class Engine {
       const dragging = (e as unknown as { value: boolean }).value;
       this.dragging = dragging;
       this.orbit.enabled = !dragging;
-      if (!dragging) this.callbacks.onGizmoDragEnd();
+      if (dragging) this.beginGizmoDrag();
+      else this.callbacks.onGizmoDragEnd();
     });
     this.transform.addEventListener("objectChange", () => {
-      const mesh = this.transform.object as THREE.Mesh | null;
-      if (!mesh) return;
-      const id = mesh.userData.id as string;
-      this.callbacks.onGizmoEdit(id, {
-        position: [mesh.position.x, mesh.position.y, mesh.position.z],
-        rotation: [mesh.rotation.x, mesh.rotation.y, mesh.rotation.z],
-        scale: [mesh.scale.x, mesh.scale.y, mesh.scale.z],
-      });
+      this.emitGizmoEdits();
     });
 
     this.grid = new THREE.GridHelper(40, 40, 0x3a3a46, 0x26262f);
@@ -395,18 +402,11 @@ export class Engine {
         if (ended) this.callbacks.onPlaybackEnd();
       }
 
-      // While a drag is held during a recording pass, commit the held pose
-      // every tick so each swept frame inserts/updates a key, even when the
+      // While a drag is held during a recording pass, commit the held poses
+      // every tick so each swept frame inserts/updates keys, even when the
       // mouse is motionless (commitPose dedupes by playhead time).
       if (this.dragging && frame.playing && frame.autoKey) {
-        const mesh = this.transform.object as THREE.Mesh | null;
-        if (mesh?.userData.id) {
-          this.callbacks.onGizmoEdit(mesh.userData.id as string, {
-            position: [mesh.position.x, mesh.position.y, mesh.position.z],
-            rotation: [mesh.rotation.x, mesh.rotation.y, mesh.rotation.z],
-            scale: [mesh.scale.x, mesh.scale.y, mesh.scale.z],
-          });
-        }
+        this.emitGizmoEdits();
       }
 
       const errors: HookError[] = [];
@@ -416,10 +416,7 @@ export class Engine {
         this.callbacks.onHookErrors(errors);
       }
 
-      const heldId = this.dragging
-        ? ((this.transform.object as THREE.Mesh | null)?.userData.id as string | undefined)
-        : undefined;
-      this.docScene.sync(frame.doc, state, heldId);
+      this.docScene.sync(frame.doc, state, this.dragging ? this.dragStart : undefined);
 
       this.grid.visible = frame.showGrid;
       this.axes.visible = frame.showGrid;
@@ -534,18 +531,27 @@ export class Engine {
   }
 
   private updateSelectionBox(frame: FrameSource): void {
-    const id = frame.selection[0];
-    const mesh = id ? this.docScene.meshFor(id) : undefined;
-    if (!mesh) {
-      if (this.selectionBox) this.selectionBox.visible = false;
-      return;
+    const wanted = frame.cameraPreview ? [] : frame.selection;
+    for (const [id, box] of this.selectionBoxes) {
+      if (!wanted.includes(id)) {
+        this.docScene.scene.remove(box);
+        box.geometry.dispose();
+        (box.material as THREE.Material).dispose();
+        this.selectionBoxes.delete(id);
+      }
     }
-    if (!this.selectionBox) {
-      this.selectionBox = new THREE.BoxHelper(mesh, 0xffc24d);
-      this.docScene.scene.add(this.selectionBox);
+    for (const id of wanted) {
+      const mesh = this.docScene.meshFor(id);
+      if (!mesh) continue;
+      let box = this.selectionBoxes.get(id);
+      if (!box) {
+        box = new THREE.BoxHelper(mesh, 0xffc24d);
+        this.docScene.scene.add(box);
+        this.selectionBoxes.set(id, box);
+      }
+      box.setFromObject(mesh);
+      box.visible = true;
     }
-    this.selectionBox.setFromObject(mesh);
-    this.selectionBox.visible = !frame.cameraPreview;
   }
 
   private updateGizmoAttachment(frame: FrameSource): void {
@@ -560,6 +566,62 @@ export class Engine {
       if (this.transform.object) this.transform.detach();
       this.transformHelper.visible = false;
     }
+  }
+
+  // --- gizmo drags (single anchor + carried selection) -------------------------
+
+  private beginGizmoDrag(): void {
+    this.dragStart.clear();
+    for (const id of this.source()?.selection ?? []) {
+      const mesh = this.docScene.meshFor(id);
+      if (mesh) {
+        this.dragStart.set(id, { pos: mesh.position.clone(), quat: mesh.quaternion.clone(), scale: mesh.scale.clone() });
+      }
+    }
+  }
+
+  /** Report the gizmo-driven pose of the attached anchor — and carry every
+   *  other selected object along, recomputed from its drag-start pose so the
+   *  result is stable however often this runs: translate shares the anchor's
+   *  offset; rotate orbits positions around the anchor pivot; scale scales
+   *  positions (and each object's own scale) away from that pivot. */
+  private emitGizmoEdits(): void {
+    const anchor = this.transform.object as THREE.Mesh | null;
+    if (!anchor?.userData.id) return;
+    const anchorId = anchor.userData.id as string;
+    const poseOf = (m: THREE.Object3D): GizmoEdit["pose"] => ({
+      position: [m.position.x, m.position.y, m.position.z],
+      rotation: [m.rotation.x, m.rotation.y, m.rotation.z],
+      scale: [m.scale.x, m.scale.y, m.scale.z],
+    });
+    const edits: GizmoEdit[] = [{ id: anchorId, pose: poseOf(anchor) }];
+    const anchorStart = this.dragStart.get(anchorId);
+    if (anchorStart && this.dragStart.size > 1) {
+      // Total world-space rotation since drag start (rotate mode only).
+      const dq = this.transform.mode === "rotate"
+        ? anchor.quaternion.clone().multiply(anchorStart.quat.clone().invert())
+        : null;
+      for (const [id, start] of this.dragStart) {
+        if (id === anchorId) continue;
+        const mesh = this.docScene.meshFor(id);
+        if (!mesh) continue;
+        if (dq) {
+          mesh.position.copy(start.pos).sub(anchorStart.pos).applyQuaternion(dq).add(anchorStart.pos);
+          mesh.quaternion.multiplyQuaternions(dq, start.quat);
+        } else if (this.transform.mode === "scale") {
+          const p = anchorStart.pos;
+          const rx = anchor.scale.x / (anchorStart.scale.x || 1);
+          const ry = anchor.scale.y / (anchorStart.scale.y || 1);
+          const rz = anchor.scale.z / (anchorStart.scale.z || 1);
+          mesh.position.set(p.x + (start.pos.x - p.x) * rx, p.y + (start.pos.y - p.y) * ry, p.z + (start.pos.z - p.z) * rz);
+          mesh.scale.set(start.scale.x * rx, start.scale.y * ry, start.scale.z * rz);
+        } else {
+          mesh.position.copy(start.pos).add(anchor.position).sub(anchorStart.pos);
+        }
+        edits.push({ id, pose: poseOf(mesh) });
+      }
+    }
+    this.callbacks.onGizmoEdit(edits);
   }
 
   // --- selection picking -----------------------------------------------------
@@ -588,7 +650,7 @@ export class Engine {
       this.callbacks.onSelectCamera?.(hit.object.userData.camId as string);
       return;
     }
-    this.callbacks.onSelect(hit ? ((hit.object as THREE.Mesh).userData.id as string) : null, e.shiftKey);
+    this.callbacks.onSelect(hit ? ((hit.object as THREE.Mesh).userData.id as string) : null, e.shiftKey || e.ctrlKey || e.metaKey);
   };
 
   // --- misc -------------------------------------------------------------------
@@ -611,10 +673,12 @@ export class Engine {
 
   frameSelection(): void {
     const frame = this.source();
-    const id = frame?.selection[0];
-    const mesh = id ? this.docScene.meshFor(id) : undefined;
-    if (mesh) {
-      const box = new THREE.Box3().setFromObject(mesh);
+    const box = new THREE.Box3();
+    for (const id of frame?.selection ?? []) {
+      const mesh = this.docScene.meshFor(id);
+      if (mesh) box.expandByObject(mesh);
+    }
+    if (!box.isEmpty()) {
       const center = box.getCenter(new THREE.Vector3());
       const size = box.getSize(new THREE.Vector3()).length() || 2;
       const dir = this.editorCamera.position.clone().sub(this.orbit.target).normalize();
@@ -950,6 +1014,11 @@ export class Engine {
     this.canvas.removeEventListener("pointerup", this.onPointerUp);
     this.transform.dispose();
     this.orbit.dispose();
+    for (const box of this.selectionBoxes.values()) {
+      box.geometry.dispose();
+      (box.material as THREE.Material).dispose();
+    }
+    this.selectionBoxes.clear();
     for (const g of this.camGizmos.values()) {
       g.helper.dispose();
       g.pick.geometry.dispose();

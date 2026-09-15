@@ -114,6 +114,7 @@ export const en: Record<string, string> = {
 
   // Inspector
   "inspector.noSelection": "Nothing selected. Click an object in the viewport.",
+  "inspector.multiEditHint": "{n} objects selected — pose, color, visibility, keying and delete apply to all",
   "inspector.object": "Object",
   "inspector.name": "Name",
   "inspector.params": "Geometry",

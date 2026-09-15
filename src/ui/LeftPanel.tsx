@@ -97,7 +97,7 @@ export function LeftPanel() {
   const select = useStore((s) => s.select);
   const selectMany = useStore((s) => s.selectMany);
   const deleteObjects = useStore((s) => s.deleteObjects);
-  const duplicateObject = useStore((s) => s.duplicateObject);
+  const duplicateObjects = useStore((s) => s.duplicateObjects);
   const mutateDoc = useStore((s) => s.mutateDoc);
   const addCollection = useStore((s) => s.addCollection);
   const renameCollection = useStore((s) => s.renameCollection);
@@ -114,6 +114,9 @@ export function LeftPanel() {
   const dragIds = useRef<string[] | null>(null);
 
   const selected = new Set(selection);
+  /** True when any root-level (uncollected) object is selected — highlights
+   *  the "Scene Collection" row. */
+  const rootHasSelected = doc.objects.some((o) => !o.collectionId && selected.has(o.id));
 
   const startDrag = (e: DragEvent, obj: ObjectDesc) => {
     // Blender convention: dragging a row that is part of the selection moves
@@ -188,7 +191,9 @@ export function LeftPanel() {
         title={t("common.duplicate")}
         onClick={(e) => {
           e.stopPropagation();
-          duplicateObject(obj.id);
+          // Blender convention: duplicating a row that is part of the selection
+          // duplicates the entire selection.
+          duplicateObjects(selected.has(obj.id) && selection.length > 1 ? [...selection] : [obj.id]);
         }}
       >
         ⧉
@@ -275,7 +280,7 @@ export function LeftPanel() {
         ) : (
           <div className="outliner">
             <div
-              className={`crow root ${dropTarget === "root" ? "drop-target" : ""}`}
+              className={`crow root ${rootHasSelected ? "has-selected" : ""} ${dropTarget === "root" ? "drop-target" : ""}`}
               onClick={() => select(null, false)}
               {...dropProps(null)}
             >
@@ -297,10 +302,12 @@ export function LeftPanel() {
                   const members = doc.objects.filter((o) => o.collectionId === col.id);
                   const open = !collapsedCols.has(col.id);
                   const anyVisible = members.some((m) => m.visible);
+                  // Collections glow when they contain selected objects.
+                  const anyMemberSelected = members.some((m) => selected.has(m.id));
                   return (
                     <div className="col-group" key={col.id}>
                       <div
-                        className={`crow ${dropTarget === col.id ? "drop-target" : ""}`}
+                        className={`crow ${anyMemberSelected ? "has-selected" : ""} ${dropTarget === col.id ? "drop-target" : ""}`}
                         onClick={(e) => {
                           if (renamingCol === col.id) return;
                           // Clicking the row selects its contents (Blender

@@ -114,6 +114,7 @@ export const zh: Record<string, string> = {
 
   // Inspector
   "inspector.noSelection": "未选中对象。点击视口中的物体。",
+  "inspector.multiEditHint": "已选中 {n} 个对象 —— 位姿、颜色、可见性、打关键帧和删除将作用于全部选中对象",
   "inspector.object": "对象",
   "inspector.name": "名称",
   "inspector.params": "几何参数",

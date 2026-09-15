@@ -350,8 +350,8 @@ export function Timeline() {
                     key={row.key}
                     className={`track-label ${row.cameraId ? "camera" : ""}`}
                     title={row.cameraId ? t("timeline.camRowHint") : undefined}
-                    onClick={() => {
-                      if (row.objectId) select(row.objectId, false);
+                    onClick={(e) => {
+                      if (row.objectId) select(row.objectId, e.shiftKey || e.ctrlKey || e.metaKey);
                       else if (row.cameraId) setUi("camPanelSel", row.cameraId);
                     }}
                   >

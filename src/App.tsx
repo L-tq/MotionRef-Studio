@@ -85,6 +85,13 @@ export default function App() {
           // Shift+F is walk mode (handled in Viewport), plain F frames selection.
           if (!e.shiftKey) window.dispatchEvent(new CustomEvent("mrs:frame-selection"));
           break;
+        case "d":
+          // Shift+D (Blender): duplicate the whole selection; the copies stay selected.
+          if (e.shiftKey && s.selection.length) {
+            e.preventDefault();
+            s.duplicateObjects([...s.selection]);
+          }
+          break;
         case "delete":
         case "backspace":
           if (s.selection.length) {

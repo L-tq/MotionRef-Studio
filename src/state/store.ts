@@ -285,7 +285,8 @@ export interface AppActions {
   // Scene ops
   addObject(type: GeometryType): void;
   deleteObjects(ids: string[]): void;
-  duplicateObject(id: string): void;
+  /** Copy the given objects (and their actions); the copies become the selection. */
+  duplicateObjects(ids: string[]): void;
   /** Outliner collections (Blender-style). */
   addCollection(): void;
   renameCollection(id: string, name: string): void;
@@ -555,32 +556,37 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     set((s) => ({ selection: s.selection.filter((id) => !idSet.has(id)) }));
   },
 
-  duplicateObject(id) {
-    const src = get().doc.objects.find((o) => o.id === id);
-    if (!src) return;
-    const copyId = newId();
+  duplicateObjects(ids) {
+    if (!ids.length) return;
+    const sources = get().doc.objects.filter((o) => ids.includes(o.id));
+    if (!sources.length) return;
+    const copyIds: string[] = [];
     get().mutateDoc("duplicate-object", (draft) => {
-      const copy = JSON.parse(JSON.stringify(src)) as typeof src;
-      copy.id = copyId;
-      copy.name = `${src.name} copy`;
-      copy.position = [src.position[0] + 1, src.position[1], src.position[2]];
-      draft.objects.push(copy);
-      // Copy the source object's actions (fresh ids); the duplicate's active
-      // action is the copy of the source's active one.
-      const srcActiveId = activeActionOfOwner(draft, { objectId: id })?.id ?? null;
-      let copyActiveId: string | undefined;
-      for (const a of draft.actions.slice()) {
-        if (a.kind !== "object" || a.objectId !== id) continue;
-        const copyAct = JSON.parse(JSON.stringify(a)) as ObjectActionDesc;
-        copyAct.id = newId("act");
-        copyAct.objectId = copyId;
-        draft.actions.push(copyAct);
-        if (a.id === srcActiveId) copyActiveId = copyAct.id;
+      for (const src of sources) {
+        const copyId = newId();
+        copyIds.push(copyId);
+        const copy = JSON.parse(JSON.stringify(src)) as typeof src;
+        copy.id = copyId;
+        copy.name = `${src.name} copy`;
+        copy.position = [src.position[0] + 1, src.position[1], src.position[2]];
+        draft.objects.push(copy);
+        // Copy the source object's actions (fresh ids); the duplicate's active
+        // action is the copy of the source's active one.
+        const srcActiveId = activeActionOfOwner(draft, { objectId: src.id })?.id ?? null;
+        let copyActiveId: string | undefined;
+        for (const a of draft.actions.slice()) {
+          if (a.kind !== "object" || a.objectId !== src.id) continue;
+          const copyAct = JSON.parse(JSON.stringify(a)) as ObjectActionDesc;
+          copyAct.id = newId("act");
+          copyAct.objectId = copyId;
+          draft.actions.push(copyAct);
+          if (a.id === srcActiveId) copyActiveId = copyAct.id;
+        }
+        if (copyActiveId) copy.activeActionId = copyActiveId;
+        else delete copy.activeActionId;
       }
-      if (copyActiveId) copy.activeActionId = copyActiveId;
-      else delete copy.activeActionId;
     });
-    set({ selection: [copyId] });
+    set({ selection: copyIds });
   },
 
   // --- Outliner collections (Blender-style) ----------------------------------

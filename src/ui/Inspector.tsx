@@ -21,20 +21,20 @@ function Num({ value, onChange, step = 0.1, min, max }: { value: number; onChang
   );
 }
 
-function Vec3Input({ value, onChange, step = 0.1 }: { value: Vec3; onChange: (v: Vec3) => void; step?: number }) {
+function Vec3Input({ value, onChange, step = 0.1 }: { value: Vec3; onChange: (v: Vec3, axis: number) => void; step?: number }) {
   return (
     <div className="vec-row">
       <span className="axis">X</span>
-      <Num value={value[0]} step={step} onChange={(v) => onChange([v, value[1], value[2]])} />
+      <Num value={value[0]} step={step} onChange={(v) => onChange([v, value[1], value[2]], 0)} />
       <span className="axis">Y</span>
-      <Num value={value[1]} step={step} onChange={(v) => onChange([value[0], v, value[2]])} />
+      <Num value={value[1]} step={step} onChange={(v) => onChange([value[0], v, value[2]], 1)} />
       <span className="axis">Z</span>
-      <Num value={value[2]} step={step} onChange={(v) => onChange([value[0], value[1], v])} />
+      <Num value={value[2]} step={step} onChange={(v) => onChange([value[0], value[1], v], 2)} />
     </div>
   );
 }
 
-function ObjectInspector({ obj }: { obj: ObjectDesc }) {
+function ObjectInspector({ obj, ids }: { obj: ObjectDesc; ids: string[] }) {
   const t = useT();
   const locale = getLocale();
   const mutateDoc = useStore((s) => s.mutateDoc);
@@ -50,6 +50,9 @@ function ObjectInspector({ obj }: { obj: ObjectDesc }) {
   const action = activeActionOfOwner(doc, { objectId: obj.id });
   const hasKeys = actions.some((a) => a.keys.length > 0);
   const spec = specOf(obj.type);
+  // Multi-selection: pose, color, visibility, keying and delete hit every
+  // selected object; name, geometry params and actions stay per-object.
+  const multi = ids.length > 1;
 
   const patch = (fn: (o: ObjectDesc) => void, label = "inspect") =>
     mutateDoc(label, (d) => {
@@ -57,12 +60,42 @@ function ObjectInspector({ obj }: { obj: ObjectDesc }) {
       if (target) fn(target);
     });
 
+  const patchAll = (fn: (o: ObjectDesc) => void, label: string) =>
+    mutateDoc(label, (d) => {
+      for (const id of ids) {
+        const target = d.objects.find((o) => o.id === id);
+        if (target) fn(target);
+      }
+    });
+
+  const rad = (v: Vec3): Vec3 => [(v[0] * Math.PI) / 180, (v[1] * Math.PI) / 180, (v[2] * Math.PI) / 180];
+
+  /** Multi-edit one transform field: set ONLY the edited axis on every
+   *  selected object (each keeps its other components), like Blender's
+   *  property fields; single-selection writes the whole vector as before. */
+  const commitAxisAll = (chan: "position" | "rotation" | "scale", axis: number, v: Vec3) => {
+    if (!multi) {
+      commitPose(obj.id, chan === "rotation" ? { rotation: rad(v) } : { [chan]: v });
+      return;
+    }
+    const doc = useStore.getState().doc;
+    for (const id of ids) {
+      const cur = doc.objects.find((o) => o.id === id);
+      if (!cur) continue;
+      const vec = [...cur[chan]] as Vec3;
+      vec[axis] = chan === "rotation" ? (v[axis] * Math.PI) / 180 : v[axis];
+      commitPose(id, { [chan]: vec });
+    }
+  };
+
   return (
     <div className="insp-section">
       <h4>
         {t("inspector.object")}: {obj.name}
+        {multi ? <span className="chip" title={t("inspector.multiEditHint")}>+{ids.length - 1}</span> : null}
         {hasKeys ? <span className="chip">{t("inspector.keyedBadge")}</span> : null}
       </h4>
+      {multi ? <div className="hint" style={{ color: "var(--text-3)" }}>{t("inspector.multiEditHint", { n: ids.length })}</div> : null}
       <div className="field">
         <label>{t("inspector.name")}</label>
         <input type="text" value={obj.name} onChange={(e) => patch((o) => void (o.name = e.target.value), "rename")} />
@@ -88,7 +121,7 @@ function ObjectInspector({ obj }: { obj: ObjectDesc }) {
 
       <div className="field">
         <label>{t("inspector.position")}</label>
-        <Vec3Input value={obj.position} onChange={(v) => commitPose(obj.id, { position: v })} />
+        <Vec3Input value={obj.position} onChange={(v, axis) => commitAxisAll("position", axis, v)} />
       </div>
       <div className="field">
         <label>{t("inspector.rotation")} ({t("common.deg")})</label>
@@ -99,16 +132,12 @@ function ObjectInspector({ obj }: { obj: ObjectDesc }) {
             (obj.rotation[1] * 180) / Math.PI,
             (obj.rotation[2] * 180) / Math.PI,
           ]}
-          onChange={(v) =>
-            commitPose(obj.id, {
-              rotation: [(v[0] * Math.PI) / 180, (v[1] * Math.PI) / 180, (v[2] * Math.PI) / 180],
-            })
-          }
+          onChange={(v, axis) => commitAxisAll("rotation", axis, v)}
         />
       </div>
       <div className="field">
         <label>{t("inspector.scale")}</label>
-        <Vec3Input value={obj.scale} onChange={(v) => commitPose(obj.id, { scale: v })} />
+        <Vec3Input value={obj.scale} onChange={(v, axis) => commitAxisAll("scale", axis, v)} />
       </div>
 
       <div className="insp-row">
@@ -116,7 +145,7 @@ function ObjectInspector({ obj }: { obj: ObjectDesc }) {
         <input
           type="color"
           value={obj.color}
-          onChange={(e) => patch((o) => void (o.color = e.target.value), "color")}
+          onChange={(e) => patchAll((o) => void (o.color = e.target.value), "color")}
         />
         <span style={{ fontFamily: "var(--mono)", fontSize: 11 }}>{obj.color}</span>
       </div>
@@ -125,12 +154,12 @@ function ObjectInspector({ obj }: { obj: ObjectDesc }) {
         <input
           type="checkbox"
           checked={obj.visible}
-          onChange={(e) => patch((o) => void (o.visible = e.target.checked), "visible")}
+          onChange={(e) => patchAll((o) => void (o.visible = e.target.checked), "visible")}
         />
       </div>
 
       <div className="insp-row" style={{ gap: 6 }}>
-        <button className="btn small" onClick={() => setKeyAtPlayhead(obj.id)}>
+        <button className="btn small" onClick={() => ids.forEach((id) => setKeyAtPlayhead(id))}>
           ◆ {t("inspector.keyAtPlayhead")}
         </button>
         {hasKeys ? (
@@ -139,7 +168,7 @@ function ObjectInspector({ obj }: { obj: ObjectDesc }) {
           </button>
         ) : null}
         <span className="spacer" style={{ flex: 1 }} />
-        <button className="btn small danger" onClick={() => deleteObjects([obj.id])}>
+        <button className="btn small danger" onClick={() => deleteObjects([...ids])}>
           {t("common.delete")}
         </button>
       </div>
@@ -482,7 +511,7 @@ export function Inspector() {
         {selection.length === 0 || !obj ? (
           <div className="empty-note">{t("inspector.noSelection")}</div>
         ) : (
-          <ObjectInspector key={obj.id} obj={obj} />
+          <ObjectInspector key={obj.id} obj={obj} ids={selection} />
         )}
         <CameraInspector />
         <SceneInspector />

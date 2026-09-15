@@ -64,7 +64,10 @@ export function Viewport() {
     const store = useStore;
     const engine = new Engine(canvasRef.current, {
       onSelect: (id, additive) => store.getState().select(id, additive),
-      onGizmoEdit: (id, pose) => store.getState().commitPose(id, pose),
+      onGizmoEdit: (edits) => {
+        const s = store.getState();
+        for (const e of edits) s.commitPose(e.id, e.pose);
+      },
       onGizmoDragEnd: () => {
         /* history coalescing handles grouping */
       },
