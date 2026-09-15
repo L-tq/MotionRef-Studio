@@ -313,7 +313,7 @@ export class Engine {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
-    this.docScene = new DocScene({ version: 1, name: "", background: "#191922", duration: 1, fps: 30, aspect: 16 / 9, objects: [], cameras: [defaultCameraDesc()], activeCameraId: defaultCameraDesc().id, cameraKeys: [], tracks: {}, onFrameScripts: [] });
+    this.docScene = new DocScene({ version: 1, name: "", background: "#191922", duration: 1, fps: 30, aspect: 16 / 9, objects: [], cameras: [defaultCameraDesc()], activeCameraId: defaultCameraDesc().id, actions: [], onFrameScripts: [] });
 
     this.editorCamera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000);
     this.editorCamera.position.set(10, 8, 12);

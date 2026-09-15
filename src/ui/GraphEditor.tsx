@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useStore, type KeyTarget } from "../state/store";
 import { useT } from "../i18n";
-import { activeCameraOf, type CameraKey, type KeyVec3, type SceneDocument, type TransformKey, type Vec3 } from "../core/types";
+import { activeCameraOf, cameraKeysOf, objectKeysOf, type CameraKey, type KeyVec3, type SceneDocument, type TransformKey, type Vec3 } from "../core/types";
 
 type AnyKey = TransformKey | CameraKey;
 
@@ -47,7 +47,7 @@ function objectChannels(objectId: string, basePos: Vec3, baseRot: Vec3, baseScl:
     { i: 2, c: "#38bdf8" },
   ];
   const keyAt = (doc: SceneDocument, atT: number): TransformKey | undefined =>
-    (doc.tracks[objectId] ?? []).find((k) => Math.abs(k.t - atT) < 1e-4);
+    objectKeysOf(doc, objectId).find((k) => Math.abs(k.t - atT) < 1e-4);
   const chans: ChannelDef[] = [];
   const groups: Array<{ group: string; prefix: string; sel: (k: TransformKey) => KeyVec3 | undefined; base: Vec3 }> = [
     { group: "Position", prefix: "pos", sel: (k) => k.position, base: basePos },
@@ -92,7 +92,7 @@ function cameraChannels(cameraId: string): ChannelDef[] {
   ];
   const camOf = (doc: SceneDocument) => doc.cameras.find((c) => c.id === cameraId);
   const keyAt = (doc: SceneDocument, atT: number): CameraKey | undefined =>
-    doc.cameraKeys.find((k) => k.cameraId === cameraId && Math.abs(k.t - atT) < 1e-4);
+    cameraKeysOf(doc, cameraId).find((k) => Math.abs(k.t - atT) < 1e-4);
   const chans: ChannelDef[] = [];
   // Channel ids embed the camera id so selections never mix two cameras.
   const groups: Array<{ group: string; prefix: string; sel: (k: CameraKey) => KeyVec3 | undefined; base: (c: import("../core/types").CameraDesc) => Vec3 }> = [
@@ -239,7 +239,8 @@ export function GraphEditor() {
   }, []);
 
   const target: KeyTarget = effectiveKind === "camera" ? { cameraId: camId } : { objectId: selectedObj!.id };
-  const keys: AnyKey[] = effectiveKind === "camera" ? doc.cameraKeys.filter((k) => k.cameraId === camId) : doc.tracks[selectedObj!.id] ?? [];
+  // Keys of the target owner's ACTIVE action — the same action edits write to.
+  const keys: AnyKey[] = effectiveKind === "camera" ? cameraKeysOf(doc, camId) : objectKeysOf(doc, selectedObj!.id);
   const channels = useMemo(
     () =>
       effectiveKind === "camera"
@@ -411,9 +412,7 @@ export function GraphEditor() {
     ];
     const clampT = (v: number) => Math.min(Math.max(v, 0), doc.duration);
     const keysOf = (d: SceneDocument) =>
-      "cameraId" in target
-        ? d.cameraKeys.filter((k) => k.cameraId === target.cameraId)
-        : d.tracks[(target as { objectId: string }).objectId] ?? [];
+      "cameraId" in target ? cameraKeysOf(d, target.cameraId) : objectKeysOf(d, (target as { objectId: string }).objectId);
     const startX = e.clientX;
     const startY = e.clientY;
     // Start-of-drag values (display units) and actual current times: every

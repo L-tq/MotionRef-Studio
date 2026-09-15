@@ -37,6 +37,8 @@ export interface ObjectDesc {
   /** Hex color, e.g. "#ff8800". */
   color: string;
   visible: boolean;
+  /** Which of this object's actions is ACTIVE (evaluated/edited). */
+  activeActionId?: string;
 }
 
 /** A keyframe for one object. Only the properties present are keyed; within a
@@ -73,6 +75,31 @@ export interface CameraState {
   fov: number;
 }
 
+/** A named keyframe group owned by ONE object (Blender-style action). */
+export interface ObjectActionDesc {
+  id: string;
+  name: string;
+  kind: "object";
+  objectId: string;
+  /** This action's keyframes, sorted by t. */
+  keys: TransformKey[];
+}
+
+/** A named keyframe group owned by ONE scene camera. */
+export interface CameraActionDesc {
+  id: string;
+  name: string;
+  kind: "camera";
+  cameraId: string;
+  /** This action's keyframes, sorted by t. */
+  keys: CameraKey[];
+}
+
+export type ActionDesc = ObjectActionDesc | CameraActionDesc;
+
+/** Owner handle shared by the action helpers: `{ objectId }` or `{ cameraId }`. */
+export type ActionOwner = { objectId: string } | { cameraId: string };
+
 /** A named scene camera (Blender-style multi-camera support). */
 export interface CameraDesc {
   id: string;
@@ -82,6 +109,8 @@ export interface CameraDesc {
   target: Vec3;
   /** Vertical field of view in degrees. */
   fov: number;
+  /** Which of this camera's actions is ACTIVE (evaluated/edited). */
+  activeActionId?: string;
 }
 
 export interface SceneDocument {
@@ -102,11 +131,10 @@ export interface SceneDocument {
   cameras: CameraDesc[];
   /** id of the camera used for preview/snapshot/export (Blender "active camera"). */
   activeCameraId: string;
-  /** Camera keyframes for all cameras, kept sorted by t; each key names its
-   *  camera via `cameraId`. */
-  cameraKeys: CameraKey[];
-  /** Per-object keyframe tracks, keyed by object id. */
-  tracks: Record<string, TransformKey[]>;
+  /** Named keyframe actions (Blender-style). Each action belongs to exactly one
+   *  owner — an object or a camera — and only an owner's ACTIVE action
+   *  evaluates; owners without an action use their base pose. */
+  actions: ActionDesc[];
   /** Serialized onFrame hook sources, run in order every evaluated frame. */
   onFrameScripts: string[];
 }
@@ -145,8 +173,7 @@ export function createEmptyDocument(name = "Untitled"): SceneDocument {
     objects: [],
     cameras: [defaultCameraDesc()],
     activeCameraId: DEFAULT_CAMERA_ID,
-    cameraKeys: [],
-    tracks: {},
+    actions: [],
     onFrameScripts: [],
   };
 }
@@ -156,9 +183,48 @@ export function activeCameraOf(doc: SceneDocument): CameraDesc {
   return doc.cameras.find((c) => c.id === doc.activeCameraId) ?? doc.cameras[0];
 }
 
-/** The keyframes of one camera within the shared, time-sorted cameraKeys list. */
+/** All actions owned by an object or camera (document order). */
+export function actionsOfOwner(doc: SceneDocument, owner: ActionOwner): ActionDesc[] {
+  return "objectId" in owner
+    ? doc.actions.filter((a): a is ObjectActionDesc => a.kind === "object" && a.objectId === owner.objectId)
+    : doc.actions.filter((a): a is CameraActionDesc => a.kind === "camera" && a.cameraId === owner.cameraId);
+}
+
+/** An owner's ACTIVE action: an explicit actionId wins (when it belongs to the
+ *  owner), else the owner's `activeActionId`, else its first action. Null when
+ *  the owner has no actions at all. */
+export function activeActionOfOwner(doc: SceneDocument, owner: ActionOwner, actionId?: string): ActionDesc | null {
+  const owned = actionsOfOwner(doc, owner);
+  if (actionId) {
+    const hit = owned.find((a) => a.id === actionId);
+    if (hit) return hit;
+  }
+  const activeId =
+    "objectId" in owner
+      ? doc.objects.find((o) => o.id === owner.objectId)?.activeActionId
+      : doc.cameras.find((c) => c.id === owner.cameraId)?.activeActionId;
+  return owned.find((a) => a.id === activeId) ?? owned[0] ?? null;
+}
+
+/** An object's evaluated keyframes: its ACTIVE action's keys ([] when unkeyed). */
+export function objectKeysOf(doc: SceneDocument, objectId: string): TransformKey[] {
+  const act = activeActionOfOwner(doc, { objectId });
+  return act && act.kind === "object" ? act.keys : [];
+}
+
+/** A camera's evaluated keyframes: its ACTIVE action's keys ([] when unkeyed). */
 export function cameraKeysOf(doc: SceneDocument, cameraId: string): CameraKey[] {
-  return doc.cameraKeys.filter((k) => k.cameraId === cameraId);
+  const act = activeActionOfOwner(doc, { cameraId });
+  return act && act.kind === "camera" ? act.keys : [];
+}
+
+/** Next free default action name for an owner: "Action", "Action 2", … */
+export function defaultActionName(doc: SceneDocument, owner: ActionOwner): string {
+  const owned = actionsOfOwner(doc, owner);
+  if (!owned.some((a) => a.name === "Action")) return "Action";
+  let n = 2;
+  while (owned.some((a) => a.name === `Action ${n}`)) n += 1;
+  return `Action ${n}`;
 }
 
 /** Accept documents saved before `aspect` existed. */

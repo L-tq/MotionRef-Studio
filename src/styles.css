@@ -585,6 +585,64 @@ input[type="checkbox"] { accent-color: var(--accent); }
 }
 .tl-row:nth-child(even) { background: rgba(255, 255, 255, 0.015); }
 
+/* ---------- action editor (Blender-style) ---------- */
+/* Spans both .timeline-body grid columns (it brings its own label/track grid). */
+.action-editor { display: flex; flex-direction: column; min-height: 0; grid-column: 1 / -1; }
+.action-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: nowrap;
+}
+.action-toolbar select {
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--bg-3);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-s);
+  padding: 2px 4px;
+  flex: 1 1 0;
+  min-width: 70px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.action-toolbar .btn { flex-shrink: 0; padding-left: 7px; padding-right: 7px; }
+.action-columns { flex: 1; min-height: 0; display: grid; grid-template-columns: 168px 1fr; }
+/* Action header rows sit above their channel summary rows; the ACTIVE action
+ * is highlighted, non-active ones are dimmed (their keys still editable). */
+.action-head { font-weight: 600; color: var(--text-1); }
+.action-head.active { color: var(--accent-2); }
+.track-label.dimmed { opacity: 0.5; }
+.action-chan { padding-left: 22px; font-size: 11px; color: var(--text-2); cursor: default; }
+.action-caret {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--text-3);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.action-caret:hover { color: var(--text); }
+.action-head input {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  padding: 1px 4px;
+  background: var(--bg-1, #14141a);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  color: var(--text);
+}
+.action-star { color: #ffc24d; font-size: 11px; flex-shrink: 0; }
+.keyframe.dimmed-key { opacity: 0.45; }
+.keyframe.dimmed-key:hover { opacity: 1; }
+
 .keyframe {
   position: absolute;
   top: 50%;

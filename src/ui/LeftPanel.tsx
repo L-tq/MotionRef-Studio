@@ -158,7 +158,9 @@ export function LeftPanel() {
                     {obj.name}
                   </span>
                 )}
-                {doc.tracks[obj.id]?.length ? <span className="badge" title={t("hierarchy.keyed")}>◆</span> : null}
+                {doc.actions.some((a) => a.kind === "object" && a.objectId === obj.id && a.keys.length > 0) ? (
+                  <span className="badge" title={t("hierarchy.keyed")}>◆</span>
+                ) : null}
                 <button
                   className={`icon-btn ${obj.visible ? "" : "hidden-eye"}`}
                   title={t("hierarchy.visibility")}

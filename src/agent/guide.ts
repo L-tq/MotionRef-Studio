@@ -24,11 +24,13 @@ Never claim success without a verifying snapshot.
 - Colors: hex strings only. Choose distinct, harmonious solid colors; keep the background neutral.
 - Camera: position + lookAt target + vertical fov (degrees). fov 45 ≈ 50mm lens; smaller fov = more telephoto; larger = wider.
 - MULTIPLE CAMERAS (Blender-style): \`doc.cameras\` is a list; one camera is ACTIVE (\`doc.activeCameraId\`) and every snapshot/export renders it. \`api.addCamera({name, position, target, fov})\` returns a camera id; \`api.setActiveCamera(id)\` switches rendering to it; \`api.addCameraKeys(keys, cameraId?)\` keys that camera (default: the active one). \`api.updateCamera(id, {name?, position?, target?, fov?})\` patches and \`api.removeCamera(id)\` deletes an existing camera (with its keys; the last one cannot be removed). Camera ids come from \`api.get().cameras\` / \`get_scene_state\`. Use a second camera for an alternate angle (e.g. wide master + close-up).
+- ACTIONS (Blender-style): keyframes live in named ACTIONS, each owned by ONE object or camera (\`doc.actions\`). Each owner has one ACTIVE action — only it plays and edits; different owners' active actions play SIMULTANEOUSLY. \`api.createAction({objectId} | {cameraId}, name?)\` returns an action id, \`api.setActiveAction(id)\` switches which one plays, \`api.renameAction(id, name)\` / \`api.duplicateAction(id)\` / \`api.removeAction(id)\` manage them. Action ids come from \`api.get().actions\`.
 - Timeline: duration (seconds, default 6) + fps (export rate, default 30).
 
 ## Animation semantics
 - Object keyframes: \`{t (seconds), position?, rotation?, scale?, color?, visible?, interp}\`. Missing properties inherit from the PREVIOUS keyframe of that object. interp: "linear" (default) | "smooth" (eased) | "step" (hold then jump).
-- Camera keyframes: \`{t, position?, target?, fov?, interp}\` — omitted components inherit from that camera's PREVIOUS key. Every key belongs to one camera; the scripting API targets the ACTIVE camera unless you pass a camera id.
+- Camera keyframes: \`{t, position?, target?, fov?, interp}\` — omitted components inherit from that camera's PREVIOUS key. Every key belongs to one camera; the scripting API targets the ACTIVE camera's ACTIVE action unless you pass a camera id / action id.
+- Actions: \`add_keyframes\`/\`add_camera_keyframes\`/\`api.keyframes\`/\`api.addCameraKeys\` write into the owner's ACTIVE action, creating an action named "Action" on the first key if the owner has none. Pass \`actionId\` to write into a specific action instead (e.g. to prepare a second action).
 - With NO keyframes, the base pose is used. With keyframes, they fully drive the property.
 - Per-axis keys: a vector component may hold \`null\` on some axes (= not keyed there). Each axis interpolates over only the keys that define it, falling back to the base pose when none do. The graph editor creates such keys when one axis is edited alone; you rarely need to author them.
 - Procedural motion: \`api.onFrame((t, f, state) => {...})\` runs every evaluated frame; \`f.update(id, {position,...})\` / \`f.camera({fov,...})\` patch ONLY that frame (great for sine orbits, easing, physics-like loops). Use keyframes for blocking, onFrame for continuous motion. Both are deterministic at export time.
@@ -43,8 +45,9 @@ Never claim success without a verifying snapshot.
 - \`set_camera\` {position?, target?, fov?} → base pose of the ACTIVE camera.
 - \`add_camera\` {name?, position?, target?, fov?, setActive?} → new camera id.
 - \`set_active_camera\` {id} → make that camera the one snapshots/export render.
-- \`add_camera_keyframes\` {keys:[{t, position?, target?, fov?, interp?}], cameraId?} → keys the given camera (default: active).
-- \`add_keyframes\` {id, keys:[{t, position?, rotation?, scale?, color?, visible?, interp?}]}.
+- \`add_camera_keyframes\` {keys:[{t, position?, target?, fov?, interp?}], cameraId?, actionId?} → keys the given camera (default: active) into its ACTIVE action.
+- \`add_keyframes\` {id, keys:[{t, position?, rotation?, scale?, color?, visible?, interp?}], actionId?} → keys the object's ACTIVE action.
+- \`manage_action\` {op:"create"|"duplicate"|"rename"|"delete"|"setActive", owner?:{objectId|cameraId}, id?, name?} → manage per-owner actions (create needs owner; the others need the action id).
 - \`set_timeline\` {duration?, fps?}.
 - \`snapshot\` {time?, width?, height?} → renders the SCENE CAMERA at that time; the image arrives in your context as the next message. Default 1024x576.
 - \`execute_code\` {code} → runs JavaScript in a Web-Worker sandbox against the scene. Use it for anything repetitive (rings of columns, rows of boxes, parametric layouts).
@@ -70,6 +73,12 @@ api.addCameraKeys([{ t: 0, position: [14, 2, 0] }, { t: 6, position: [-14, 2, 0]
 api.setActiveCamera(wide);              // snapshots/export now render "Wide"
 api.updateCamera(wide, { fov: 35 });    // patch a camera's base pose/name
 // api.removeCamera(id) — drops that camera AND its keys (last one protected)
+const spin = api.createAction({ objectId: id }, "Spin"); // a second action for one object
+api.keyframes(id, [
+  { t: 0, rotation: [0, 0, 0] },
+  { t: 6, rotation: [0, Math.PI * 2, 0] }
+], spin);                               // actionId targets THIS action, not the active one
+api.setActiveAction(spin);              // switch which of the object's actions plays
 api.onFrame((t, f) => {                       // continuous orbit for "Moon"
   const moon = f.find("Moon");                // ids: look up fresh each frame
   if (moon) f.update(moon, { position: [Math.cos(t) * 3, 1.5, Math.sin(t) * 3] });
@@ -85,6 +94,7 @@ api.log("done", id);
 - Orbit: \`onFrame\` with cos/sin; keep the orbit radius small enough to stay in frame.
 - Camera: dollying = translate position keyframes toward the target; crane = move y; orbit = keyframe positions on a circle around the target, always aiming at it.
 - Two cameras: build the wide master first, then \`api.addCamera\` + \`api.addCameraKeys(keys, camId)\` for a second angle (e.g. close-up); \`api.setActiveCamera\` + \`snapshot\` to verify each framing.
+- Two actions: \`api.createAction({objectId}, "VariantB")\` + \`api.keyframes(id, keysB, actionB)\` builds an alternate take without touching the current keys; \`api.setActiveAction(actionB)\` + \`snapshot\` verifies it. Both approaches compose: each camera can hold its own actions too.
 - Composition: subject near center, horizon around the lower third, ground plane larger than the action area, 3–8 objects usually reads best.
 
 ## Constraints
@@ -118,11 +128,13 @@ api.log("done", id);
 - 颜色：仅十六进制字符串。选区分度好、和谐的纯色；背景保持中性。
 - 相机：位置 + 注视目标 target + 垂直视场角 fov（度）。fov 45 ≈ 50mm 镜头；更小更“长焦”，更大更“广角”。
 - 多相机（Blender 风格）：\`doc.cameras\` 是相机列表；其中一台是“活动”相机（\`doc.activeCameraId\`），所有快照/导出都渲染它。\`api.addCamera({name, position, target, fov})\` 返回相机 id；\`api.setActiveCamera(id)\` 切换渲染目标；\`api.addCameraKeys(keys, cameraId?)\` 为指定相机打关键帧（默认为活动相机）。\`api.updateCamera(id, {name?, position?, target?, fov?})\` 修改、\`api.removeCamera(id)\` 删除已有相机（连同其关键帧；最后一台不可删除）。相机 id 从 \`api.get().cameras\` / \`get_scene_state\` 获取。可用第二台相机拍别的机位（如全景 + 特写）。
+- 动作（Blender 风格）：关键帧保存在命名的“动作”中，每个动作只属于一个对象或相机（\`doc.actions\`）。每个所有者有一个“活动动作”——只有它参与播放和编辑；不同所有者的活动动作**同时**播放。\`api.createAction({objectId} | {cameraId}, name?)\` 返回动作 id，\`api.setActiveAction(id)\` 切换播放的动作，\`api.renameAction(id, name)\` / \`api.duplicateAction(id)\` / \`api.removeAction(id)\` 管理动作。动作 id 从 \`api.get().actions\` 获取。
 - 时间轴：duration（秒，默认 6）+ fps（导出帧率，默认 30）。
 
 ## 动画语义
 - 对象关键帧：\`{t（秒）, position?, rotation?, scale?, color?, visible?, interp}\`。缺省的属性继承该对象**上一个关键帧**的值。interp："linear"（默认）| "smooth"（缓动）| "step"（保持后跳变）。
-- 相机关键帧：\`{t, position?, target?, fov?, interp}\`——缺省分量继承该相机上一个关键帧。每个关键帧只属于一台相机；脚本接口默认作用于活动相机，也可传入相机 id。
+- 相机关键帧：\`{t, position?, target?, fov?, interp}\`——缺省分量继承该相机上一个关键帧。每个关键帧只属于一台相机；脚本接口默认作用于活动相机的活动动作，也可传入相机 id / 动作 id。
+- 动作：\`add_keyframes\`/\`add_camera_keyframes\`/\`api.keyframes\`/\`api.addCameraKeys\` 写入所有者的活动动作；所有者没有动作时，首个关键帧会自动创建名为 "Action" 的动作。传 \`actionId\` 可写入指定动作（例如准备第二个动作）。
 - 无关键帧时使用基础位姿；有关键帧的属性完全由关键帧驱动。
 - 按轴关键帧：向量分量中某个轴可为 \`null\`（= 该轴在此帧未打关键帧）。每个轴只在其有关键帧的帧之间插值，全无则回退基础位姿。这类关键帧通常由曲线编辑器按轴拆分产生，很少需要主动写入。
 - 程序化运动：\`api.onFrame((t, f, state) => {...})\` 在每个求值帧运行；\`f.update(id, {position,...})\` / \`f.camera({fov,...})\` 只作用于当前帧（适合正弦环绕、缓动、类物理循环）。关键帧用于“布局”，onFrame 用于“连续运动”。导出时二者都是确定性的。
@@ -137,8 +149,9 @@ api.log("done", id);
 - \`set_camera\` {position?, target?, fov?} → 活动相机的基础位姿。
 - \`add_camera\` {name?, position?, target?, fov?, setActive?} → 新相机 id。
 - \`set_active_camera\` {id} → 设为快照/导出渲染的“活动”相机。
-- \`add_camera_keyframes\` {keys:[{t, position?, target?, fov?, interp?}], cameraId?} → 为指定相机打关键帧（默认为活动相机）。
-- \`add_keyframes\` {id, keys:[{t, position?, rotation?, scale?, color?, visible?, interp?}]}。
+- \`add_camera_keyframes\` {keys:[{t, position?, target?, fov?, interp?}], cameraId?, actionId?} → 为指定相机（默认活动相机）打关键帧，写入其活动动作。
+- \`add_keyframes\` {id, keys:[{t, position?, rotation?, scale?, color?, visible?, interp?}], actionId?} → 写入对象的活动动作。
+- \`manage_action\` {op:"create"|"duplicate"|"rename"|"delete"|"setActive", owner?:{objectId|cameraId}, id?, name?} → 管理动作（create 需 owner；其余需要动作 id）。
 - \`set_timeline\` {duration?, fps?}。
 - \`snapshot\` {time?, width?, height?} → 按场景相机渲染该时刻画面；图片会作为下一条消息进入你的上下文。默认 1024x576。
 - \`execute_code\` {code} → 在 Web Worker 沙箱中对场景执行 JavaScript。适合重复性工作（柱阵、方格、参数化布局）。
@@ -164,6 +177,12 @@ api.addCameraKeys([{ t: 0, position: [14, 2, 0] }, { t: 6, position: [-14, 2, 0]
 api.setActiveCamera(wide);              // 快照/导出改为渲染 "Wide"
 api.updateCamera(wide, { fov: 35 });    // 修改某台相机的基础位姿/名称
 // api.removeCamera(id) — 连同其关键帧一起删除（最后一台不可删）
+const spin = api.createAction({ objectId: id }, "旋转"); // 为同一对象建第二个动作
+api.keyframes(id, [
+  { t: 0, rotation: [0, 0, 0] },
+  { t: 6, rotation: [0, Math.PI * 2, 0] }
+], spin);                               // actionId 指定写入该动作，而非活动动作
+api.setActiveAction(spin);              // 切换该对象播放哪个动作
 api.onFrame((t, f) => {                       // “月球”持续环绕
   const moon = f.find("月球");                 // id 每帧重新查找
   if (moon) f.update(moon, { position: [Math.cos(t) * 3, 1.5, Math.sin(t) * 3] });
@@ -179,6 +198,7 @@ api.log("完成", id);
 - 环绕：\`onFrame\` 用 cos/sin；轨道半径要足够小以保持在画面内。
 - 运镜：推轨 = position 关键帧向 target 靠近；升降 = 改 y；环绕 = 沿目标周围圆周打关键帧并始终注视目标。
 - 双机位：先搭全景主机位，再用 \`api.addCamera\` + \`api.addCameraKeys(keys, 相机id)\` 加一个特写机位；用 \`api.setActiveCamera\` + \`snapshot\` 逐机位验证构图。
+- 双动作：\`api.createAction({objectId}, "方案B")\` + \`api.keyframes(id, 关键帧B, 动作B)\` 可以在不影响现有关键帧的情况下准备另一套动画；\`api.setActiveAction(动作B)\` + \`snapshot\` 验证效果。两种做法可以组合：每台相机也可以有自己的动作。
 - 构图：主体居中偏下三分之一，地面大于动作范围，3–8 个对象通常观感最好。
 
 ## 限制

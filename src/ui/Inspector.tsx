@@ -1,6 +1,6 @@
 import { evalCameraById } from "../core/animation";
 import { ASPECT_PRESETS, aspectLabel, clampAspect, focalToFov, fovToFocal, FOCAL_PRESETS } from "../core/cameraMath";
-import { docAspect, specOf, type CameraDesc, type ObjectDesc, type Vec3 } from "../core/types";
+import { docAspect, actionsOfOwner, activeActionOfOwner, specOf, type CameraDesc, type ObjectDesc, type Vec3 } from "../core/types";
 import { useStore } from "../state/store";
 import { getLocale, useT } from "../i18n";
 import { useState } from "react";
@@ -42,7 +42,13 @@ function ObjectInspector({ obj }: { obj: ObjectDesc }) {
   const deleteObjects = useStore((s) => s.deleteObjects);
   const setKeyAtPlayhead = useStore((s) => s.setKeyAtPlayhead);
   const clearTrack = useStore((s) => s.clearTrack);
-  const track = useStore((s) => s.doc.tracks[obj.id]);
+  const createAction = useStore((s) => s.createAction);
+  const deleteAction = useStore((s) => s.deleteAction);
+  const setActiveAction = useStore((s) => s.setActiveAction);
+  const doc = useStore((s) => s.doc);
+  const actions = actionsOfOwner(doc, { objectId: obj.id });
+  const action = activeActionOfOwner(doc, { objectId: obj.id });
+  const hasKeys = actions.some((a) => a.keys.length > 0);
   const spec = specOf(obj.type);
 
   const patch = (fn: (o: ObjectDesc) => void, label = "inspect") =>
@@ -55,7 +61,7 @@ function ObjectInspector({ obj }: { obj: ObjectDesc }) {
     <div className="insp-section">
       <h4>
         {t("inspector.object")}: {obj.name}
-        {track?.length ? <span className="chip">{t("inspector.keyedBadge")}</span> : null}
+        {hasKeys ? <span className="chip">{t("inspector.keyedBadge")}</span> : null}
       </h4>
       <div className="field">
         <label>{t("inspector.name")}</label>
@@ -127,7 +133,7 @@ function ObjectInspector({ obj }: { obj: ObjectDesc }) {
         <button className="btn small" onClick={() => setKeyAtPlayhead(obj.id)}>
           ◆ {t("inspector.keyAtPlayhead")}
         </button>
-        {track?.length ? (
+        {hasKeys ? (
           <button className="btn small danger" onClick={() => clearTrack(obj.id)}>
             {t("inspector.clearTrack")}
           </button>
@@ -135,6 +141,34 @@ function ObjectInspector({ obj }: { obj: ObjectDesc }) {
         <span className="spacer" style={{ flex: 1 }} />
         <button className="btn small danger" onClick={() => deleteObjects([obj.id])}>
           {t("common.delete")}
+        </button>
+      </div>
+      {/* Actions (Blender-style): pick the ACTIVE one; manage in the Action Editor. */}
+      <div className="insp-row" style={{ gap: 4 }}>
+        <label style={{ flexShrink: 0 }}>{t("action.title")}</label>
+        <select
+          value={action?.id ?? ""}
+          title={t("action.active")}
+          onChange={(e) => setActiveAction(e.target.value)}
+          style={{ flex: 1, minWidth: 0 }}
+        >
+          {actions.length === 0 && <option value="">—</option>}
+          {actions.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.name} ({a.keys.length})
+            </option>
+          ))}
+        </select>
+        <button className="btn small" title={t("action.new")} onClick={() => createAction({ objectId: obj.id })}>
+          ＋
+        </button>
+        <button
+          className="btn small danger"
+          title={t("action.delete")}
+          disabled={!action}
+          onClick={() => action && deleteAction(action.id)}
+        >
+          🗑
         </button>
       </div>
     </div>
@@ -154,6 +188,9 @@ function CameraInspector() {
   const setActiveCamera = useStore((s) => s.setActiveCamera);
   const camPanelSel = useStore((s) => s.camPanelSel);
   const setUi = useStore((s) => s.setUi);
+  const createAction = useStore((s) => s.createAction);
+  const deleteAction = useStore((s) => s.deleteAction);
+  const setActiveAction = useStore((s) => s.setActiveAction);
   const [focalInput, setFocalInput] = useState<number | null>(null);
   const [aspectInput, setAspectInput] = useState<number | null>(null);
 
@@ -163,7 +200,9 @@ function CameraInspector() {
   const ev = evalCameraById(doc, camDesc.id, playhead);
   const focal = fovToFocal(ev.fov);
   const aspect = docAspect(doc);
-  const keyCount = doc.cameraKeys.filter((k) => k.cameraId === camDesc.id).length;
+  const camActions = actionsOfOwner(doc, { cameraId: camDesc.id });
+  const camAction = activeActionOfOwner(doc, { cameraId: camDesc.id });
+  const keyCount = camActions.reduce((n, a) => n + a.keys.length, 0);
 
   const patchCam = (fn: (c: CameraDesc) => void, label: string) =>
     mutateDoc(label, (d) => {
@@ -281,6 +320,34 @@ function CameraInspector() {
       <div className="insp-row">
         <button className="btn small" onClick={() => setCameraKeyAtPlayhead(camDesc.id)}>
           ◆ {t("timeline.setCameraKey")}
+        </button>
+      </div>
+      {/* Camera actions: pick the ACTIVE one; manage in the Action Editor. */}
+      <div className="insp-row" style={{ gap: 4 }}>
+        <label style={{ flexShrink: 0 }}>{t("action.title")}</label>
+        <select
+          value={camAction?.id ?? ""}
+          title={t("action.active")}
+          onChange={(e) => setActiveAction(e.target.value)}
+          style={{ flex: 1, minWidth: 0 }}
+        >
+          {camActions.length === 0 && <option value="">—</option>}
+          {camActions.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.name} ({a.keys.length})
+            </option>
+          ))}
+        </select>
+        <button className="btn small" title={t("action.new")} onClick={() => createAction({ cameraId: camDesc.id })}>
+          ＋
+        </button>
+        <button
+          className="btn small danger"
+          title={t("action.delete")}
+          disabled={!camAction}
+          onClick={() => camAction && deleteAction(camAction.id)}
+        >
+          🗑
         </button>
       </div>
       <div className="field">

@@ -1,5 +1,7 @@
-/** A small showcase scene: bouncing ball + orbiting companion + camera move. */
-import { createEmptyDocument, newId, type SceneDocument } from "./types";
+/** A small showcase scene: bouncing ball + orbiting companion + camera move.
+ *  Demonstrates actions too: the ball owns "Bounce" (active) and "Spin"
+ *  (inactive — switch to it in the Action Editor), the camera owns "Fly". */
+import { createEmptyDocument, newId, type CameraActionDesc, type ObjectActionDesc, type SceneDocument } from "./types";
 
 export function demoDocument(): SceneDocument {
   const doc = createEmptyDocument("Demo — Bounce & Orbit");
@@ -31,18 +33,38 @@ export function demoDocument(): SceneDocument {
     color: "#ff5c7c",
     visible: true,
   });
-  doc.tracks[ball] = [
-    { t: 0, position: [-4, 4, 0], scale: [1, 1, 1], color: "#ff5c7c", interp: "linear" },
-    { t: 0.75, position: [-4, 0.6, 0], scale: [1.25, 0.7, 1.25], interp: "smooth" },
-    { t: 1.0, position: [-4, 0.6, 0], scale: [1, 1, 1], interp: "linear" },
-    { t: 1.8, position: [-1.4, 2.6, 0], interp: "linear" },
-    { t: 2.5, position: [0, 0.6, 0], scale: [1.25, 0.7, 1.25], interp: "smooth" },
-    { t: 2.75, position: [0, 0.6, 0], scale: [1, 1, 1], interp: "linear" },
-    { t: 3.6, position: [2, 3.4, 0], interp: "linear" },
-    { t: 4.25, position: [3.4, 0.6, 0], scale: [1.25, 0.7, 1.25], interp: "smooth" },
-    { t: 4.5, position: [3.4, 0.6, 0], scale: [1, 1, 1], interp: "linear" },
-    { t: 6, position: [3.4, 0.6, 0], rotation: [0, Math.PI * 2, 0], interp: "linear" },
-  ];
+  const bounce: ObjectActionDesc = {
+    id: newId("act"),
+    name: "Bounce",
+    kind: "object",
+    objectId: ball,
+    keys: [
+      { t: 0, position: [-4, 4, 0], scale: [1, 1, 1], color: "#ff5c7c", interp: "linear" },
+      { t: 0.75, position: [-4, 0.6, 0], scale: [1.25, 0.7, 1.25], interp: "smooth" },
+      { t: 1.0, position: [-4, 0.6, 0], scale: [1, 1, 1], interp: "linear" },
+      { t: 1.8, position: [-1.4, 2.6, 0], interp: "linear" },
+      { t: 2.5, position: [0, 0.6, 0], scale: [1.25, 0.7, 1.25], interp: "smooth" },
+      { t: 2.75, position: [0, 0.6, 0], scale: [1, 1, 1], interp: "linear" },
+      { t: 3.6, position: [2, 3.4, 0], interp: "linear" },
+      { t: 4.25, position: [3.4, 0.6, 0], scale: [1.25, 0.7, 1.25], interp: "smooth" },
+      { t: 4.5, position: [3.4, 0.6, 0], scale: [1, 1, 1], interp: "linear" },
+      { t: 6, position: [3.4, 0.6, 0], rotation: [0, Math.PI * 2, 0], interp: "linear" },
+    ],
+  };
+  doc.actions.push(bounce);
+  // A second action for the same object — activate it in the Action Editor.
+  doc.actions.push({
+    id: newId("act"),
+    name: "Spin",
+    kind: "object",
+    objectId: ball,
+    keys: [
+      { t: 0, position: [-3, 0.6, -2], rotation: [0, 0, 0], interp: "smooth" },
+      { t: 3, position: [0, 2.2, 0], rotation: [0, Math.PI * 2, 0], interp: "smooth" },
+      { t: 6, position: [3, 0.6, -2], rotation: [0, Math.PI * 4, 0], interp: "smooth" },
+    ],
+  });
+  doc.objects.find((o) => o.id === ball)!.activeActionId = bounce.id;
 
   const moon = newId();
   doc.objects.push({
@@ -87,11 +109,19 @@ export function demoDocument(): SceneDocument {
 
   doc.cameras = [{ id: "camera", name: "Camera", position: [10, 6, 12], target: [0, 1, 0], fov: 42 }];
   doc.activeCameraId = "camera";
-  doc.cameraKeys = [
-    { t: 0, cameraId: "camera", position: [12, 3, 0.5], target: [0, 1, 0], fov: 38, interp: "smooth" },
-    { t: 3, cameraId: "camera", position: [4, 5, 11], target: [0, 1.2, 0], fov: 42, interp: "smooth" },
-    { t: 6, cameraId: "camera", position: [-6, 7, 9], target: [1, 1, 0], fov: 46, interp: "smooth" },
-  ];
+  const fly: CameraActionDesc = {
+    id: newId("act"),
+    name: "Fly",
+    kind: "camera",
+    cameraId: "camera",
+    keys: [
+      { t: 0, cameraId: "camera", position: [12, 3, 0.5], target: [0, 1, 0], fov: 38, interp: "smooth" },
+      { t: 3, cameraId: "camera", position: [4, 5, 11], target: [0, 1.2, 0], fov: 42, interp: "smooth" },
+      { t: 6, cameraId: "camera", position: [-6, 7, 9], target: [1, 1, 0], fov: 46, interp: "smooth" },
+    ],
+  };
+  doc.actions.push(fly);
+  doc.cameras[0].activeActionId = fly.id;
 
   return doc;
 }

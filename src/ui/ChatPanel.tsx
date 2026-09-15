@@ -440,11 +440,15 @@ const DOCS: Record<"en" | "zh", string> = {
   en: `api.add({type,name?,params?,position?,rotation?,scale?,color?}) -> id
 api.update(id, patch) · api.remove(id) · api.clear() · api.get() · api.list()
 api.find(name) -> id · api.params(type) · api.uniqueName(type)
-api.keyframes(id, [{t, position?, rotation?, scale?, color?, visible?, interp?}])
+api.keyframes(id, [{t, position?, rotation?, scale?, color?, visible?, interp?}], actionId?)
 api.setCamera({position?,target?,fov?}) — ACTIVE camera's base pose
 api.addCamera({name?,position?,target?,fov?}) -> id · api.updateCamera(id, patch) · api.removeCamera(id)
 api.setActiveCamera(id) — what preview/snapshot/export render
-api.addCameraKeys([{t, position?, target?, fov?, interp?}], cameraId?) — default: active
+api.addCameraKeys([{t, position?, target?, fov?, interp?}], cameraId?, actionId?)
+api.createAction({objectId} | {cameraId}, name?) -> id · api.setActiveAction(id)
+api.renameAction(id, name) · api.duplicateAction(id) · api.removeAction(id)
+  — actions are per-owner keyframe groups; keys go to the owner's ACTIVE
+  action (created if missing); only the active action plays
 api.setDuration(s) · api.setFps(f) · api.setAspect(16/9)
 api.onFrame((t, f, state) => {...})  — must be self-contained: resolve ids
   fresh each frame (const id = f.find("Name"); if (id) f.update(id, …));
@@ -454,11 +458,15 @@ api.log(...) — print to the output pane`,
   zh: `api.add({type,name?,params?,position?,rotation?,scale?,color?}) -> id
 api.update(id, patch) · api.remove(id) · api.clear() · api.get() · api.list()
 api.find(name) -> id · api.params(type) · api.uniqueName(type)
-api.keyframes(id, [{t, position?, rotation?, scale?, color?, visible?, interp?}])
+api.keyframes(id, [{t, position?, rotation?, scale?, color?, visible?, interp?}], actionId?)
 api.setCamera({position?,target?,fov?}) — 活动相机的基础位姿
 api.addCamera({name?,position?,target?,fov?}) -> id · api.updateCamera(id, patch) · api.removeCamera(id)
 api.setActiveCamera(id) — 预览/快照/导出渲染的相机
-api.addCameraKeys([{t, position?, target?, fov?, interp?}], cameraId?) — 默认活动相机
+api.addCameraKeys([{t, position?, target?, fov?, interp?}], cameraId?, actionId?)
+api.createAction({objectId} | {cameraId}, name?) -> id · api.setActiveAction(id)
+api.renameAction(id, name) · api.duplicateAction(id) · api.removeAction(id)
+  — 动作是每个所有者（对象/相机）的关键帧组；关键帧写入所有者的活动动作
+  （没有则自动创建）；只有活动动作参与播放
 api.setDuration(s) · api.setFps(f) · api.setAspect(16/9)
 api.onFrame((t, f, state) => {...})  — 必须自包含：每帧重新解析 id
   （const id = f.find("名字"); if (id) f.update(id, …)）；计数存到 state；
@@ -482,7 +490,8 @@ function ScriptTab() {
     if (result.ok && result.doc) {
       store.applyDoc(result.doc, "script-console");
       const doc = useStore.getState().doc;
-      const lines = [`✓ executed — ${doc.objects.length} objects, ${doc.cameraKeys.length} camera keys, ${doc.onFrameScripts.length} onFrame hooks`];
+      const keyCount = doc.actions.reduce((n, a) => n + a.keys.length, 0);
+      const lines = [`✓ executed — ${doc.objects.length} objects, ${doc.actions.length} actions (${keyCount} keys), ${doc.onFrameScripts.length} onFrame hooks`];
       if (result.logs.length) lines.push("", ...result.logs);
       if (result.result && result.result !== "undefined") lines.push("", `→ ${result.result}`);
       setOutput(lines.join("\n"));

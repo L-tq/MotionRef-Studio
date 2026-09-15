@@ -105,6 +105,7 @@ export const en: Record<string, string> = {
   "timeline.mode": "Editor type",
   "timeline.modeTracks": "Keyframe tracks",
   "timeline.modeGraph": "Curve graph editor",
+  "timeline.modeActions": "Action editor",
 
   // Inspector
   "inspector.noSelection": "Nothing selected. Click an object in the viewport.",
@@ -208,6 +209,17 @@ export const en: Record<string, string> = {
   "graph.smooth": "Gaussian-smooth selected keyframes",
   "graph.smoothSigma": "Smoothing σ (kernel width in key count)",
   "graph.hint": "Drag points to edit keys (vertical = value, horizontal = time). Double-click to insert a key. Box-select: drag on empty space (Shift adds). Delete removes the selected points' keys per channel — other properties keep theirs; Esc clears selection.",
+
+  // Action editor (Blender-style per-owner actions)
+  "action.title": "Actions",
+  "action.active": "Active action — the one that plays and edits",
+  "action.new": "New action",
+  "action.duplicate": "Duplicate the active action",
+  "action.delete": "Delete the active action (and its keyframes)",
+  "action.noActions": "No actions yet — press ◆ Set key to create one.",
+  "action.activateHint": "Click to make this the active action",
+  "action.expand": "Show / hide channel summary",
+  "action.target": "Which object or camera's actions are shown",
 
   // Layout
   "layout.resize": "Drag to resize · double-click to reset",

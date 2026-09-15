@@ -8,9 +8,15 @@ import {
   randomPaletteColor,
   specOf,
   activeCameraOf,
+  activeActionOfOwner,
+  actionsOfOwner,
+  defaultActionName,
+  type ActionDesc,
+  type CameraActionDesc,
   type CameraKey,
   type GeometryType,
   type KeyVec3,
+  type ObjectActionDesc,
   type SceneDocument,
   type TransformKey,
   type Vec3,
@@ -35,10 +41,60 @@ export interface ProjectEntry {
   doc: SceneDocument;
 }
 
-/** What a keyframe edit addresses: an object track or one scene camera. */
-export type KeyTarget = { objectId: string } | { cameraId: string };
+/** What a keyframe edit addresses: an object or a scene camera, optionally
+ *  one specific action of that owner (default: the owner's ACTIVE action). */
+export type KeyTarget = { objectId: string; actionId?: string } | { cameraId: string; actionId?: string };
 
 type KeyChan = "position" | "rotation" | "scale" | "target" | "fov";
+
+/** The key list a KeyTarget addresses inside a draft doc: the keys of the
+ *  owner's resolved action (explicit actionId wins, else the ACTIVE action).
+ *  Undefined when the owner has no matching action. */
+function targetActionKeys(draft: SceneDocument, target: KeyTarget): TransformKey[] | CameraKey[] | undefined {
+  const owner = "cameraId" in target ? { cameraId: target.cameraId } : { objectId: target.objectId };
+  const act = activeActionOfOwner(draft, owner, target.actionId);
+  return act?.keys;
+}
+
+/** Resolve — or lazily create — the action a key WRITE addresses (Blender
+ *  auto-creates an action on the first key). Returns null when the owner
+ *  itself does not exist. */
+function ensureTargetAction(draft: SceneDocument, target: KeyTarget): ActionDesc | null {
+  if ("cameraId" in target) {
+    const cam = draft.cameras.find((c) => c.id === target.cameraId);
+    if (!cam) return null;
+    let act = activeActionOfOwner(draft, { cameraId: cam.id }, target.actionId);
+    if (!act) {
+      const created: CameraActionDesc = {
+        id: newId("act"),
+        name: defaultActionName(draft, { cameraId: cam.id }),
+        kind: "camera",
+        cameraId: cam.id,
+        keys: [],
+      };
+      draft.actions.push(created);
+      cam.activeActionId = created.id;
+      act = created;
+    }
+    return act;
+  }
+  const obj = draft.objects.find((o) => o.id === target.objectId);
+  if (!obj) return null;
+  let act = activeActionOfOwner(draft, { objectId: obj.id }, target.actionId);
+  if (!act) {
+    const created: ObjectActionDesc = {
+      id: newId("act"),
+      name: defaultActionName(draft, { objectId: obj.id }),
+      kind: "object",
+      objectId: obj.id,
+      keys: [],
+    };
+    draft.actions.push(created);
+    obj.activeActionId = created.id;
+    act = created;
+  }
+  return act;
+}
 
 /** Null out one axis of a key's vector (or the whole fov); drops the component
  *  when its last axis goes away. Mutates the (draft) key. */
@@ -86,8 +142,9 @@ export interface LayoutState {
   /** Timeline pixels per second. Null until the user zooms; the timeline
    *  then starts fitted to the current width. */
   timelineZoom: number | null;
-  /** Bottom-panel editor type: keyframe rows or the curve graph editor. */
-  timelineMode?: "tracks" | "graph";
+  /** Bottom-panel editor type: keyframe rows, the curve graph editor, or the
+   *  Blender-style action editor. */
+  timelineMode?: "tracks" | "graph" | "actions";
 }
 
 export const DEFAULT_LAYOUT: LayoutState = {
@@ -267,6 +324,17 @@ export interface AppActions {
   ): void;
   clearTrack(objectId: string): void;
   applyDoc(doc: SceneDocument, label: string): void;
+
+  // Actions (Blender-style Action Editor)
+  /** Create an empty action for an object/camera and make it its active action. */
+  createAction(target: KeyTarget, name?: string): void;
+  renameAction(id: string, name: string): void;
+  /** Copy an action (keys included); the copy becomes the owner's active action. */
+  duplicateAction(id: string): void;
+  /** Delete an action and its keyframes; the owner's active falls back to its first remaining action. */
+  deleteAction(id: string): void;
+  /** Make this action the active one for its owner (what plays/edits). */
+  setActiveAction(id: string): void;
 
   // Cameras (Blender-style multi-camera)
   /** Add a scene camera above the active one; returns its id and selects it. */
@@ -467,7 +535,7 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     const idSet = new Set(ids);
     get().mutateDoc("delete-object", (draft) => {
       draft.objects = draft.objects.filter((o) => !idSet.has(o.id));
-      for (const id of ids) delete draft.tracks[id];
+      draft.actions = draft.actions.filter((a) => !(a.kind === "object" && idSet.has(a.objectId)));
     });
     set((s) => ({ selection: s.selection.filter((id) => !idSet.has(id)) }));
   },
@@ -482,8 +550,20 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
       copy.name = `${src.name} copy`;
       copy.position = [src.position[0] + 1, src.position[1], src.position[2]];
       draft.objects.push(copy);
-      const track = draft.tracks[id];
-      if (track) draft.tracks[copyId] = JSON.parse(JSON.stringify(track));
+      // Copy the source object's actions (fresh ids); the duplicate's active
+      // action is the copy of the source's active one.
+      const srcActiveId = activeActionOfOwner(draft, { objectId: id })?.id ?? null;
+      let copyActiveId: string | undefined;
+      for (const a of draft.actions.slice()) {
+        if (a.kind !== "object" || a.objectId !== id) continue;
+        const copyAct = JSON.parse(JSON.stringify(a)) as ObjectActionDesc;
+        copyAct.id = newId("act");
+        copyAct.objectId = copyId;
+        draft.actions.push(copyAct);
+        if (a.id === srcActiveId) copyActiveId = copyAct.id;
+      }
+      if (copyActiveId) copy.activeActionId = copyActiveId;
+      else delete copy.activeActionId;
     });
     set({ selection: [copyId] });
   },
@@ -493,17 +573,20 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     const state = get();
     const obj = state.doc.objects.find((o) => o.id === id);
     if (!obj) return;
-    const track = state.doc.tracks[id];
-    const hasTrack = !!track?.length;
+    const act = activeActionOfOwner(state.doc, { objectId: id });
+    const keys = act && act.kind === "object" ? act.keys : undefined;
+    const hasTrack = !!keys?.length;
     const t = +state.playhead.toFixed(4);
-    const hasKeyAtT = !!track?.some((k) => Math.abs(k.t - t) < 1e-4);
+    const hasKeyAtT = !!keys?.some((k) => Math.abs(k.t - t) < 1e-4);
     // "Replace" mode only overwrites keys that already exist at the playhead;
     // "Add & Replace" (and plain keyed objects) may also insert new ones.
     const replaceOnly = state.autoKey && state.autoKeyMode === "replace";
     if (hasKeyAtT || (!replaceOnly && (hasTrack || state.autoKey))) {
       state.mutateDoc("pose", (draft) => {
-        const keys = (draft.tracks[id] ??= []);
-        const existing = keys.find((k) => Math.abs(k.t - t) < 1e-4);
+        const target = ensureTargetAction(draft, { objectId: id });
+        if (!target || target.kind !== "object") return;
+        const list = target.keys;
+        const existing = list.find((k) => Math.abs(k.t - t) < 1e-4);
         const basePose = {
           position: [...obj.position] as [number, number, number],
           rotation: [...obj.rotation] as [number, number, number],
@@ -514,8 +597,8 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
         const current = existing ?? { t, ...basePose, interp: "linear" as const };
         const merged = { ...current, t, ...pose };
         if (existing) Object.assign(existing, merged);
-        else keys.push(merged);
-        keys.sort((a, b) => a.t - b.t);
+        else list.push(merged);
+        list.sort((a, b) => a.t - b.t);
       });
     } else {
       state.mutateDoc("pose", (draft) => {
@@ -536,7 +619,9 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     const obj = state.doc.objects.find((o) => o.id === id);
     if (!ev || !obj) return;
     state.mutateDoc("set-key", (draft) => {
-      const keys = (draft.tracks[id] ??= []);
+      const act = ensureTargetAction(draft, { objectId: id });
+      if (!act || act.kind !== "object") return;
+      const keys = act.keys;
       const t = +state.playhead.toFixed(4);
       const existing = keys.find((k) => Math.abs(k.t - t) < 1e-4);
       const entry: TransformKey = {
@@ -560,8 +645,10 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     const cameraId = cameraIdArg ?? activeCameraOf(state.doc).id;
     const cam = evalCameraById(state.doc, cameraId, state.playhead);
     state.mutateDoc("cam-key", (draft) => {
+      const act = ensureTargetAction(draft, { cameraId });
+      if (!act || act.kind !== "camera") return;
       const t = +state.playhead.toFixed(4);
-      const existing = draft.cameraKeys.find((k) => k.cameraId === cameraId && Math.abs(k.t - t) < 1e-4);
+      const existing = act.keys.find((k) => Math.abs(k.t - t) < 1e-4);
       const entry = {
         t,
         cameraId,
@@ -570,24 +657,21 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
         fov: cam.fov,
         interp: (existing?.interp ?? "linear") as "linear",
       };
-      const idx = existing ? draft.cameraKeys.indexOf(existing) : -1;
-      if (idx >= 0) draft.cameraKeys[idx] = entry;
-      else draft.cameraKeys.push(entry);
-      draft.cameraKeys.sort((a, b) => a.t - b.t);
+      const idx = existing ? act.keys.indexOf(existing) : -1;
+      if (idx >= 0) act.keys[idx] = entry;
+      else act.keys.push(entry);
+      act.keys.sort((a, b) => a.t - b.t);
     });
   },
 
   retimeKey(target, fromT, toT) {
     const clamped = Math.min(Math.max(+toT.toFixed(4), 0), get().doc.duration);
     get().mutateDoc("retime-key", (draft) => {
-      const keys = "cameraId" in target
-        ? draft.cameraKeys
-        : draft.tracks[target.objectId];
+      const keys = targetActionKeys(draft, target);
       if (!keys?.length) return;
       let best = -1;
       let bestD = Infinity;
       keys.forEach((k, i) => {
-        if ("cameraId" in target && (k as CameraKey).cameraId !== target.cameraId) return;
         const d = Math.abs(k.t - fromT);
         if (d < bestD) {
           bestD = d;
@@ -603,14 +687,11 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
 
   deleteKey(target, atT) {
     get().mutateDoc("delete-key", (draft) => {
-      const keys = "cameraId" in target
-        ? draft.cameraKeys
-        : draft.tracks[target.objectId];
+      const keys = targetActionKeys(draft, target);
       if (!keys?.length) return;
       let best = -1;
       let bestD = Infinity;
       keys.forEach((k, i) => {
-        if ("cameraId" in target && (k as CameraKey).cameraId !== target.cameraId) return;
         const d = Math.abs(k.t - atT);
         if (d < bestD) {
           bestD = d;
@@ -625,12 +706,10 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     if (!specs.length) return;
     const want = specs.map((s) => ({ chan: s.chan, index: s.index, t: +s.t.toFixed(4) }));
     get().mutateDoc("delete-key", (draft) => {
-      const keys = "cameraId" in target
-        ? draft.cameraKeys
-        : draft.tracks[target.objectId];
+      const keys = targetActionKeys(draft, target);
       if (!keys?.length) return;
       for (const { chan, index, t } of want) {
-        const idx = keys.findIndex((k) => (!("cameraId" in target) || (k as CameraKey).cameraId === target.cameraId) && Math.abs(k.t - t) < 1e-4);
+        const idx = keys.findIndex((k) => Math.abs(k.t - t) < 1e-4);
         if (idx < 0) continue;
         const k = keys[idx] as TransformKey & CameraKey;
         if (chan === "fov" ? k.fov === undefined : !k[chan] || k[chan]![index] == null) continue;
@@ -645,11 +724,9 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     const to = Math.min(Math.max(+toT.toFixed(4), 0), get().doc.duration);
     if (Math.abs(to - from) < 1e-6) return;
     get().mutateDoc("retime-key", (draft) => {
-      const keys = "cameraId" in target
-        ? draft.cameraKeys
-        : draft.tracks[target.objectId];
+      const keys = targetActionKeys(draft, target);
       if (!keys?.length) return;
-      const idx = keys.findIndex((k) => (!("cameraId" in target) || (k as CameraKey).cameraId === target.cameraId) && Math.abs(k.t - from) < 1e-4);
+      const idx = keys.findIndex((k) => Math.abs(k.t - from) < 1e-4);
       if (idx < 0) return;
       const k = keys[idx] as TransformKey & CameraKey;
       let val: number;
@@ -664,7 +741,7 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
       nullKeyAxis(k, chan, index);
       if (keyIsEmpty(k)) keys.splice(idx, 1);
       const ks = keys as Array<TransformKey & CameraKey>;
-      const dst = ks.find((kk) => (!("cameraId" in target) || (kk as CameraKey).cameraId === target.cameraId) && Math.abs(kk.t - to) < 1e-4);
+      const dst = ks.find((kk) => Math.abs(kk.t - to) < 1e-4);
       if (dst) {
         if (chan === "fov") dst.fov = val;
         else {
@@ -688,25 +765,24 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
 
   clearTrack(objectId) {
     get().mutateDoc("clear-track", (draft) => {
-      delete draft.tracks[objectId];
+      // Removes ALL of the object's actions — back to the unkeyed base pose.
+      draft.actions = draft.actions.filter((a) => !(a.kind === "object" && a.objectId === objectId));
+      const obj = draft.objects.find((o) => o.id === objectId);
+      if (obj) delete obj.activeActionId;
     });
   },
 
   setKeyValues(target, atT, patch) {
     get().mutateDoc("edit-key", (draft) => {
-      if ("cameraId" in target) {
-        const key = draft.cameraKeys.find((k) => k.cameraId === target.cameraId && Math.abs(k.t - atT) < 1e-4);
-        if (!key) return;
-        if (patch.position) key.position = [...patch.position];
-        if (patch.target) key.target = [...patch.target];
-        if (patch.fov !== undefined) key.fov = patch.fov;
-      } else {
-        const key = draft.tracks[target.objectId]?.find((k) => Math.abs(k.t - atT) < 1e-4);
-        if (!key) return;
-        if (patch.position) key.position = [...patch.position];
-        if (patch.rotation) key.rotation = [...patch.rotation];
-        if (patch.scale) key.scale = [...patch.scale];
-      }
+      const keys = targetActionKeys(draft, target);
+      if (!keys?.length) return;
+      const key = keys.find((k) => Math.abs(k.t - atT) < 1e-4) as (TransformKey & CameraKey) | undefined;
+      if (!key) return;
+      if (patch.position) key.position = [...patch.position];
+      if (patch.rotation) key.rotation = [...patch.rotation];
+      if (patch.scale) key.scale = [...patch.scale];
+      if (patch.target) key.target = [...patch.target];
+      if (patch.fov !== undefined) key.fov = patch.fov;
     });
   },
 
@@ -717,11 +793,8 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
   smoothKeys(target, points, sigma) {
     if (!points.length || !(sigma > 0)) return;
     get().mutateDoc("smooth-keys", (draft) => {
-      // Only this target's keys are the smoothing neighborhood — for a camera,
-      // other cameras' interleaved keys in the shared list must not contribute.
-      const keys = "cameraId" in target
-        ? draft.cameraKeys.filter((k) => k.cameraId === target.cameraId)
-        : draft.tracks[target.objectId];
+      // Only this target's resolved action is the smoothing neighborhood.
+      const keys = targetActionKeys(draft, target);
       if (!keys?.length) return;
       const weight = (i: number, j: number) => Math.exp(-0.5 * ((i - j) / sigma) ** 2);
       type Comp = "position" | "rotation" | "scale" | "target";
@@ -732,8 +805,8 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
         const x = v ? v[index] : undefined;
         return x === undefined || x === null ? undefined : x;
       };
-      // In-place writes: `ks` may be a filtered view of draft.cameraKeys, and
-      // the elements are the same objects the document stores.
+      // In-place writes: the elements are the same key objects the document
+      // stores; `ks` is the action's own array.
       const writeComp = (i: number, chan: Comp | "fov", index: number, v: number) => {
         const k = ks[i];
         if (chan === "fov") {
@@ -783,20 +856,20 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     const state = get();
     const time = Math.min(Math.max(t, 0), state.doc.duration);
     state.mutateDoc("insert-key", (draft) => {
+      const act = ensureTargetAction(draft, target);
+      if (!act) return;
       if ("cameraId" in target) {
+        if (act.kind !== "camera") return;
+        if (act.keys.some((k) => Math.abs(k.t - time) < 1e-4)) return;
         const cam = evalCameraById(draft, target.cameraId, time);
-        const existing = draft.cameraKeys.find((k) => k.cameraId === target.cameraId && Math.abs(k.t - time) < 1e-4);
-        if (existing) return;
-        draft.cameraKeys.push({ t: +time.toFixed(4), cameraId: target.cameraId, position: cam.position, target: cam.target, fov: cam.fov, interp: "linear" });
-        draft.cameraKeys.sort((a, b) => a.t - b.t);
+        act.keys.push({ t: +time.toFixed(4), cameraId: target.cameraId, position: cam.position, target: cam.target, fov: cam.fov, interp: "linear" });
+        act.keys.sort((a, b) => a.t - b.t);
       } else {
-        const obj = draft.objects.find((o) => o.id === target.objectId);
-        if (!obj) return;
+        if (act.kind !== "object") return;
+        if (act.keys.some((k) => Math.abs(k.t - time) < 1e-4)) return;
         const pose = evaluate(draft, time).objects.get(target.objectId);
-        const existing = (draft.tracks[target.objectId] ?? []).find((k) => Math.abs(k.t - time) < 1e-4);
-        if (existing || !pose) return;
-        const keys = (draft.tracks[target.objectId] ??= []);
-        keys.push({
+        if (!pose) return;
+        act.keys.push({
           t: +time.toFixed(4),
           position: [...pose.position],
           rotation: [...pose.rotation],
@@ -805,8 +878,92 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
           visible: pose.visible,
           interp: "linear",
         });
-        keys.sort((a, b) => a.t - b.t);
+        act.keys.sort((a, b) => a.t - b.t);
       }
+    });
+  },
+
+  // --- actions (Blender-style Action Editor) ---------------------------------
+
+  createAction(target, name) {
+    get().mutateDoc("create-action", (draft) => {
+      if ("cameraId" in target) {
+        const cam = draft.cameras.find((c) => c.id === target.cameraId);
+        if (!cam) return;
+        const act: CameraActionDesc = {
+          id: newId("act"),
+          name: name?.trim().slice(0, 80) || defaultActionName(draft, { cameraId: cam.id }),
+          kind: "camera",
+          cameraId: cam.id,
+          keys: [],
+        };
+        draft.actions.push(act);
+        cam.activeActionId = act.id;
+      } else {
+        const obj = draft.objects.find((o) => o.id === target.objectId);
+        if (!obj) return;
+        const act: ObjectActionDesc = {
+          id: newId("act"),
+          name: name?.trim().slice(0, 80) || defaultActionName(draft, { objectId: obj.id }),
+          kind: "object",
+          objectId: obj.id,
+          keys: [],
+        };
+        draft.actions.push(act);
+        obj.activeActionId = act.id;
+      }
+    });
+  },
+
+  renameAction(id, name) {
+    const clean = name.trim().slice(0, 80);
+    if (!clean) return;
+    get().mutateDoc("rename-action", (draft) => {
+      const act = draft.actions.find((a) => a.id === id);
+      if (act) act.name = clean;
+    });
+  },
+
+  duplicateAction(id) {
+    get().mutateDoc("duplicate-action", (draft) => {
+      const src = draft.actions.find((a) => a.id === id);
+      if (!src) return;
+      const copy = JSON.parse(JSON.stringify(src)) as ActionDesc;
+      copy.id = newId("act");
+      copy.name = `${src.name} copy`;
+      draft.actions.push(copy);
+      // Blender semantics: activating a duplicate links it to the owner.
+      const owner = copy.kind === "object"
+        ? draft.objects.find((o) => o.id === copy.objectId)
+        : draft.cameras.find((c) => c.id === copy.cameraId);
+      if (owner) owner.activeActionId = copy.id;
+    });
+  },
+
+  deleteAction(id) {
+    get().mutateDoc("delete-action", (draft) => {
+      const src = draft.actions.find((a) => a.id === id);
+      if (!src) return;
+      draft.actions = draft.actions.filter((a) => a.id !== id);
+      const owner = src.kind === "object"
+        ? draft.objects.find((o) => o.id === src.objectId)
+        : draft.cameras.find((c) => c.id === src.cameraId);
+      if (owner && owner.activeActionId === id) {
+        const first = draft.actions.find((a) => (src.kind === "object" ? a.kind === "object" && a.objectId === src.objectId : a.kind === "camera" && a.cameraId === src.cameraId));
+        if (first) owner.activeActionId = first.id;
+        else delete owner.activeActionId;
+      }
+    });
+  },
+
+  setActiveAction(id) {
+    get().mutateDoc("set-active-action", (draft) => {
+      const act = draft.actions.find((a) => a.id === id);
+      if (!act) return;
+      const owner = act.kind === "object"
+        ? draft.objects.find((o) => o.id === act.objectId)
+        : draft.cameras.find((c) => c.id === act.cameraId);
+      if (owner) owner.activeActionId = id;
     });
   },
 
@@ -824,14 +981,17 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
   commitCamera(patch, cameraIdArg) {
     const state = get();
     const cameraId = cameraIdArg ?? activeCameraOf(state.doc).id;
-    const camKeys = state.doc.cameraKeys.filter((k) => k.cameraId === cameraId);
+    const act = activeActionOfOwner(state.doc, { cameraId });
+    const camKeys = act && act.kind === "camera" ? act.keys : [];
     const t = +state.playhead.toFixed(4);
     const hasKeyAtT = camKeys.some((k) => Math.abs(k.t - t) < 1e-4);
     const replaceOnly = state.autoKey && state.autoKeyMode === "replace";
     if (hasKeyAtT || (!replaceOnly && (camKeys.length > 0 || state.autoKey))) {
       state.mutateDoc("camera", (draft) => {
+        const target = ensureTargetAction(draft, { cameraId });
+        if (!target || target.kind !== "camera") return;
         const cam = evalCameraById(draft, cameraId, t);
-        const existing = draft.cameraKeys.find((k) => k.cameraId === cameraId && Math.abs(k.t - t) < 1e-4);
+        const existing = target.keys.find((k) => Math.abs(k.t - t) < 1e-4);
         const entry = {
           t,
           cameraId,
@@ -840,10 +1000,10 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
           fov: patch.fov ?? cam.fov,
           interp: (existing?.interp ?? "linear") as "linear",
         };
-        const idx = existing ? draft.cameraKeys.indexOf(existing) : -1;
-        if (idx >= 0) draft.cameraKeys[idx] = entry;
-        else draft.cameraKeys.push(entry);
-        draft.cameraKeys.sort((a, b) => a.t - b.t);
+        const idx = existing ? target.keys.indexOf(existing) : -1;
+        if (idx >= 0) target.keys[idx] = entry;
+        else target.keys.push(entry);
+        target.keys.sort((a, b) => a.t - b.t);
       });
     } else {
       state.mutateDoc("camera", (draft) => {
@@ -876,7 +1036,7 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     get().mutateDoc("remove-camera", (draft) => {
       if (draft.cameras.length <= 1) return;
       draft.cameras = draft.cameras.filter((c) => c.id !== id);
-      draft.cameraKeys = draft.cameraKeys.filter((k) => k.cameraId !== id);
+      draft.actions = draft.actions.filter((a) => !(a.kind === "camera" && a.cameraId === id));
       if (draft.activeCameraId === id) draft.activeCameraId = draft.cameras[0].id;
     });
     if (get().camPanelSel === id) set({ camPanelSel: null });

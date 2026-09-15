@@ -25,6 +25,8 @@ and override everything it does.
   **相机控制** —— 多场景相机 + 活动相机（Blender 风格：预览/快照/导出始终渲染活动相机）、FOV 与 35mm 焦距换算、位置/注视点、时间轴与曲线编辑器中的分相机关键帧、每台相机的编辑器取景线框、实时取景预览。
 - ⏱ **Timeline** — per-object keyframes (position/rotation/scale/color/visibility, linear/smooth/step interpolation), draggable keys, playhead scrubbing, auto-key recording (● Add & Replace / Replace modes: transform an object while the timeline plays and every swept frame gets a key; a recording pass stops at the end instead of looping).
   **时间轴** —— 每对象关键帧（位置/旋转/缩放/颜色/可见性，linear/smooth/step 插值）、可拖动关键帧、播放头擦洗、自动关键帧录制（● 添加并替换 / 仅替换：播放中直接拖动物体即可逐帧录制关键帧；录制播放到末尾自动停止，不循环）。
+- 🎬 **Action editor** — Blender-style actions: keyframes live in named actions owned by one object or camera; each owner has one ACTIVE action (what plays/edits) and different owners' active actions play simultaneously. Manage create/duplicate/rename/delete/activate in the new bottom-panel editor, with an editable dopesheet of every action's channel summary (keys stay draggable/deletable, even on non-active actions).
+  **动作编辑器** —— Blender 风格的动作：关键帧保存在命名动作中，每个动作属于一个对象或相机；每个所有者有一个“活动动作”（参与播放/编辑），不同所有者的活动动作同时播放。在底部面板的新编辑器中创建/复制/重命名/删除/切换动作，可查看所有动作的通道摘要（关键帧仍可拖动/删除，非活动动作也可以）。
 - 📈 **Curve graph editor** — per-channel value curves with box selection (drag on empty space, Shift adds), Select all / Deselect all buttons, multi-key drag in time and value, per-axis Delete/retime (moving or deleting e.g. Position X leaves every other axis and property keyed where it was), and Gaussian smoothing (≈, adjustable σ) applied to exactly the selected points.
   **曲线图表编辑器** —— 按通道显示数值曲线，支持框选（空白处拖动，Shift 追加）、全选/取消全选按钮、多关键点整体调整时间与数值、按轴删除/改时间（移动或删除如位置 X 不影响其他轴和其他属性的关键帧），以及高斯平滑（≈，σ 可调，仅作用于选中的关键点）。
 - ⌨ **Sandboxed scripting** — the agent and you share one Scripting API (`api.add(...)`, `api.keyframes(...)`, `api.onFrame((t, f) => ...)`) running in a Web Worker sandbox (no DOM/network, 5s timeout).
@@ -83,7 +85,7 @@ Inspired by the lightweight core of
 - **Agent Skill Guide** — a bilingual, in-app document (see Settings → preview) that becomes the system prompt and teaches the agent the tools, the Scripting API, animation semantics and the verify-with-snapshots workflow.
 
 Tools: `get_scene_state`, `set_scene`, `add_object`, `update_object`,
-`add_camera`, `set_active_camera`, `set_camera`, `add_camera_keyframes`, `add_keyframes`,
+`add_camera`, `set_active_camera`, `set_camera`, `manage_action`, `add_camera_keyframes`, `add_keyframes`,
 `set_timeline`, `snapshot` (image feedback), `execute_code`.
 
 ## Keyboard shortcuts / 快捷键

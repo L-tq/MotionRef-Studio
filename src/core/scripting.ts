@@ -7,8 +7,8 @@
  *   - persistent (worker / script console): mutations write the SceneDocument.
  *   - overlay: created by animation.ts FrameApi during evaluation instead.
  */
-import type { CameraState, GeometryType, KeyVec3, SceneDocument, TransformKey, Vec3 } from "./types";
-import { activeCameraOf, isGeometryType, newId, specOf } from "./types";
+import type { ActionOwner, CameraState, GeometryType, KeyVec3, SceneDocument, TransformKey, Vec3 } from "./types";
+import { activeActionOfOwner, activeCameraOf, defaultActionName, isGeometryType, newId, specOf, type ActionDesc, type CameraActionDesc, type ObjectActionDesc } from "./types";
 
 export interface ScriptTarget {
   /** Mutating handles over a SceneDocument owned by the caller. */
@@ -47,8 +47,21 @@ export interface ScriptTarget {
   removeCamera(id: string): void;
   /** Make this camera the active one (what preview/export renders). */
   setActiveCamera(id: string): void;
-  addCameraKeys(keys: Array<{ t: number; position?: Vec3; target?: Vec3; fov?: number; interp?: string }>, cameraId?: string): void;
-  addKeyframes(id: string, keys: TransformKey[]): void;
+  /** Create an empty action for an object/camera and make it active; returns its id. */
+  createAction(owner: ActionOwner, name?: string): string;
+  renameAction(id: string, name: string): void;
+  /** Copy an action; the copy becomes its owner's active action. Returns the copy's id. */
+  duplicateAction(id: string): string;
+  /** Delete an action and its keyframes. */
+  removeAction(id: string): void;
+  /** Make this action the active one for its owner. */
+  setActiveAction(id: string): void;
+  addCameraKeys(
+    keys: Array<{ t: number; position?: Vec3; target?: Vec3; fov?: number; interp?: string }>,
+    cameraId?: string,
+    actionId?: string,
+  ): void;
+  addKeyframes(id: string, keys: TransformKey[], actionId?: string): void;
   setDuration(seconds: number): void;
   setFps(fps: number): void;
   setAspect(ratio: number): void;
@@ -194,11 +207,46 @@ export function createScriptingAPI(target: ScriptTarget, log: (...args: unknown[
       target.setActiveCamera(id);
     },
 
+    /** Create an empty action for an object/camera and make it active; returns
+     *  the action id. Only an owner's ACTIVE action evaluates/edits. */
+    createAction(owner: { objectId?: string; cameraId?: string }, name?: string): string {
+      if (!owner || typeof owner !== "object" || (owner.objectId === undefined && owner.cameraId === undefined))
+        throw new Error('api.createAction expects an owner: { objectId: "..." } or { cameraId: "..." }');
+      const normalized: ActionOwner = owner.objectId !== undefined ? { objectId: owner.objectId } : { cameraId: owner.cameraId! };
+      return target.createAction(normalized, typeof name === "string" ? name : undefined);
+    },
+
+    /** Rename an action (id from api.get().actions). */
+    renameAction(id: string, name: string): void {
+      if (typeof id !== "string" || typeof name !== "string") throw new Error("api.renameAction expects (id, name)");
+      target.renameAction(id, name);
+    },
+
+    /** Duplicate an action (keys included); the copy becomes active. Returns its id. */
+    duplicateAction(id: string): string {
+      if (typeof id !== "string") throw new Error("api.duplicateAction expects an action id");
+      return target.duplicateAction(id);
+    },
+
+    /** Delete an action and its keyframes. */
+    removeAction(id: string): void {
+      if (typeof id !== "string") throw new Error("api.removeAction expects an action id");
+      target.removeAction(id);
+    },
+
+    /** Make this action the active one for its owner (what plays). */
+    setActiveAction(id: string): void {
+      if (typeof id !== "string") throw new Error("api.setActiveAction expects an action id");
+      target.setActiveAction(id);
+    },
+
     /** Append camera keyframes: {t, position, target, fov, interp?}. Keys go to
-     *  the given camera, or to the ACTIVE camera when cameraId is omitted. */
+     *  the given camera (or the ACTIVE camera), into that camera's ACTIVE
+     *  action — or into `actionId` when passed. A missing action is created. */
     addCameraKeys(
       keys: Array<{ t: number; position?: Vec3; target?: Vec3; fov?: number; interp?: string }>,
       cameraId?: string,
+      actionId?: string,
     ): void {
       if (!Array.isArray(keys)) throw new Error("api.addCameraKeys expects an array of keys");
       for (const k of keys) {
@@ -209,11 +257,13 @@ export function createScriptingAPI(target: ScriptTarget, log: (...args: unknown[
         if (k.fov !== undefined && (typeof k.fov !== "number" || k.fov <= 0 || k.fov >= 180))
           throw new Error(`Camera key fov must be in (0, 180), got ${String(k.fov)}`);
       }
-      target.addCameraKeys(keys, cameraId);
+      target.addCameraKeys(keys, cameraId, actionId);
     },
 
-    /** Append object keyframes: {t, position?, rotation?, scale?, color?, visible?, interp?}. */
-    keyframes(id: string, keys: TransformKey[]): void {
+    /** Append object keyframes: {t, position?, rotation?, scale?, color?,
+     *  visible?, interp?}. Keys go to the object's ACTIVE action — or into
+     *  `actionId` when passed. A missing action is created. */
+    keyframes(id: string, keys: TransformKey[], actionId?: string): void {
       if (typeof id !== "string" || !Array.isArray(keys))
         throw new Error("api.keyframes expects (id, keys[])");
       for (const k of keys) {
@@ -226,7 +276,7 @@ export function createScriptingAPI(target: ScriptTarget, log: (...args: unknown[
         if (k.interp && !["linear", "step", "smooth"].includes(k.interp))
           throw new Error(`interp must be linear|step|smooth, got "${k.interp}"`);
       }
-      target.addKeyframes(id, keys);
+      target.addKeyframes(id, keys, actionId);
     },
 
     /** Clip duration in seconds. */
@@ -293,6 +343,41 @@ export function createScriptTarget(doc: SceneDocument): ScriptTarget {
     if (!obj) throw new Error(`No object with id "${id}"`);
     return obj;
   };
+  const assertAction = (id: string) => {
+    const act = doc.actions.find((a) => a.id === id);
+    if (!act) throw new Error(`No action with id "${id}"`);
+    return act;
+  };
+  /** The camera/object action a key append should write into: an explicit
+   *  actionId (when it belongs to the owner) wins, else the owner's ACTIVE
+   *  action, else a fresh default action is created and activated. */
+  const resolveKeyAction = (owner: ActionOwner, actionId?: string): ActionDesc => {
+    let act = activeActionOfOwner(doc, owner, actionId);
+    if (!act) {
+      const created =
+        "objectId" in owner
+          ? ({
+              id: newId("act"),
+              name: defaultActionName(doc, owner),
+              kind: "object",
+              objectId: owner.objectId,
+              keys: [],
+            } as ObjectActionDesc)
+          : ({
+              id: newId("act"),
+              name: defaultActionName(doc, owner),
+              kind: "camera",
+              cameraId: owner.cameraId,
+              keys: [],
+            } as CameraActionDesc);
+      doc.actions.push(created);
+      const ownerDesc =
+        "objectId" in owner ? doc.objects.find((o) => o.id === owner.objectId) : doc.cameras.find((c) => c.id === owner.cameraId);
+      if (ownerDesc) ownerDesc.activeActionId = created.id;
+      act = created;
+    }
+    return act;
+  };
   return {
     add(opts) {
       const spec = specOf(opts.type);
@@ -323,13 +408,12 @@ export function createScriptTarget(doc: SceneDocument): ScriptTarget {
     remove(id) {
       const n = doc.objects.length;
       doc.objects = doc.objects.filter((o) => o.id !== id);
-      delete doc.tracks[id];
+      doc.actions = doc.actions.filter((a) => !(a.kind === "object" && a.objectId === id));
       if (doc.objects.length === n) throw new Error(`No object with id "${id}"`);
     },
     clear() {
       doc.objects = [];
-      doc.tracks = {};
-      doc.cameraKeys = [];
+      doc.actions = [];
       doc.onFrameScripts = [];
     },
     get() {
@@ -365,7 +449,7 @@ export function createScriptTarget(doc: SceneDocument): ScriptTarget {
       if (doc.cameras.length <= 1) throw new Error("Cannot remove the last camera — a scene needs at least one");
       const n = doc.cameras.length;
       doc.cameras = doc.cameras.filter((c) => c.id !== id);
-      doc.cameraKeys = doc.cameraKeys.filter((k) => k.cameraId !== id);
+      doc.actions = doc.actions.filter((a) => !(a.kind === "camera" && a.cameraId === id));
       if (doc.activeCameraId === id) doc.activeCameraId = doc.cameras[0].id;
       if (doc.cameras.length === n) throw new Error(`No camera with id "${id}"`);
     },
@@ -373,13 +457,80 @@ export function createScriptTarget(doc: SceneDocument): ScriptTarget {
       if (!doc.cameras.some((c) => c.id === id)) throw new Error(`No camera with id "${id}"`);
       doc.activeCameraId = id;
     },
-    addCameraKeys(keys, cameraId) {
+    createAction(owner, name) {
+      if ("objectId" in owner) {
+        const obj = assertObj(owner.objectId);
+        const act: ObjectActionDesc = {
+          id: newId("act"),
+          name: (name ?? "").trim().slice(0, 80) || defaultActionName(doc, { objectId: obj.id }),
+          kind: "object",
+          objectId: obj.id,
+          keys: [],
+        };
+        doc.actions.push(act);
+        obj.activeActionId = act.id;
+        return act.id;
+      }
+      {
+        const cam = doc.cameras.find((c) => c.id === owner.cameraId);
+        if (!cam) throw new Error(`No camera with id "${owner.cameraId}"`);
+        const act: CameraActionDesc = {
+          id: newId("act"),
+          name: (name ?? "").trim().slice(0, 80) || defaultActionName(doc, { cameraId: cam.id }),
+          kind: "camera",
+          cameraId: cam.id,
+          keys: [],
+        };
+        doc.actions.push(act);
+        cam.activeActionId = act.id;
+        return act.id;
+      }
+    },
+    renameAction(id, name) {
+      const act = assertAction(id);
+      const clean = String(name).trim().slice(0, 80);
+      if (clean) act.name = clean;
+    },
+    duplicateAction(id) {
+      const src = assertAction(id);
+      const copy = JSON.parse(JSON.stringify(src)) as ActionDesc;
+      copy.id = newId("act");
+      copy.name = `${src.name} copy`;
+      doc.actions.push(copy);
+      const owner =
+        copy.kind === "object" ? doc.objects.find((o) => o.id === copy.objectId) : doc.cameras.find((c) => c.id === copy.cameraId);
+      if (owner) owner.activeActionId = copy.id;
+      return copy.id;
+    },
+    removeAction(id) {
+      const src = assertAction(id);
+      doc.actions = doc.actions.filter((a) => a.id !== id);
+      const owner =
+        src.kind === "object" ? doc.objects.find((o) => o.id === src.objectId) : doc.cameras.find((c) => c.id === src.cameraId);
+      if (owner && owner.activeActionId === id) {
+        const first = doc.actions.find((a) =>
+          src.kind === "object" ? a.kind === "object" && a.objectId === src.objectId : a.kind === "camera" && a.cameraId === src.cameraId
+        );
+        if (first) owner.activeActionId = first.id;
+        else delete owner.activeActionId;
+      }
+    },
+    setActiveAction(id) {
+      const act = assertAction(id);
+      const owner =
+        act.kind === "object" ? doc.objects.find((o) => o.id === act.objectId) : doc.cameras.find((c) => c.id === act.cameraId);
+      if (!owner) throw new Error(`Action "${id}" has no owner`);
+      owner.activeActionId = id;
+    },
+    addCameraKeys(keys, cameraId, actionId) {
       const camId = cameraId ?? activeCameraOf(doc).id;
       const base = doc.cameras.find((c) => c.id === camId);
       if (!base) throw new Error(`No camera with id "${camId}"`);
-      const prev = doc.cameraKeys.filter((k) => k.cameraId === camId).slice(-1)[0] ?? null;
+      const act = resolveKeyAction({ cameraId: camId }, actionId);
+      if (act.kind !== "camera") throw new Error(`Action "${act.name}" is not a camera action`);
+      const prev = act.keys.slice(-1)[0] ?? null;
       for (const k of keys) {
-        doc.cameraKeys.push({
+        act.keys.push({
           t: k.t,
           cameraId: camId,
           position: k.position ? [...k.position] : [...(prev?.position ?? base.position)],
@@ -388,14 +539,15 @@ export function createScriptTarget(doc: SceneDocument): ScriptTarget {
           interp: (k.interp as TransformKey["interp"]) ?? "linear",
         });
       }
-      doc.cameraKeys.sort((a, b) => a.t - b.t);
+      act.keys.sort((a, b) => a.t - b.t);
     },
-    addKeyframes(id, keys) {
+    addKeyframes(id, keys, actionId) {
       assertObj(id);
-      const prev = (doc.tracks[id] ?? []).slice(-1)[0] ?? null;
-      const merged = (doc.tracks[id] ?? []).slice();
+      const act = resolveKeyAction({ objectId: id }, actionId);
+      if (act.kind !== "object") throw new Error(`Action "${act.name}" is not an object action`);
+      const prev = act.keys.slice(-1)[0] ?? null;
       for (const k of keys) {
-        merged.push({
+        act.keys.push({
           t: k.t,
           position: k.position ? [...k.position] : prev?.position,
           rotation: k.rotation ? [...k.rotation] : prev?.rotation,
@@ -405,8 +557,7 @@ export function createScriptTarget(doc: SceneDocument): ScriptTarget {
           interp: k.interp ?? "linear",
         });
       }
-      merged.sort((a, b) => a.t - b.t);
-      doc.tracks[id] = merged;
+      act.keys.sort((a, b) => a.t - b.t);
     },
     setDuration(seconds) {
       doc.duration = seconds;

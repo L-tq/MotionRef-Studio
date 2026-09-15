@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useStore, type KeyTarget } from "../state/store";
 import { useT } from "../i18n";
-import type { SceneDocument } from "../core/types";
+import { actionsOfOwner, activeActionOfOwner, type SceneDocument } from "../core/types";
 import { GraphEditor } from "./GraphEditor";
+import { ActionEditor } from "./ActionEditor";
 
 interface TrackRow {
   key: string;
@@ -16,18 +17,32 @@ interface TrackRow {
   keys: Array<{ t: number }>;
 }
 
+/** One row per owner; keys come from the owner's ACTIVE action. When the
+ *  owner has several actions, the label names the active one. */
 function buildRows(doc: SceneDocument, selection: string[]): TrackRow[] {
-  const rows: TrackRow[] = doc.cameras.map((c) => ({
-    key: `cam:${c.id}`,
-    label: `🎥 ${c.name}`,
-    cameraId: c.id,
-    active: c.id === doc.activeCameraId,
-    keys: doc.cameraKeys.filter((k) => k.cameraId === c.id),
-  }));
+  const rows: TrackRow[] = doc.cameras.map((c) => {
+    const act = activeActionOfOwner(doc, { cameraId: c.id });
+    const multi = actionsOfOwner(doc, { cameraId: c.id }).length > 1;
+    return {
+      key: `cam:${c.id}`,
+      label: `🎥 ${c.name}${multi && act ? ` · ${act.name}` : ""}`,
+      cameraId: c.id,
+      active: c.id === doc.activeCameraId,
+      keys: act ? act.keys : [],
+    };
+  });
   for (const obj of doc.objects) {
-    const keys = doc.tracks[obj.id] ?? [];
+    const act = activeActionOfOwner(doc, { objectId: obj.id });
+    const keys = act ? act.keys : [];
     if (keys.length > 0 || selection.includes(obj.id)) {
-      rows.push({ key: obj.id, label: obj.name, objectId: obj.id, color: obj.color, keys });
+      const multi = actionsOfOwner(doc, { objectId: obj.id }).length > 1;
+      rows.push({
+        key: obj.id,
+        label: `${obj.name}${multi && act ? ` · ${act.name}` : ""}`,
+        objectId: obj.id,
+        color: obj.color,
+        keys,
+      });
     }
   }
   return rows;
@@ -189,7 +204,9 @@ export function Timeline() {
     window.addEventListener("pointerup", up);
   };
 
-  // Delete the selected keyframe via keyboard
+  // Delete the selected keyframe via keyboard. Capture phase + stopPropagation
+  // so this beats App's global object-Delete handler (same as the graph
+  // editor): with a timeline key selected, Delete removes the KEY only.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!selectedKey) return;
@@ -197,6 +214,7 @@ export function Timeline() {
       if (active && ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName)) return;
       if (e.key === "Delete" || e.key === "Backspace") {
         e.preventDefault();
+        e.stopPropagation();
         const target: KeyTarget = selectedKey.rowKey.startsWith("cam:")
           ? { cameraId: selectedKey.rowKey.slice(4) }
           : { objectId: selectedKey.rowKey };
@@ -204,8 +222,8 @@ export function Timeline() {
         setSelectedKey(null);
       }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [selectedKey, deleteKey]);
 
   const step = tickStep(zoom);
@@ -296,6 +314,13 @@ export function Timeline() {
           >
             ∿
           </button>
+          <button
+            className={`btn small ${mode === "actions" ? "active" : ""}`}
+            title={t("timeline.modeActions")}
+            onClick={() => setLayout({ timelineMode: "actions" })}
+          >
+            ◇
+          </button>
         </span>
         <span className="tl-zoom" role="group" aria-label={t("timeline.zoom")}>
           <button className="btn small" title={t("timeline.zoomOut")} onClick={() => zoomBy(1 / 1.5)}>
@@ -313,6 +338,8 @@ export function Timeline() {
       <div className="timeline-body">
         {mode === "graph" ? (
           <GraphEditor />
+        ) : mode === "actions" ? (
+          <ActionEditor />
         ) : (
           <>
             <div className="track-labels">
@@ -351,7 +378,7 @@ export function Timeline() {
                     <span className="kbadge">{row.keys.length}</span>
                   </div>
                 ))}
-                {doc.cameraKeys.length === 0 && Object.keys(doc.tracks).length === 0 && (
+                {doc.actions.every((a) => a.keys.length === 0) && (
                   <div className="empty-note">{t("timeline.noTracks")}</div>
                 )}
               </div>

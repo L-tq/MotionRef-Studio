@@ -1,7 +1,7 @@
 /** Strict validation for SceneDocuments coming from untrusted sources
  *  (agent tool calls, JSON imports). Returns a normalized document or a
  *  human-readable error string. */
-import { createEmptyDocument, isGeometryType, specOf, DEFAULT_CAMERA_ID, type CameraDesc, type KeyVec3, type SceneDocument, type Vec3 } from "./types";
+import { createEmptyDocument, isGeometryType, newId, specOf, DEFAULT_CAMERA_ID, type ActionDesc, type CameraActionDesc, type CameraDesc, type CameraKey, type KeyVec3, type ObjectActionDesc, type SceneDocument, type TransformKey, type Vec3 } from "./types";
 import { clampAspect } from "./cameraMath";
 
 const HEX_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
@@ -27,6 +27,49 @@ function asKeyVec3(v: unknown, what: string): Vec3 | KeyVec3 | string {
 }
 
 const INTERPS = ["linear", "step", "smooth"];
+
+/** Normalize one object keyframe; returns the key or an error string. */
+function cleanObjectKey(k: Record<string, unknown>, what: string): TransformKey | string {
+  if (typeof k.t !== "number" || !Number.isFinite(k.t) || k.t < 0) {
+    return `${what}.t must be a number >= 0`;
+  }
+  const entry: Record<string, unknown> = { t: k.t, interp: INTERPS.includes(String(k.interp)) ? k.interp : "linear" };
+  for (const prop of ["position", "rotation", "scale"] as const) {
+    if (k[prop] !== undefined) {
+      const v = asKeyVec3(k[prop], `${what}.${prop}`);
+      if (typeof v === "string") return v;
+      entry[prop] = v;
+    }
+  }
+  if (typeof k.color === "string" && HEX_RE.test(k.color)) entry.color = k.color;
+  if (typeof k.visible === "boolean") entry.visible = k.visible;
+  return entry as unknown as TransformKey;
+}
+
+/** Normalize one camera keyframe, pinned to its owning camera; key or error. */
+function cleanCameraKey(k: Record<string, unknown>, cameraId: string, what: string): CameraKey | string {
+  if (typeof k.t !== "number" || !Number.isFinite(k.t) || k.t < 0) {
+    return `${what}.t must be a number >= 0`;
+  }
+  let position: Vec3 | KeyVec3 | undefined;
+  if (k.position !== undefined) {
+    const p = asKeyVec3(k.position, `${what}.position`);
+    if (typeof p === "string") return p;
+    position = p;
+  }
+  let target: Vec3 | KeyVec3 | undefined;
+  if (k.target !== undefined) {
+    const tg = asKeyVec3(k.target, `${what}.target`);
+    if (typeof tg === "string") return tg;
+    target = tg;
+  }
+  let fov: number | undefined;
+  if (k.fov !== undefined) {
+    if (typeof k.fov !== "number" || k.fov <= 0 || k.fov >= 180) return `${what}.fov must be in (0, 180)`;
+    fov = k.fov;
+  }
+  return { t: k.t, cameraId, position, target, fov, interp: INTERPS.includes(String(k.interp)) ? (k.interp as "linear") : "linear" };
+}
 
 export function validateSceneDocument(input: unknown): { doc: SceneDocument } | { error: string } {
   if (!input || typeof input !== "object") return { error: fail("document must be an object") };
@@ -131,75 +174,108 @@ export function validateSceneDocument(input: unknown): { doc: SceneDocument } | 
 
   const objectIds = new Set(doc.objects.map((o) => o.id));
 
-  // Tracks
-  if (raw.tracks && typeof raw.tracks === "object") {
-    for (const [objectId, keys] of Object.entries(raw.tracks as Record<string, unknown>)) {
-      if (!objectIds.has(objectId)) continue; // drop orphan tracks
-      if (!Array.isArray(keys)) return { error: `tracks.${objectId} must be an array` };
-      const clean = [];
-      for (const [i, k] of keys.entries()) {
-        if (!k || typeof k !== "object") return { error: `tracks.${objectId}[${i}] must be an object` };
-        const key = k as Record<string, unknown>;
-        if (typeof key.t !== "number" || !Number.isFinite(key.t) || key.t < 0) {
-          return { error: `tracks.${objectId}[${i}].t must be a number >= 0` };
+  // Actions (Blender-style): named keyframe groups, each owned by exactly one
+  // object or camera; an owner's ACTIVE action is what evaluates. Legacy
+  // documents instead carry per-object `tracks` and a flat `cameraKeys` list —
+  // each non-empty owner becomes one default action so old saves/imports
+  // keep working.
+  const actions: ActionDesc[] = [];
+  if (raw.actions !== undefined) {
+    if (!Array.isArray(raw.actions)) return { error: "actions must be an array" };
+    if (raw.actions.length > 256) return { error: "too many actions (max 256)" };
+    const seenAct = new Set<string>();
+    for (const [i, a] of raw.actions.entries()) {
+      if (!a || typeof a !== "object") return { error: `actions[${i}] must be an object` };
+      const act = a as Record<string, unknown>;
+      let id = typeof act.id === "string" && act.id ? act.id.slice(0, 64) : "";
+      if (!id || seenAct.has(id)) id = `act${i}_${Math.random().toString(36).slice(2, 8)}`;
+      const name = typeof act.name === "string" && act.name.trim() ? act.name.slice(0, 80) : "Action";
+      if (!Array.isArray(act.keys)) return { error: `actions[${i}].keys must be an array` };
+      if (act.kind === "camera") {
+        const cameraId = typeof act.cameraId === "string" && cameraIds.has(act.cameraId) ? act.cameraId : "";
+        if (!cameraId) continue; // owner gone — drop silently, like orphan tracks
+        const keys: CameraKey[] = [];
+        for (const [j, k] of act.keys.entries()) {
+          if (!k || typeof k !== "object") return { error: `actions[${i}].keys[${j}] must be an object` };
+          // Keys inside a camera action always belong to that camera.
+          const key = cleanCameraKey(k as Record<string, unknown>, cameraId, `actions[${i}].keys[${j}]`);
+          if (typeof key === "string") return { error: key };
+          keys.push(key);
         }
-        const entry: Record<string, unknown> = { t: key.t, interp: INTERPS.includes(String(key.interp)) ? key.interp : "linear" };
-        for (const prop of ["position", "rotation", "scale"] as const) {
-          if (key[prop] !== undefined) {
-            const v = asKeyVec3(key[prop], `tracks.${objectId}[${i}].${prop}`);
-            if (typeof v === "string") return { error: v };
-            entry[prop] = v;
-          }
+        keys.sort((x, y) => x.t - y.t);
+        seenAct.add(id);
+        actions.push({ id, name, kind: "camera", cameraId, keys });
+      } else {
+        const objectId = typeof act.objectId === "string" && objectIds.has(act.objectId) ? act.objectId : "";
+        if (!objectId) continue; // owner gone — drop silently
+        const keys: TransformKey[] = [];
+        for (const [j, k] of act.keys.entries()) {
+          if (!k || typeof k !== "object") return { error: `actions[${i}].keys[${j}] must be an object` };
+          const key = cleanObjectKey(k as Record<string, unknown>, `actions[${i}].keys[${j}]`);
+          if (typeof key === "string") return { error: key };
+          keys.push(key);
         }
-        if (typeof key.color === "string" && HEX_RE.test(key.color)) entry.color = key.color;
-        if (typeof key.visible === "boolean") entry.visible = key.visible;
-        clean.push(entry);
+        keys.sort((x, y) => x.t - y.t);
+        seenAct.add(id);
+        actions.push({ id, name, kind: "object", objectId, keys });
       }
-      clean.sort((a, b) => (a.t as number) - (b.t as number));
-      doc.tracks[objectId] = clean as unknown as SceneDocument["tracks"][string];
+    }
+  } else {
+    // Legacy migration: per-object `tracks` + flat `cameraKeys` → one default
+    // action per owner that has keyframes ("Action"), set as its active action.
+    if (raw.tracks && typeof raw.tracks === "object") {
+      for (const [objectId, keys] of Object.entries(raw.tracks as Record<string, unknown>)) {
+        if (!objectIds.has(objectId) || !Array.isArray(keys)) continue;
+        const clean: TransformKey[] = [];
+        for (const [i, k] of keys.entries()) {
+          if (!k || typeof k !== "object") return { error: `tracks.${objectId}[${i}] must be an object` };
+          const key = cleanObjectKey(k as Record<string, unknown>, `tracks.${objectId}[${i}]`);
+          if (typeof key === "string") return { error: key };
+          clean.push(key);
+        }
+        if (!clean.length) continue;
+        clean.sort((x, y) => x.t - y.t);
+        const action: ObjectActionDesc = { id: newId("act"), name: "Action", kind: "object", objectId, keys: clean };
+        actions.push(action);
+        const owner = doc.objects.find((o) => o.id === objectId);
+        if (owner) owner.activeActionId = action.id;
+      }
+    }
+    if (Array.isArray(raw.cameraKeys)) {
+      const byCam = new Map<string, CameraKey[]>();
+      for (const [i, k] of raw.cameraKeys.entries()) {
+        if (!k || typeof k !== "object") return { error: `cameraKeys[${i}] must be an object` };
+        const key = k as Record<string, unknown>;
+        // Every key names its camera; legacy keys (no cameraId) attach to the
+        // default camera, matching the legacy camera migration above.
+        const cameraId = typeof key.cameraId === "string" && cameraIds.has(key.cameraId) ? key.cameraId : cameras[0].id;
+        const clean = cleanCameraKey(key, cameraId, `cameraKeys[${i}]`);
+        if (typeof clean === "string") return { error: clean };
+        if (!byCam.has(cameraId)) byCam.set(cameraId, []);
+        byCam.get(cameraId)!.push(clean);
+      }
+      for (const [cameraId, keys] of byCam) {
+        keys.sort((x, y) => x.t - y.t);
+        const action: CameraActionDesc = { id: newId("act"), name: "Action", kind: "camera", cameraId, keys };
+        actions.push(action);
+        const cam = doc.cameras.find((c) => c.id === cameraId);
+        if (cam) cam.activeActionId = action.id;
+      }
     }
   }
+  doc.actions = actions;
 
-  // Camera keys
-  if (raw.cameraKeys !== undefined) {
-    if (!Array.isArray(raw.cameraKeys)) return { error: "cameraKeys must be an array" };
-    for (const [i, k] of raw.cameraKeys.entries()) {
-      if (!k || typeof k !== "object") return { error: `cameraKeys[${i}] must be an object` };
-      const key = k as Record<string, unknown>;
-      if (typeof key.t !== "number" || !Number.isFinite(key.t) || key.t < 0) {
-        return { error: `cameraKeys[${i}].t must be a number >= 0` };
-      }
-      // Components are optional — the graph editor splits shared camera keys
-      // when one channel is retimed/deleted alone.
-      let position: Vec3 | KeyVec3 | undefined;
-      if (key.position !== undefined) {
-        const p = asKeyVec3(key.position, `cameraKeys[${i}].position`);
-        if (typeof p === "string") return { error: p };
-        position = p;
-      }
-      let target: Vec3 | KeyVec3 | undefined;
-      if (key.target !== undefined) {
-        const tg = asKeyVec3(key.target, `cameraKeys[${i}].target`);
-        if (typeof tg === "string") return { error: tg };
-        target = tg;
-      }
-      let fov: number | undefined;
-      if (key.fov !== undefined) {
-        if (typeof key.fov !== "number" || key.fov <= 0 || key.fov >= 180) return { error: `cameraKeys[${i}].fov must be in (0, 180)` };
-        fov = key.fov;
-      }
-      doc.cameraKeys.push({
-        t: key.t,
-        // Every key names its camera; legacy keys (no cameraId) attach to the
-        // default camera, matching the legacy migration above.
-        cameraId: typeof key.cameraId === "string" && cameraIds.has(key.cameraId) ? key.cameraId : cameras[0].id,
-        position,
-        target,
-        fov,
-        interp: INTERPS.includes(String(key.interp)) ? (key.interp as "linear") : "linear",
-      });
-    }
-    doc.cameraKeys.sort((a, b) => a.t - b.t);
+  // Coerce each owner's activeActionId to one of its own actions (unknown ids
+  // fall back to the owner's first action; owners without actions are clean).
+  for (const o of doc.objects) {
+    const owned = actions.filter((a): a is ObjectActionDesc => a.kind === "object" && a.objectId === o.id);
+    if (!owned.length) delete o.activeActionId;
+    else if (!o.activeActionId || !owned.some((a) => a.id === o.activeActionId)) o.activeActionId = owned[0].id;
+  }
+  for (const c of doc.cameras) {
+    const owned = actions.filter((a): a is CameraActionDesc => a.kind === "camera" && a.cameraId === c.id);
+    if (!owned.length) delete c.activeActionId;
+    else if (!c.activeActionId || !owned.some((a) => a.id === c.activeActionId)) c.activeActionId = owned[0].id;
   }
 
   // onFrame hooks

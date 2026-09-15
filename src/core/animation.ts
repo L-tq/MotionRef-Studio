@@ -2,7 +2,7 @@
  *
  *  Pipeline per frame:
  *    1. Start from base object poses / base camera.
- *    2. Apply keyframe interpolation (tracks / cameraKeys).
+ *    2. Apply keyframe interpolation (each owner's ACTIVE action).
  *    3. Run onFrame overlay hooks in registration order (procedural motion).
  *
  *  This module is THREE-free so it can also run inside the sandbox worker.
@@ -16,7 +16,7 @@ import type {
   TransformKey,
   Vec3,
 } from "./types";
-import { activeCameraOf } from "./types";
+import { activeCameraOf, cameraKeysOf, objectKeysOf } from "./types";
 
 export interface EvaluatedObject {
   id: string;
@@ -171,11 +171,11 @@ function evalCameraDesc(base: CameraDesc, keys: CameraKey[], t: number): CameraS
   return out;
 }
 
-/** Evaluated pose of ANY camera by id at time t. */
+/** Evaluated pose of ANY camera by id at time t (its ACTIVE action's keys). */
 export function evalCameraById(doc: SceneDocument, cameraId: string, t: number): CameraState {
   const cam = doc.cameras.find((c) => c.id === cameraId) ?? doc.cameras[0];
   if (!cam) return { position: [0, 0, 0], target: [0, 0, 0], fov: 45 };
-  return evalCameraDesc(cam, doc.cameraKeys.filter((k) => k.cameraId === cam.id), t);
+  return evalCameraDesc(cam, cameraKeysOf(doc, cam.id), t);
 }
 
 /** Evaluated pose of the ACTIVE scene camera (what preview/export renders). */
@@ -302,7 +302,7 @@ export function evaluate(doc: SceneDocument, time: number, errorsOut?: HookError
     camera: evalCamera(doc, t),
   };
   for (const obj of doc.objects) {
-    state.objects.set(obj.id, evalObjectTrack(obj, doc.tracks[obj.id] ?? [], t));
+    state.objects.set(obj.id, evalObjectTrack(obj, objectKeysOf(doc, obj.id), t));
   }
   const errors = runHooks(state, doc, t);
   if (errorsOut) errorsOut.push(...errors);

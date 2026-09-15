@@ -105,6 +105,7 @@ export const zh: Record<string, string> = {
   "timeline.mode": "编辑器类型",
   "timeline.modeTracks": "关键帧轨道",
   "timeline.modeGraph": "曲线图表编辑器",
+  "timeline.modeActions": "动作编辑器",
 
   // Inspector
   "inspector.noSelection": "未选中对象。点击视口中的物体。",
@@ -208,6 +209,17 @@ export const zh: Record<string, string> = {
   "graph.smooth": "对选中关键帧做高斯平滑",
   "graph.smoothSigma": "平滑 σ（核宽度，按关键帧数量）",
   "graph.hint": "拖动关键点编辑（竖向改数值，横向改时间）。双击插入关键帧。在空白处拖动框选（Shift 追加选择），Delete 按通道删除选中关键点——其他属性的关键帧不受影响，Esc 取消选择。",
+
+  // 动作编辑器（Blender 式按所有者管理动作）
+  "action.title": "动作",
+  "action.active": "活动动作——参与播放与编辑的动作",
+  "action.new": "新建动作",
+  "action.duplicate": "复制当前活动动作",
+  "action.delete": "删除活动动作（连同其关键帧）",
+  "action.noActions": "还没有动作 — 按 ◆ 设置关键帧 即可创建。",
+  "action.activateHint": "点击设为活动动作",
+  "action.expand": "展开 / 收起通道",
+  "action.target": "显示哪个对象/相机的动作",
 
   // Layout
   "layout.resize": "拖动调整大小 · 双击恢复默认",

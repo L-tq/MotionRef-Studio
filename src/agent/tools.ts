@@ -259,10 +259,84 @@ export function buildTools(): AgentTool[] {
       },
     },
     {
+      name: "manage_action",
+      description: {
+        en: "Manage keyframe ACTIONS (Blender-style). Each action is a named keyframe group owned by ONE object or camera; only an owner's ACTIVE action plays/edits. ops: create (owner {objectId} or {cameraId} required, name?), duplicate / rename / delete / setActive (id required, from get_scene_state → actions). add_keyframes/add_camera_keys write into the owner's ACTIVE action unless actionId is passed.",
+        zh: "管理关键帧动作（Blender 风格）。每个动作是属于单个对象或相机的命名关键帧组；所有者只有“活动动作”参与播放/编辑。op：create（必填 owner {objectId} 或 {cameraId}，可选 name）、duplicate / rename / delete / setActive（必填 id，来自 get_scene_state → actions）。add_keyframes/add_camera_keys 默认写入所有者的活动动作，除非传入 actionId。",
+      },
+      parameters: {
+        type: "object",
+        properties: {
+          op: { type: "string", enum: ["create", "duplicate", "rename", "delete", "setActive"] },
+          owner: {
+            type: "object",
+            properties: {
+              objectId: { type: "string", description: "Owner object id (create only)" },
+              cameraId: { type: "string", description: "Owner camera id (create only)" },
+            },
+            additionalProperties: false,
+          },
+          id: { type: "string", description: "Action id (all ops except create)" },
+          name: { type: "string", description: "Action name (create / rename)" },
+        },
+        required: ["op"],
+        additionalProperties: false,
+      },
+      async handler(args, ctx) {
+        const op = String(args.op ?? "");
+        if (op === "create") {
+          const owner = (args.owner ?? {}) as { objectId?: string; cameraId?: string };
+          if (!owner.objectId && !owner.cameraId) return err("create needs owner: { objectId } or { cameraId }");
+          let actId = "";
+          const result = withDoc(ctx, "agent:action_create", (target) => {
+            const normalized = owner.objectId ? { objectId: owner.objectId } : { cameraId: owner.cameraId as string };
+            actId = target.createAction(normalized, typeof args.name === "string" ? args.name : undefined);
+          });
+          if (result.isError) return result;
+          const act = ctx.getDoc().actions.find((a) => a.id === actId);
+          return ok(`Created action "${act?.name}" (id ${actId}); it is now that owner's active action. Add keys with add_keyframes/add_camera_keys.`);
+        }
+        if (typeof args.id !== "string" || !args.id) {
+          return err(`op "${op}" requires an action id (see get_scene_state → actions)`);
+        }
+        if (op === "duplicate") {
+          let copyId = "";
+          const result = withDoc(ctx, "agent:action_duplicate", (target) => {
+            copyId = target.duplicateAction(args.id as string);
+          });
+          if (result.isError) return result;
+          return ok(`Duplicated action ${args.id} → ${copyId} (the copy is now active).`);
+        }
+        if (op === "rename") {
+          if (typeof args.name !== "string" || !args.name.trim()) return err("rename requires name");
+          const result = withDoc(ctx, "agent:action_rename", (target) => {
+            target.renameAction(args.id as string, args.name as string);
+          });
+          if (result.isError) return result;
+          return ok(`Renamed action ${args.id} to "${args.name}".`);
+        }
+        if (op === "delete") {
+          const result = withDoc(ctx, "agent:action_delete", (target) => {
+            target.removeAction(args.id as string);
+          });
+          if (result.isError) return result;
+          return ok(`Deleted action ${args.id} (its keyframes are gone).`);
+        }
+        if (op === "setActive") {
+          const result = withDoc(ctx, "agent:action_setActive", (target) => {
+            target.setActiveAction(args.id as string);
+          });
+          if (result.isError) return result;
+          return ok(`Action ${args.id} is now its owner's active action.`);
+        }
+        return err(`Unknown op "${op}" — use create|duplicate|rename|delete|setActive`);
+      },
+    },
+    {
       name: "add_camera_keyframes",
       description: {
-        en: "Append camera keyframes: keys: [{t (s), position?, target?, fov?, interp? (linear|smooth|step)}]. Missing fields inherit from the previous key of that camera. cameraId? targets one scene camera; default is the ACTIVE camera.",
-        zh: "追加相机关键帧：keys: [{t（秒）, position?, target?, fov?, interp?（linear|smooth|step）}]。缺省字段继承该相机上一帧。cameraId? 可指定某台场景相机；默认为活动相机。",
+        en: "Append camera keyframes: keys: [{t (s), position?, target?, fov?, interp? (linear|smooth|step)}]. Missing fields inherit from the previous key of that camera. Keys go into the camera's ACTIVE action (created if it has none); cameraId? targets one scene camera (default: active), actionId? targets a specific action.",
+        zh: "追加相机关键帧：keys: [{t（秒）, position?, target?, fov?, interp?（linear|smooth|step）}]。缺省字段继承该相机上一帧。关键帧写入该相机的活动动作（没有则自动创建）；cameraId? 可指定某台场景相机（默认活动相机），actionId? 可指定某个动作。",
       },
       parameters: {
         type: "object",
@@ -282,6 +356,7 @@ export function buildTools(): AgentTool[] {
             },
           },
           cameraId: { type: "string", description: "Target camera id (default: active camera)" },
+          actionId: { type: "string", description: "Target action id (default: that camera's active action)" },
         },
         required: ["keys"],
         additionalProperties: false,
@@ -289,22 +364,24 @@ export function buildTools(): AgentTool[] {
       async handler(args, ctx) {
         const keys = (args.keys ?? []) as Parameters<ReturnType<typeof createScriptTarget>["addCameraKeys"]>[0];
         const cameraId = typeof args.cameraId === "string" ? args.cameraId : undefined;
+        const actionId = typeof args.actionId === "string" ? args.actionId : undefined;
         const result = withDoc(ctx, "agent:camera_keys", (target) => {
-          target.addCameraKeys(keys, cameraId);
+          target.addCameraKeys(keys, cameraId, actionId);
         });
         if (result.isError) return result;
         const doc = ctx.getDoc();
         const cid = cameraId ?? doc.activeCameraId;
-        const count = doc.cameraKeys.filter((k) => k.cameraId === cid).length;
+        const owned = doc.actions.filter((a) => a.kind === "camera" && a.cameraId === cid);
+        const total = owned.reduce((n, a) => n + a.keys.length, 0);
         const cam = doc.cameras.find((c) => c.id === cid);
-        return ok(`Camera "${cam?.name ?? cid}" now has ${count} key(s).`);
+        return ok(`Camera "${cam?.name ?? cid}" now has ${total} key(s) across ${owned.length} action(s).`);
       },
     },
     {
       name: "add_keyframes",
       description: {
-        en: "Append keyframes for an object: keys: [{t (s), position?, rotation?, scale?, color?, visible?, interp?}]. Missing properties inherit from the object's previous key (or base pose for the first key).",
-        zh: "为对象追加关键帧：keys: [{t（秒）, position?, rotation?, scale?, color?, visible?, interp?}]。缺省属性继承该对象上一关键帧（首帧继承基础位姿）。",
+        en: "Append keyframes for an object: keys: [{t (s), position?, rotation?, scale?, color?, visible?, interp?}]. Missing properties inherit from the object's previous key (or base pose for the first key). Keys go into the object's ACTIVE action (created if it has none); actionId? targets a specific action.",
+        zh: "为对象追加关键帧：keys: [{t（秒）, position?, rotation?, scale?, color?, visible?, interp?}]。缺省属性继承该对象上一关键帧（首帧继承基础位姿）。关键帧写入该对象的活动动作（没有则自动创建）；actionId? 可指定某个动作。",
       },
       parameters: {
         type: "object",
@@ -326,17 +403,20 @@ export function buildTools(): AgentTool[] {
               required: ["t"],
             },
           },
+          actionId: { type: "string", description: "Target action id (default: that object's active action)" },
         },
         required: ["id", "keys"],
         additionalProperties: false,
       },
       async handler(args, ctx) {
+        const actionId = typeof args.actionId === "string" ? args.actionId : undefined;
         const result = withDoc(ctx, "agent:keyframes", (target) => {
-          target.addKeyframes(args.id as string, args.keys as Parameters<typeof target.addKeyframes>[1]);
+          target.addKeyframes(args.id as string, args.keys as Parameters<typeof target.addKeyframes>[1], actionId);
         });
         if (result.isError) return result;
-        const count = ctx.getDoc().tracks[args.id as string]?.length ?? 0;
-        return ok(`Track now has ${count} key(s).`);
+        const owned = ctx.getDoc().actions.filter((a) => a.kind === "object" && a.objectId === args.id);
+        const count = owned.reduce((n, a) => n + a.keys.length, 0);
+        return ok(`Object now has ${count} key(s) across ${owned.length} action(s).`);
       },
     },
     {
@@ -387,8 +467,8 @@ export function buildTools(): AgentTool[] {
     {
       name: "execute_code",
       description: {
-        en: "Run JavaScript in the sandbox to build/animate the scene. Global `api`: add/update/remove/clear/get/find/list/keyframes/setCamera/addCamera/addCameraKeys(setActiveCamera)/updateCamera/removeCamera/setDuration/setFps/setAspect(ratio)/onFrame(fn)/log/params/uniqueName. See the Skill Guide for the full reference. No DOM/network/imports; 5s timeout.",
-        zh: "在沙箱中运行 JavaScript 来搭建/动画化场景。全局 `api`：add/update/remove/clear/get/find/list/keyframes/setCamera/addCamera/addCameraKeys(setActiveCamera)/updateCamera/removeCamera/setDuration/setFps/setAspect(比例)/onFrame(fn)/log/params/uniqueName。完整参考见技能指南。无 DOM/网络/导入；5 秒超时。",
+        en: "Run JavaScript in the sandbox to build/animate the scene. Global `api`: add/update/remove/clear/get/find/list/keyframes(id,keys,actionId?)/setCamera/addCamera/addCameraKeys(keys,cameraId?,actionId?)/setActiveCamera/updateCamera/removeCamera/createAction(owner,name?)/renameAction/duplicateAction/removeAction/setActiveAction/setDuration/setFps/setAspect(ratio)/onFrame(fn)/log/params/uniqueName. See the Skill Guide for the full reference. No DOM/network/imports; 5s timeout.",
+        zh: "在沙箱中运行 JavaScript 来搭建/动画化场景。全局 `api`：add/update/remove/clear/get/find/list/keyframes(id,keys,actionId?)/setCamera/addCamera/addCameraKeys(keys,cameraId?,actionId?)/setActiveCamera/updateCamera/removeCamera/createAction(owner,name?)/renameAction/duplicateAction/removeAction/setActiveAction/setDuration/setFps/setAspect(比例)/onFrame(fn)/log/params/uniqueName。完整参考见技能指南。无 DOM/网络/导入；5 秒超时。",
       },
       parameters: {
         type: "object",
@@ -407,8 +487,9 @@ export function buildTools(): AgentTool[] {
         }
         ctx.applyDoc(result.doc!, "agent:execute_code");
         const doc = ctx.getDoc();
+        const keyCount = doc.actions.reduce((n, a) => n + a.keys.length, 0);
         const lines = [
-          `Executed OK. Scene now: ${doc.objects.length} objects, ${Object.keys(doc.tracks).length} tracks, ${doc.cameraKeys.length} camera keys, ${doc.onFrameScripts.length} onFrame hooks.`,
+          `Executed OK. Scene now: ${doc.objects.length} objects, ${doc.actions.length} actions (${keyCount} keys), ${doc.onFrameScripts.length} onFrame hooks.`,
         ];
         if (result.logs.length) lines.push("Logs:", ...result.logs.slice(0, 40));
         if (result.result && result.result !== "undefined") lines.push("Return:", result.result);
