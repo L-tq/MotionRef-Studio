@@ -8,7 +8,7 @@
  *   - overlay: created by animation.ts FrameApi during evaluation instead.
  */
 import type { ActionOwner, CameraState, GeometryType, KeyVec3, SceneDocument, TransformKey, Vec3 } from "./types";
-import { activeActionOfOwner, activeCameraOf, defaultActionName, isGeometryType, newId, specOf, type ActionDesc, type CameraActionDesc, type ObjectActionDesc } from "./types";
+import { activeActionOfOwner, activeCameraOf, defaultActionName, defaultCollectionName, isGeometryType, newId, specOf, type ActionDesc, type CameraActionDesc, type ObjectActionDesc } from "./types";
 
 export interface ScriptTarget {
   /** Mutating handles over a SceneDocument owned by the caller. */
@@ -21,6 +21,8 @@ export interface ScriptTarget {
     scale?: Vec3;
     color?: string;
     visible?: boolean;
+    /** Outliner collection (must exist, see addCollection). */
+    collectionId?: string;
   }): string;
   update(
     id: string,
@@ -32,11 +34,15 @@ export interface ScriptTarget {
       scale?: Vec3;
       color?: string;
       visible?: boolean;
+      /** Outliner collection; null moves the object back to the root. */
+      collectionId?: string | null;
     },
   ): void;
   remove(id: string): void;
   clear(): void;
   get(): SceneDocument;
+  /** Create an Outliner collection (Blender-style grouping); returns its id. */
+  addCollection(name?: string): string;
   /** Patch the ACTIVE camera's base pose. */
   setCamera(patch: Partial<CameraState>): void;
   /** Add a scene camera; returns its id. */
@@ -106,6 +112,7 @@ export function createScriptingAPI(target: ScriptTarget, log: (...args: unknown[
       scale?: Vec3;
       color?: string;
       visible?: boolean;
+      collectionId?: string;
     }): string {
       if (!opts || typeof opts !== "object") throw new Error("api.add expects an options object");
       if (!isGeometryType(opts.type))
@@ -114,6 +121,8 @@ export function createScriptingAPI(target: ScriptTarget, log: (...args: unknown[
       if (opts.rotation) checkVec3(opts.rotation, "rotation");
       if (opts.scale) checkVec3(opts.scale, "scale");
       if (opts.color) checkColor(opts.color);
+      if (opts.collectionId !== undefined && typeof opts.collectionId !== "string")
+        throw new Error("collectionId must be a collection id string (see api.addCollection)");
       return target.add(opts);
     },
 
@@ -128,6 +137,7 @@ export function createScriptingAPI(target: ScriptTarget, log: (...args: unknown[
         scale?: Vec3;
         color?: string;
         visible?: boolean;
+        collectionId?: string | null;
       },
     ): void {
       if (typeof id !== "string") throw new Error("api.update expects (id, patch)");
@@ -135,6 +145,8 @@ export function createScriptingAPI(target: ScriptTarget, log: (...args: unknown[
       if (patch?.rotation) checkVec3(patch.rotation, "rotation");
       if (patch?.scale) checkVec3(patch.scale, "scale");
       if (patch?.color) checkColor(patch.color);
+      if (patch?.collectionId !== undefined && patch.collectionId !== null && typeof patch.collectionId !== "string")
+        throw new Error("collectionId must be a collection id string or null (see api.addCollection)");
       target.update(id, patch);
     },
 
@@ -146,6 +158,14 @@ export function createScriptingAPI(target: ScriptTarget, log: (...args: unknown[
     /** Remove all objects, keyframes and camera keys. */
     clear(): void {
       target.clear();
+    },
+
+    /** Create an Outliner collection (Blender-style grouping) and return its
+     *  id. Assign objects with api.add({collectionId}) / api.update(id,
+     *  {collectionId}); null in update moves an object back to the root. */
+    addCollection(name?: string): string {
+      if (name !== undefined && typeof name !== "string") throw new Error("api.addCollection expects an optional name string");
+      return target.addCollection(name);
     },
 
     /** Full scene document (read-only snapshot). */
@@ -378,11 +398,16 @@ export function createScriptTarget(doc: SceneDocument): ScriptTarget {
     }
     return act;
   };
+  const assertCollection = (id: string) => {
+    const col = doc.collections.find((c) => c.id === id);
+    if (!col) throw new Error(`No collection with id "${id}"`);
+    return col;
+  };
   return {
     add(opts) {
       const spec = specOf(opts.type);
       const id = newId();
-      doc.objects.push({
+      const created = {
         id,
         name: opts.name ?? `${spec.label} ${doc.objects.filter((o) => o.type === opts.type).length + 1}`,
         type: opts.type,
@@ -392,7 +417,12 @@ export function createScriptTarget(doc: SceneDocument): ScriptTarget {
         scale: opts.scale ? [...opts.scale] : [1, 1, 1],
         color: opts.color ?? "#7c5cff",
         visible: opts.visible ?? true,
-      });
+      } as SceneDocument["objects"][number];
+      if (opts.collectionId !== undefined) {
+        assertCollection(opts.collectionId);
+        created.collectionId = opts.collectionId;
+      }
+      doc.objects.push(created);
       return id;
     },
     update(id, patch) {
@@ -404,6 +434,10 @@ export function createScriptTarget(doc: SceneDocument): ScriptTarget {
       if (patch.scale) obj.scale = [...patch.scale];
       if (patch.color) obj.color = patch.color;
       if (patch.visible !== undefined) obj.visible = !!patch.visible;
+      if (patch.collectionId !== undefined) {
+        if (patch.collectionId === null) delete obj.collectionId;
+        else obj.collectionId = assertCollection(patch.collectionId).id;
+      }
     },
     remove(id) {
       const n = doc.objects.length;
@@ -418,6 +452,12 @@ export function createScriptTarget(doc: SceneDocument): ScriptTarget {
     },
     get() {
       return doc;
+    },
+    addCollection(name) {
+      const id = newId("col");
+      const clean = (name ?? "").trim().slice(0, 80);
+      doc.collections.push({ id, name: clean || defaultCollectionName(doc) });
+      return id;
     },
     setCamera(patch) {
       const cam = activeCameraOf(doc);

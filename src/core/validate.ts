@@ -1,7 +1,7 @@
 /** Strict validation for SceneDocuments coming from untrusted sources
  *  (agent tool calls, JSON imports). Returns a normalized document or a
  *  human-readable error string. */
-import { createEmptyDocument, isGeometryType, newId, specOf, DEFAULT_CAMERA_ID, type ActionDesc, type CameraActionDesc, type CameraDesc, type CameraKey, type KeyVec3, type ObjectActionDesc, type SceneDocument, type TransformKey, type Vec3 } from "./types";
+import { createEmptyDocument, isGeometryType, newId, specOf, DEFAULT_CAMERA_ID, type ActionDesc, type CameraActionDesc, type CameraDesc, type CameraKey, type CollectionDesc, type KeyVec3, type ObjectActionDesc, type ObjectDesc, type SceneDocument, type TransformKey, type Vec3 } from "./types";
 import { clampAspect } from "./cameraMath";
 
 const HEX_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
@@ -133,6 +133,28 @@ export function validateSceneDocument(input: unknown): { doc: SceneDocument } | 
       : cameras[0].id;
   const cameraIds = new Set(cameras.map((c) => c.id));
 
+  // Collections (Blender-style Outliner grouping; flat, single-level). Parsed
+  // before objects so object membership can be checked against real ids.
+  const collections: CollectionDesc[] = [];
+  if (raw.collections !== undefined) {
+    if (!Array.isArray(raw.collections)) return { error: "collections must be an array" };
+    if (raw.collections.length > 256) return { error: "too many collections (max 256)" };
+    const seenCol = new Set<string>();
+    for (const [i, c] of raw.collections.entries()) {
+      if (!c || typeof c !== "object") return { error: `collections[${i}] must be an object` };
+      const col = c as Record<string, unknown>;
+      let id = typeof col.id === "string" && col.id ? col.id.slice(0, 64) : "";
+      if (!id || seenCol.has(id)) id = `col${i}_${Math.random().toString(36).slice(2, 8)}`;
+      seenCol.add(id);
+      collections.push({
+        id,
+        name: typeof col.name === "string" && col.name.trim() ? col.name.slice(0, 80) : `Collection ${i + 1}`,
+      });
+    }
+  }
+  doc.collections = collections;
+  const collectionIds = new Set(collections.map((c) => c.id));
+
   // Objects
   if (raw.objects !== undefined) {
     if (!Array.isArray(raw.objects)) return { error: "objects must be an array" };
@@ -158,7 +180,7 @@ export function validateSceneDocument(input: unknown): { doc: SceneDocument } | 
         }
       }
       const color = typeof obj.color === "string" && HEX_RE.test(obj.color) ? obj.color : "#7c5cff";
-      doc.objects.push({
+      const od: ObjectDesc = {
         id,
         name: typeof obj.name === "string" && obj.name.trim() ? obj.name.slice(0, 80) : `${obj.type} ${i + 1}`,
         type: obj.type,
@@ -168,7 +190,12 @@ export function validateSceneDocument(input: unknown): { doc: SceneDocument } | 
         scale,
         color,
         visible: obj.visible === undefined ? true : !!obj.visible,
-      });
+      };
+      // Membership is kept only when the target collection exists.
+      if (typeof obj.collectionId === "string" && collectionIds.has(obj.collectionId)) {
+        od.collectionId = obj.collectionId;
+      }
+      doc.objects.push(od);
     }
   }
 

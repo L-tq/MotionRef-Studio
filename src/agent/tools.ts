@@ -72,8 +72,8 @@ export function buildTools(): AgentTool[] {
     {
       name: "get_scene_state",
       description: {
-        en: "Get the full scene document: objects (id, name, type, params, pose, color), keyframe tracks, camera keys, base camera, duration, fps, onFrame hooks.",
-        zh: "获取完整场景文档：对象（id、名称、类型、参数、位姿、颜色）、关键帧轨道、相机关键帧、基础相机、时长、帧率、onFrame 脚本。",
+        en: "Get the full scene document: objects (id, name, type, params, pose, color, collectionId), collections, keyframe tracks, camera keys, base camera, duration, fps, onFrame hooks.",
+        zh: "获取完整场景文档：对象（id、名称、类型、参数、位姿、颜色、collectionId）、集合、关键帧轨道、相机关键帧、基础相机、时长、帧率、onFrame 脚本。",
       },
       parameters: { type: "object", properties: {}, additionalProperties: false },
       async handler(_args, ctx) {
@@ -104,8 +104,8 @@ export function buildTools(): AgentTool[] {
     {
       name: "add_object",
       description: {
-        en: "Add one geometry object. object: {type, name?, params?, position?, rotation? (radians XYZ), scale?, color? (#rrggbb), visible?}. Returns the new id.",
-        zh: "添加一个几何体。object: {type, name?, params?, position?, rotation?（弧度 XYZ）, scale?, color?（#rrggbb）, visible?}。返回新 id。",
+        en: "Add one geometry object. object: {type, name?, params?, position?, rotation? (radians XYZ), scale?, color? (#rrggbb), visible?, collectionId? (Outliner collection, see get_scene_state → collections)}. Returns the new id.",
+        zh: "添加一个几何体。object: {type, name?, params?, position?, rotation?（弧度 XYZ）, scale?, color?（#rrggbb）, visible?, collectionId?（大纲集合，见 get_scene_state → collections）}。返回新 id。",
       },
       parameters: {
         type: "object",
@@ -121,6 +121,7 @@ export function buildTools(): AgentTool[] {
               scale: { type: "array", items: { type: "number" }, minItems: 3, maxItems: 3 },
               color: { type: "string" },
               visible: { type: "boolean" },
+              collectionId: { type: "string", description: "Outliner collection id to file the object under" },
             },
             required: ["type"],
           },
@@ -140,8 +141,8 @@ export function buildTools(): AgentTool[] {
     {
       name: "update_object",
       description: {
-        en: "Patch an object by id: name?, params?, position?, rotation?, scale?, color?, visible?. Unspecified properties are kept.",
-        zh: "按 id 修改对象：name?、params?、position?、rotation?、scale?、color?、visible?。未指定的属性保持不变。",
+        en: "Patch an object by id: name?, params?, position?, rotation?, scale?, color?, visible?, collectionId? (move it into an Outliner collection; collections are created via execute_code api.addCollection or set_scene). Unspecified properties are kept.",
+        zh: "按 id 修改对象：name?、params?、position?、rotation?、scale?、color?、visible?、collectionId?（移入某个大纲集合；集合需先用 execute_code 的 api.addCollection 或 set_scene 创建）。未指定的属性保持不变。",
       },
       parameters: {
         type: "object",
@@ -154,6 +155,7 @@ export function buildTools(): AgentTool[] {
           scale: { type: "array", items: { type: "number" }, minItems: 3, maxItems: 3 },
           color: { type: "string" },
           visible: { type: "boolean" },
+          collectionId: { type: "string", description: "Outliner collection id to move the object into" },
         },
         required: ["id"],
         additionalProperties: false,
@@ -467,8 +469,8 @@ export function buildTools(): AgentTool[] {
     {
       name: "execute_code",
       description: {
-        en: "Run JavaScript in the sandbox to build/animate the scene. Global `api`: add/update/remove/clear/get/find/list/keyframes(id,keys,actionId?)/setCamera/addCamera/addCameraKeys(keys,cameraId?,actionId?)/setActiveCamera/updateCamera/removeCamera/createAction(owner,name?)/renameAction/duplicateAction/removeAction/setActiveAction/setDuration/setFps/setAspect(ratio)/onFrame(fn)/log/params/uniqueName. See the Skill Guide for the full reference. No DOM/network/imports; 5s timeout.",
-        zh: "在沙箱中运行 JavaScript 来搭建/动画化场景。全局 `api`：add/update/remove/clear/get/find/list/keyframes(id,keys,actionId?)/setCamera/addCamera/addCameraKeys(keys,cameraId?,actionId?)/setActiveCamera/updateCamera/removeCamera/createAction(owner,name?)/renameAction/duplicateAction/removeAction/setActiveAction/setDuration/setFps/setAspect(比例)/onFrame(fn)/log/params/uniqueName。完整参考见技能指南。无 DOM/网络/导入；5 秒超时。",
+        en: "Run JavaScript in the sandbox to build/animate the scene. Global `api`: add/update/remove/clear/addCollection(name)/get/find/list/keyframes(id,keys,actionId?)/setCamera/addCamera/addCameraKeys(keys,cameraId?,actionId?)/setActiveCamera/updateCamera/removeCamera/createAction(owner,name?)/renameAction/duplicateAction/removeAction/setActiveAction/setDuration/setFps/setAspect(ratio)/onFrame(fn)/log/params/uniqueName. See the Skill Guide for the full reference. No DOM/network/imports; 5s timeout.",
+        zh: "在沙箱中运行 JavaScript 来搭建/动画化场景。全局 `api`：add/update/remove/clear/addCollection(name)/get/find/list/keyframes(id,keys,actionId?)/setCamera/addCamera/addCameraKeys(keys,cameraId?,actionId?)/setActiveCamera/updateCamera/removeCamera/createAction(owner,name?)/renameAction/duplicateAction/removeAction/setActiveAction/setDuration/setFps/setAspect(比例)/onFrame(fn)/log/params/uniqueName。完整参考见技能指南。无 DOM/网络/导入；5 秒超时。",
       },
       parameters: {
         type: "object",

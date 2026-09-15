@@ -40,12 +40,17 @@ export const en: Record<string, string> = {
   "projects.confirmDelete": "Delete project “{name}”?",
 
   // Panels
-  "panel.hierarchy": "Hierarchy",
+  "panel.outliner": "Outliner",
   "panel.addGeometry": "Add geometry",
   "panel.objects": "{n} object(s)",
   "panel.empty": "Empty scene — add a geometry or ask the agent.",
-  "hierarchy.visibility": "Toggle visibility",
-  "hierarchy.keyed": "Has keyframes",
+  "outliner.visibility": "Toggle visibility",
+  "outliner.keyed": "Has keyframes",
+  "outliner.newCollection": "New collection",
+  "outliner.sceneCollection": "Scene Collection",
+  "outliner.collectionVisibility": "Show / hide collection",
+  "outliner.deleteCollection": "Delete collection — objects return to scene root",
+  "outliner.dropHint": "Drag objects here · double-click to rename",
 
   // Viewport
   "viewport.select": "Select (Q)",
@@ -186,6 +191,7 @@ export const en: Record<string, string> = {
   "chat.stepLimit": "Step limit ({n}) reached — send a message to continue.",
   "chat.removeImage": "Remove",
   "chat.dropImages": "Drop images to attach",
+  "chat.jumpToLatest": "Jump to latest",
   "chat.restored": "Previous chat restored.",
 
   // Chat tasks (per project)

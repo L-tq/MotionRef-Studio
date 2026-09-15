@@ -39,6 +39,8 @@ export interface ObjectDesc {
   visible: boolean;
   /** Which of this object's actions is ACTIVE (evaluated/edited). */
   activeActionId?: string;
+  /** Collection this object lives in (Outliner grouping); absent = scene root. */
+  collectionId?: string;
 }
 
 /** A keyframe for one object. Only the properties present are keyed; within a
@@ -113,6 +115,14 @@ export interface CameraDesc {
   activeActionId?: string;
 }
 
+/** A named collection grouping objects in the Outliner (Blender-style).
+ *  Single-level: objects belong to at most one collection; objects without
+ *  one sit directly under the implicit "Scene Collection" root. */
+export interface CollectionDesc {
+  id: string;
+  name: string;
+}
+
 export interface SceneDocument {
   version: 1;
   name: string;
@@ -126,6 +136,8 @@ export interface SceneDocument {
    *  scene-camera preview letterbox and aspect-aware snapshots. */
   aspect: number;
   objects: ObjectDesc[];
+  /** Outliner collections; members reference them via ObjectDesc.collectionId. */
+  collections: CollectionDesc[];
   /** Scene cameras; the first entry is the legacy default camera. Previews,
    *  snapshots and video export always render the ACTIVE camera. */
   cameras: CameraDesc[];
@@ -171,6 +183,7 @@ export function createEmptyDocument(name = "Untitled"): SceneDocument {
     fps: 30,
     aspect: 16 / 9,
     objects: [],
+    collections: [],
     cameras: [defaultCameraDesc()],
     activeCameraId: DEFAULT_CAMERA_ID,
     actions: [],
@@ -225,6 +238,14 @@ export function defaultActionName(doc: SceneDocument, owner: ActionOwner): strin
   let n = 2;
   while (owned.some((a) => a.name === `Action ${n}`)) n += 1;
   return `Action ${n}`;
+}
+
+/** Next free default collection name: "Collection", "Collection 2", … */
+export function defaultCollectionName(doc: SceneDocument): string {
+  if (!doc.collections.some((c) => c.name === "Collection")) return "Collection";
+  let n = 2;
+  while (doc.collections.some((c) => c.name === `Collection ${n}`)) n += 1;
+  return `Collection ${n}`;
 }
 
 /** Accept documents saved before `aspect` existed. */

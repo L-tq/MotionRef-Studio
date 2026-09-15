@@ -201,14 +201,40 @@ function ChatTab() {
   const [text, setText] = useState("");
   const [images, setImages] = useState<string[]>([]);
   const [dragOver, setDragOver] = useState(false);
+  const [atBottom, setAtBottom] = useState(true);
   const logRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Autoscroll only while the reader is at the bottom: events stream in
+  // continuously while the agent runs, so unconditional scrolling would pin
+  // the log down and make history unreadable mid-run.
+  const stickToBottom = useRef(true);
   const configured = isConfigured(settings);
 
-  useEffect(() => {
+  const scrollToBottom = useCallback(() => {
     const el = logRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [events]);
+  }, []);
+
+  const onLogScroll = useCallback(() => {
+    const el = logRef.current;
+    if (!el) return;
+    // Tolerance absorbs rounding and late image height changes at the bottom.
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+    stickToBottom.current = near;
+    setAtBottom(near);
+  }, []);
+
+  useEffect(() => {
+    if (stickToBottom.current) scrollToBottom();
+  }, [events, scrollToBottom]);
+
+  // Switching tasks always lands on the newest message of the active task,
+  // regardless of where the previous task was left scrolled.
+  useEffect(() => {
+    stickToBottom.current = true;
+    setAtBottom(true);
+    scrollToBottom();
+  }, [activeTaskId, scrollToBottom]);
 
   const addImages = useCallback(
     async (files: File[]) => {
@@ -246,6 +272,9 @@ function ChatTab() {
     setText("");
     const sent = images;
     setImages([]);
+    // A message the user just sent must always be visible.
+    stickToBottom.current = true;
+    setAtBottom(true);
     void runAgentTurn({ text: message, images: sent });
   };
 
@@ -264,7 +293,7 @@ function ChatTab() {
       }}
       style={{ position: "relative" }}
     >
-      <div className="chat-log" ref={logRef}>
+      <div className="chat-log" ref={logRef} onScroll={onLogScroll}>
         {events.length === 0 && configured && (
           <div className="msg notice" style={{ textAlign: "left" }}>
             {t("chat.placeholder")}
@@ -276,6 +305,20 @@ function ChatTab() {
         {agentState === "running" && (
           <div className="msg notice">
             {t("chat.thinking")} {agentStep > 0 ? `· ${t("chat.stepOf", { i: agentStep, max: settings.maxSteps })}` : ""}
+          </div>
+        )}
+        {!atBottom && (
+          <div className="chat-jump-row">
+            <button
+              className="btn small chat-jump"
+              onClick={() => {
+                stickToBottom.current = true;
+                setAtBottom(true);
+                scrollToBottom();
+              }}
+            >
+              ↓ {t("chat.jumpToLatest")}
+            </button>
           </div>
         )}
       </div>

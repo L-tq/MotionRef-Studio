@@ -11,6 +11,7 @@ import {
   activeActionOfOwner,
   actionsOfOwner,
   defaultActionName,
+  defaultCollectionName,
   type ActionDesc,
   type CameraActionDesc,
   type CameraKey,
@@ -189,6 +190,9 @@ function loadSettings(): LlmSettings {
       // Migration: 24 was the old default; users who never touched it get the
       // new default of 100.
       if (parsed.maxSteps === 24) parsed.maxSteps = DEFAULT_LLM_SETTINGS.maxSteps;
+      // Migration: "proxy" was the old default; saveSettings persists the whole
+      // object, so untouched installs carry it and get the new "direct" default.
+      if (parsed.connection === "proxy") parsed.connection = DEFAULT_LLM_SETTINGS.connection;
       return parsed;
     }
   } catch {
@@ -282,6 +286,15 @@ export interface AppActions {
   addObject(type: GeometryType): void;
   deleteObjects(ids: string[]): void;
   duplicateObject(id: string): void;
+  /** Outliner collections (Blender-style). */
+  addCollection(): void;
+  renameCollection(id: string, name: string): void;
+  /** Delete a collection; member objects return to the scene root. */
+  deleteCollection(id: string): void;
+  /** Move objects into a collection (null = scene root). */
+  moveToCollection(ids: string[], collectionId: string | null): void;
+  /** Show/hide every member of a collection. */
+  setCollectionVisible(id: string, visible: boolean): void;
   commitPose(id: string, pose: Partial<Pick<TransformKey, "position" | "rotation" | "scale">>): void;
   setKeyAtPlayhead(id?: string): void;
   /** Insert a full camera key (evaluated pose) for the given camera at the playhead. */
@@ -358,6 +371,8 @@ export interface AppActions {
   pause(): void;
   stop(): void;
   select(id: string | null, additive: boolean): void;
+  /** Select a group of ids at once (Outliner collection rows). */
+  selectMany(ids: string[], additive: boolean): void;
   setGizmo(mode: GizmoMode): void;
   setUi<K extends keyof AppState>(key: K, value: AppState[K]): void;
   setLayout(patch: Partial<LayoutState>): void;
@@ -566,6 +581,58 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
       else delete copy.activeActionId;
     });
     set({ selection: [copyId] });
+  },
+
+  // --- Outliner collections (Blender-style) ----------------------------------
+
+  addCollection() {
+    get().mutateDoc("add-collection", (draft) => {
+      draft.collections.push({ id: newId("col"), name: defaultCollectionName(draft) });
+    });
+  },
+
+  renameCollection(id, name) {
+    const clean = name.trim().slice(0, 80);
+    if (!clean) return;
+    get().mutateDoc("rename-collection", (draft) => {
+      const col = draft.collections.find((c) => c.id === id);
+      if (col) col.name = clean;
+    });
+  },
+
+  /** Blender "Delete" on a collection: unlink it; members stay in the scene
+   *  root (objects are NOT deleted). */
+  deleteCollection(id) {
+    get().mutateDoc("delete-collection", (draft) => {
+      draft.collections = draft.collections.filter((c) => c.id !== id);
+      for (const o of draft.objects) {
+        if (o.collectionId === id) delete o.collectionId;
+      }
+    });
+  },
+
+  /** Move objects into a collection (null = back to the scene root). */
+  moveToCollection(ids, collectionId) {
+    if (!ids.length) return;
+    const idSet = new Set(ids);
+    get().mutateDoc("move-to-collection", (draft) => {
+      const exists = collectionId !== null && draft.collections.some((c) => c.id === collectionId);
+      for (const o of draft.objects) {
+        if (!idSet.has(o.id)) continue;
+        if (collectionId !== null && exists) o.collectionId = collectionId;
+        else delete o.collectionId;
+      }
+    });
+  },
+
+  /** Show/hide every member of a collection (writes object.visible, which is
+   *  what the viewport and render evaluate). */
+  setCollectionVisible(id, visible) {
+    get().mutateDoc("collection-visibility", (draft) => {
+      for (const o of draft.objects) {
+        if (o.collectionId === id) o.visible = visible;
+      }
+    });
   },
 
   /** Gizmo / inspector transform edit with auto-key semantics. */
@@ -1101,6 +1168,12 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
       }
       return { selection: [id] };
     });
+  },
+
+  selectMany(ids, additive) {
+    set((s) => ({
+      selection: additive ? [...new Set([...s.selection, ...ids])] : [...ids],
+    }));
   },
 
   setGizmo(mode) {

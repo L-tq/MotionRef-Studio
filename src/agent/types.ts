@@ -81,7 +81,7 @@ export const DEFAULT_LLM_SETTINGS: LlmSettings = {
   baseUrl: "",
   apiKey: "",
   model: "",
-  connection: "proxy",
+  connection: "direct",
   maxImages: 8,
   maxSteps: 100,
 };

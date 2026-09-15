@@ -229,7 +229,48 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .palette button:hover { border-color: var(--accent); color: var(--text); background: var(--bg-4); }
 .palette svg { width: 26px; height: 26px; }
 
-.hierarchy { padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+.outliner { padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+
+/* Collection rows (Blender-style Outliner grouping) */
+.crow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: var(--radius-s);
+  cursor: pointer;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  user-select: none;
+}
+.crow:hover { background: var(--bg-3); }
+.crow .tri {
+  width: 14px;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--text-3);
+  font-size: 10px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.crow .tri:hover { color: var(--text); }
+.crow .col-icon { width: 14px; height: 14px; flex-shrink: 0; color: var(--text-2); }
+.crow .col-icon svg { width: 100%; height: 100%; display: block; }
+.crow .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crow .name input {
+  width: 100%; padding: 1px 4px; font-size: 12px; background: var(--bg-4);
+  border: 1px solid var(--accent); border-radius: 3px;
+}
+.crow .icon-btn { width: 22px; height: 22px; opacity: 0; }
+.crow:hover .icon-btn { opacity: 1; }
+.crow .icon-btn.hidden-eye { opacity: 0.4; }
+.crow.drop-target { border-color: var(--accent); background: rgba(124, 92, 255, 0.14); }
+.hrow.in-collection { margin-left: 18px; }
+.new-collection { font-size: 13px; }
+
 .hrow {
   display: flex;
   align-items: center;
@@ -824,6 +865,12 @@ input[type="checkbox"] { accent-color: var(--accent); }
 
 .chat { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .chat-log { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.chat-jump-row {
+  position: sticky; bottom: 0;
+  display: flex; justify-content: flex-end;
+  margin-top: -34px; pointer-events: none; z-index: 2;
+}
+.chat-jump { pointer-events: auto; box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45); }
 .msg { display: flex; flex-direction: column; gap: 4px; max-width: 100%; }
 .msg .who {
   font-size: 10.5px;

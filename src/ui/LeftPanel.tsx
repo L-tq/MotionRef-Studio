@@ -1,5 +1,5 @@
-import { useState, type ReactElement } from "react";
-import { GEOMETRY_CATALOG, type GeometryType } from "../core/types";
+import { useRef, useState, type DragEvent, type ReactElement } from "react";
+import { GEOMETRY_CATALOG, type GeometryType, type ObjectDesc } from "../core/types";
 import { useStore } from "../state/store";
 import { getLocale, useT } from "../i18n";
 
@@ -81,6 +81,13 @@ const ICONS: Record<GeometryType, ReactElement> = {
   ),
 };
 
+/** Blender-style folder glyph for collection rows. */
+const FOLDER_ICON = (
+  <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" strokeWidth="1.6">
+    <path d="M5 10a2 2 0 0 1 2-2h6l3 3h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2z" />
+  </svg>
+);
+
 export function LeftPanel() {
   const t = useT();
   const locale = getLocale();
@@ -88,12 +95,132 @@ export function LeftPanel() {
   const selection = useStore((s) => s.selection);
   const addObject = useStore((s) => s.addObject);
   const select = useStore((s) => s.select);
+  const selectMany = useStore((s) => s.selectMany);
   const deleteObjects = useStore((s) => s.deleteObjects);
   const duplicateObject = useStore((s) => s.duplicateObject);
   const mutateDoc = useStore((s) => s.mutateDoc);
+  const addCollection = useStore((s) => s.addCollection);
+  const renameCollection = useStore((s) => s.renameCollection);
+  const deleteCollection = useStore((s) => s.deleteCollection);
+  const moveToCollection = useStore((s) => s.moveToCollection);
+  const setCollectionVisible = useStore((s) => s.setCollectionVisible);
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [renamingCol, setRenamingCol] = useState<string | null>(null);
+  // Outliner tree state: root disclosure + per-collection collapse + the drop
+  // target currently highlighted during a row drag ("root" = scene root).
+  const [rootOpen, setRootOpen] = useState(true);
+  const [collapsedCols, setCollapsedCols] = useState<Set<string>>(new Set());
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const dragIds = useRef<string[] | null>(null);
 
   const selected = new Set(selection);
+
+  const startDrag = (e: DragEvent, obj: ObjectDesc) => {
+    // Blender convention: dragging a row that is part of the selection moves
+    // the entire selection, not just that row.
+    dragIds.current = selected.has(obj.id) && selection.length > 1 ? [...selection] : [obj.id];
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", dragIds.current.join(","));
+  };
+
+  const endDrag = () => {
+    dragIds.current = null;
+    setDropTarget(null);
+  };
+
+  const renderObjectRow = (obj: ObjectDesc, inCollection: boolean) => (
+    <div
+      key={obj.id}
+      className={`hrow ${inCollection ? "in-collection" : ""} ${selected.has(obj.id) ? "selected" : ""}`}
+      draggable
+      onDragStart={(e) => startDrag(e, obj)}
+      onDragEnd={endDrag}
+      onClick={(e) => select(obj.id, e.shiftKey || e.ctrlKey || e.metaKey)}
+    >
+      <span className="dot" style={{ background: obj.color, opacity: obj.visible ? 1 : 0.25 }} />
+      {renaming === obj.id ? (
+        <input
+          autoFocus
+          defaultValue={obj.name}
+          onClick={(e) => e.stopPropagation()}
+          onBlur={(e) => {
+            const name = e.target.value.trim() || obj.name;
+            mutateDoc("rename", (d) => {
+              const target = d.objects.find((o) => o.id === obj.id);
+              if (target) target.name = name;
+            });
+            setRenaming(null);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            if (e.key === "Escape") setRenaming(null);
+          }}
+        />
+      ) : (
+        <span
+          className="name"
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            setRenaming(obj.id);
+          }}
+        >
+          {obj.name}
+        </span>
+      )}
+      {doc.actions.some((a) => a.kind === "object" && a.objectId === obj.id && a.keys.length > 0) ? (
+        <span className="badge" title={t("outliner.keyed")}>◆</span>
+      ) : null}
+      <button
+        className={`icon-btn ${obj.visible ? "" : "hidden-eye"}`}
+        title={t("outliner.visibility")}
+        onClick={(e) => {
+          e.stopPropagation();
+          mutateDoc("visible", (d) => {
+            const target = d.objects.find((o) => o.id === obj.id);
+            if (target) target.visible = !target.visible;
+          });
+        }}
+      >
+        {obj.visible ? "👁" : "🚫"}
+      </button>
+      <button
+        className="icon-btn"
+        title={t("common.duplicate")}
+        onClick={(e) => {
+          e.stopPropagation();
+          duplicateObject(obj.id);
+        }}
+      >
+        ⧉
+      </button>
+      <button
+        className="icon-btn danger"
+        title={t("common.delete")}
+        onClick={(e) => {
+          e.stopPropagation();
+          deleteObjects([obj.id]);
+        }}
+      >
+        ✕
+      </button>
+    </div>
+  );
+
+  const dropProps = (targetId: string | null) => ({
+    onDragOver: (e: DragEvent) => {
+      if (!dragIds.current) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = "move";
+      if (dropTarget !== targetId) setDropTarget(targetId);
+    },
+    onDrop: (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (dragIds.current) moveToCollection(dragIds.current, targetId);
+      endDrag();
+    },
+  });
 
   return (
     <div className="panel left-panel">
@@ -113,89 +240,146 @@ export function LeftPanel() {
         ))}
       </div>
       <div className="panel-header">
-        <span>{t("panel.hierarchy")}</span>
+        <span>{t("panel.outliner")}</span>
         <span className="spacer" />
         <span>{t("panel.objects", { n: doc.objects.length })}</span>
+        <button className="icon-btn new-collection" title={t("outliner.newCollection")} onClick={addCollection}>
+          ＋
+        </button>
       </div>
-      <div className="panel-body">
-        {doc.objects.length === 0 ? (
+      <div
+        className="panel-body"
+        onClick={(e) => {
+          // Blender Outliner convention: clicking anywhere below/outside the
+          // rows (empty space, padding) deselects everything.
+          if (!(e.target as HTMLElement).closest(".hrow,.crow")) select(null, false);
+        }}
+        onDragOver={(e) => {
+          if (!dragIds.current) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          if (dropTarget !== "root") setDropTarget("root");
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropTarget(null);
+        }}
+        onDrop={(e) => {
+          if (!dragIds.current) return;
+          e.preventDefault();
+          moveToCollection(dragIds.current, null);
+          endDrag();
+        }}
+      >
+        {doc.objects.length === 0 && doc.collections.length === 0 ? (
           <div className="empty-note">{t("panel.empty")}</div>
         ) : (
-          <div className="hierarchy">
-            {doc.objects.map((obj) => (
-              <div
-                key={obj.id}
-                className={`hrow ${selected.has(obj.id) ? "selected" : ""}`}
-                onClick={(e) => select(obj.id, e.shiftKey || e.ctrlKey || e.metaKey)}
+          <div className="outliner">
+            <div
+              className={`crow root ${dropTarget === "root" ? "drop-target" : ""}`}
+              onClick={() => select(null, false)}
+              {...dropProps(null)}
+            >
+              <button
+                className="tri"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setRootOpen((v) => !v);
+                }}
               >
-                <span className="dot" style={{ background: obj.color, opacity: obj.visible ? 1 : 0.25 }} />
-                {renaming === obj.id ? (
-                  <input
-                    autoFocus
-                    defaultValue={obj.name}
-                    onClick={(e) => e.stopPropagation()}
-                    onBlur={(e) => {
-                      const name = e.target.value.trim() || obj.name;
-                      mutateDoc("rename", (d) => {
-                        const target = d.objects.find((o) => o.id === obj.id);
-                        if (target) target.name = name;
-                      });
-                      setRenaming(null);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                      if (e.key === "Escape") setRenaming(null);
-                    }}
-                  />
-                ) : (
-                  <span
-                    className="name"
-                    onDoubleClick={(e) => {
-                      e.stopPropagation();
-                      setRenaming(obj.id);
-                    }}
-                  >
-                    {obj.name}
-                  </span>
-                )}
-                {doc.actions.some((a) => a.kind === "object" && a.objectId === obj.id && a.keys.length > 0) ? (
-                  <span className="badge" title={t("hierarchy.keyed")}>◆</span>
-                ) : null}
-                <button
-                  className={`icon-btn ${obj.visible ? "" : "hidden-eye"}`}
-                  title={t("hierarchy.visibility")}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    mutateDoc("visible", (d) => {
-                      const target = d.objects.find((o) => o.id === obj.id);
-                      if (target) target.visible = !target.visible;
-                    });
-                  }}
-                >
-                  {obj.visible ? "👁" : "🚫"}
-                </button>
-                <button
-                  className="icon-btn"
-                  title={t("common.duplicate")}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    duplicateObject(obj.id);
-                  }}
-                >
-                  ⧉
-                </button>
-                <button
-                  className="icon-btn danger"
-                  title={t("common.delete")}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    deleteObjects([obj.id]);
-                  }}
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
+                {rootOpen ? "▾" : "▸"}
+              </button>
+              <span className="col-icon">{FOLDER_ICON}</span>
+              <span className="name">{t("outliner.sceneCollection")}</span>
+            </div>
+            {rootOpen && (
+              <>
+                {doc.collections.map((col) => {
+                  const members = doc.objects.filter((o) => o.collectionId === col.id);
+                  const open = !collapsedCols.has(col.id);
+                  const anyVisible = members.some((m) => m.visible);
+                  return (
+                    <div className="col-group" key={col.id}>
+                      <div
+                        className={`crow ${dropTarget === col.id ? "drop-target" : ""}`}
+                        onClick={(e) => {
+                          if (renamingCol === col.id) return;
+                          // Clicking the row selects its contents (Blender
+                          // syncs collection selection to child objects).
+                          selectMany(members.map((m) => m.id), e.shiftKey || e.ctrlKey || e.metaKey);
+                        }}
+                        {...dropProps(col.id)}
+                      >
+                        <button
+                          className="tri"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setCollapsedCols((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(col.id)) next.delete(col.id);
+                              else next.add(col.id);
+                              return next;
+                            });
+                          }}
+                        >
+                          {open ? "▾" : "▸"}
+                        </button>
+                        <span className="col-icon">{FOLDER_ICON}</span>
+                        {renamingCol === col.id ? (
+                          <span className="name">
+                            <input
+                              autoFocus
+                              defaultValue={col.name}
+                              onClick={(e) => e.stopPropagation()}
+                              onBlur={(e) => {
+                                renameCollection(col.id, e.target.value || col.name);
+                                setRenamingCol(null);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                                if (e.key === "Escape") setRenamingCol(null);
+                              }}
+                            />
+                          </span>
+                        ) : (
+                          <span
+                            className="name"
+                            title={t("outliner.dropHint")}
+                            onDoubleClick={(e) => {
+                              e.stopPropagation();
+                              setRenamingCol(col.id);
+                            }}
+                          >
+                            {col.name}
+                          </span>
+                        )}
+                        <button
+                          className={`icon-btn ${anyVisible ? "" : "hidden-eye"}`}
+                          title={t("outliner.collectionVisibility")}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setCollectionVisible(col.id, !anyVisible);
+                          }}
+                        >
+                          {anyVisible ? "👁" : "🚫"}
+                        </button>
+                        <button
+                          className="icon-btn danger"
+                          title={t("outliner.deleteCollection")}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deleteCollection(col.id);
+                          }}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                      {open && members.map((o) => renderObjectRow(o, true))}
+                    </div>
+                  );
+                })}
+                {doc.objects.filter((o) => !o.collectionId).map((o) => renderObjectRow(o, false))}
+              </>
+            )}
           </div>
         )}
       </div>

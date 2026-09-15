@@ -40,12 +40,17 @@ export const zh: Record<string, string> = {
   "projects.confirmDelete": "删除项目“{name}”？",
 
   // Panels
-  "panel.hierarchy": "场景层级",
+  "panel.outliner": "大纲",
   "panel.addGeometry": "添加几何体",
   "panel.objects": "{n} 个对象",
   "panel.empty": "空场景 — 添加几何体，或直接让智能体来搭。",
-  "hierarchy.visibility": "显示 / 隐藏",
-  "hierarchy.keyed": "含关键帧",
+  "outliner.visibility": "显示 / 隐藏",
+  "outliner.keyed": "含关键帧",
+  "outliner.newCollection": "新建集合",
+  "outliner.sceneCollection": "场景集合",
+  "outliner.collectionVisibility": "显示 / 隐藏集合",
+  "outliner.deleteCollection": "删除集合 — 对象移回场景根级",
+  "outliner.dropHint": "拖拽对象到此处 · 双击重命名",
 
   // Viewport
   "viewport.select": "选择 (Q)",
@@ -186,6 +191,7 @@ export const zh: Record<string, string> = {
   "chat.stepLimit": "已达到步数上限（{n}）— 发送消息可继续。",
   "chat.removeImage": "移除",
   "chat.dropImages": "拖拽图片到此处以附加",
+  "chat.jumpToLatest": "回到底部",
   "chat.restored": "已恢复上次的对话记录。",
 
   // 任务管理（按项目）
