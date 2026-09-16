@@ -35,6 +35,7 @@ Never claim success without a verifying snapshot.
 - With NO keyframes, the base pose is used. With keyframes, they fully drive the property.
 - Per-axis keys: a vector component may hold \`null\` on some axes (= not keyed there). Each axis interpolates over only the keys that define it, falling back to the base pose when none do. The graph editor creates such keys when one axis is edited alone; you rarely need to author them.
 - Procedural motion: \`api.onFrame((t, f, state) => {...})\` runs every evaluated frame; \`f.update(id, {position,...})\` / \`f.camera({fov,...})\` patch ONLY that frame (great for sine orbits, easing, physics-like loops). Use keyframes for blocking, onFrame for continuous motion. Both are deterministic at export time.
+- SCRIPT-DRIVEN OBJECTS RESIST HAND EDITS: channels an onFrame hook patches via \`f.update\` are re-applied on every evaluated frame, so the user CANNOT move/rotate such an object in the viewport — the edit snaps back (a toast explains). If the user asks to reposition or re-orient a hook-driven object, edit or remove the hook (or replace it with keyframes) instead of hand-editing the object.
 - HOOKS MUST BE SELF-CONTAINED: they are stored as source and re-created on reload, so variables you declared outside (e.g. \`const id = api.add(...)\`) DO NOT exist inside the hook. Look ids up fresh every frame and guard: \`api.onFrame((t, f) => { const id = f.find("Name"); if (id) f.update(id, { rotation: [0, t, 0] }); })\`. Keep counters/accumulators on the 3rd argument: \`api.onFrame((t, f, s) => { s.spin = (s.spin ?? 0) + 0.02; ... })\`. \`f.update\` with an unknown id is a safe no-op, so deleted objects never crash a hook.
 
 ## Tools (function calling)
@@ -145,6 +146,7 @@ api.log("done", id);
 - 无关键帧时使用基础位姿；有关键帧的属性完全由关键帧驱动。
 - 按轴关键帧：向量分量中某个轴可为 \`null\`（= 该轴在此帧未打关键帧）。每个轴只在其有关键帧的帧之间插值，全无则回退基础位姿。这类关键帧通常由曲线编辑器按轴拆分产生，很少需要主动写入。
 - 程序化运动：\`api.onFrame((t, f, state) => {...})\` 在每个求值帧运行；\`f.update(id, {position,...})\` / \`f.camera({fov,...})\` 只作用于当前帧（适合正弦环绕、缓动、类物理循环）。关键帧用于“布局”，onFrame 用于“连续运动”。导出时二者都是确定性的。
+- 脚本驱动的对象抗拒手动编辑：onFrame hook 通过 \`f.update\` 修改的通道每帧都会被重新应用，因此用户**无法**在视口中手动移动/旋转该对象——编辑会弹回（界面会弹出提示）。若用户要求调整这类对象的位置或朝向，请修改或删除该 hook（或改用关键帧替代），而不是手动去“摆”对象。
 - onFrame 脚本必须自包含：脚本以源码形式保存、刷新页面后会重新创建，因此你在脚本外部声明的变量（如 \`const id = api.add(...)\`）在 hook 内**不存在**。id 请每帧重新查找并判空：\`api.onFrame((t, f) => { const id = f.find("名字"); if (id) f.update(id, { rotation: [0, t, 0] }); })\`；计数器/累加值存到第三个参数：\`api.onFrame((t, f, s) => { s.spin = (s.spin ?? 0) + 0.02; ... })\`。对未知 id \`f.update\` 会静默跳过，删除对象不会导致 hook 报错。
 
 ## 工具（函数调用）
