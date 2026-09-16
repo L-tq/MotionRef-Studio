@@ -18,7 +18,6 @@ import {
   deleteSessionRecord,
   getSession,
   listSessions,
-  loadCurrentSessionId,
   migrateLegacyChat,
   putSession,
   saveCurrentSessionId,
@@ -262,8 +261,11 @@ export async function loadProjectTasks(projectId: string | null): Promise<void> 
     // clobber it with the (older) persisted snapshot.
     events[r.id] = runtimes.get(r.id)?.abort ? (prevEvents[r.id] ?? r.events) : r.events;
   }
-  const lastActive = loadCurrentSessionId();
-  const active = records.find((r) => r.id === lastActive) ?? records[0];
+  // records are sorted by updatedAt DESC (listSessions), so records[0] is
+  // the most recently updated session — the one the chat should reopen. Do
+  // NOT honor the persisted pointer here: it can point to an orphan empty
+  // session left by a first-save adoption race, which would hide real history.
+  const active = records[0];
   // A task that is still running keeps its running state across the switch.
   const states: Record<string, "running"> = {};
   for (const r of records) if (runtimes.get(r.id)?.abort) states[r.id] = "running";

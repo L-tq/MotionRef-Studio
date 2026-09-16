@@ -24,10 +24,12 @@ export const zh: Record<string, string> = {
 
   // Top bar / projects
   "topbar.new": "新建项目",
-  "topbar.save": "保存项目",
+  "topbar.save": "保存到此浏览器（场景 + 聊天留在本设备）",
   "topbar.projects": "项目",
-  "topbar.importJson": "导入 JSON",
-  "topbar.exportJson": "导出 JSON",
+  "topbar.importJson": "导入场景 JSON（不含聊天）",
+  "topbar.exportJson": "导出场景 JSON（不含聊天）",
+  "topbar.importProject": "从磁盘导入项目文件（场景 + 聊天记录）",
+  "topbar.exportProject": "导出项目文件到磁盘（场景 + 聊天记录）",
   "topbar.exportVideo": "导出视频",
   "topbar.settings": "设置",
   "topbar.demo": "加载示例",
@@ -38,6 +40,7 @@ export const zh: Record<string, string> = {
   "projects.load": "加载",
   "projects.confirmNew": "确定新建空项目？未保存的修改将丢失。",
   "projects.confirmDelete": "删除项目“{name}”？",
+  "projects.storageNote": "💾 保存将项目保存在此浏览器中（localStorage + IndexedDB）——仅限本设备。如需备份或将项目（连同聊天记录）转移到其他设备，请使用工具栏的 ⬇/⬆ 导出/导入项目。",
 
   // Panels
   "panel.outliner": "大纲",
@@ -278,9 +281,15 @@ export const zh: Record<string, string> = {
 
   // Misc
   "error.invalidJson": "场景 JSON 无效：{msg}",
+  "error.invalidProjectBundle": "项目文件无效：{msg}",
+  "error.wrongImporterScene": "这是仅场景文件（不含聊天记录）。请使用工具栏的 ⬆ 导入 JSON，而不是项目菜单。",
+  "error.wrongImporterProject": "这是完整项目文件（场景 + 聊天）。请使用 🗂 项目菜单中的 ⬆ 导入，而不是工具栏的导入 JSON。",
+  "error.notAProjectBundle": "此文件不是项目文件。请先用 🗂 项目菜单中的 ⬇ 导出项目生成项目文件。",
   "error.storageFull": "localStorage 空间不足——请改为导出场景 JSON。",
   "error.docImported": "场景已导入。",
   "notice.docExported": "场景 JSON 已下载。",
+  "notice.projectExported": "项目文件已下载（场景 + 聊天）。",
+  "notice.projectImported": "项目“{name}”已导入（场景 + 聊天）。",
   "notice.projectSaved": "项目已保存。",
   "notice.demoLoaded": "示例场景已加载 — 点击播放。",
 };

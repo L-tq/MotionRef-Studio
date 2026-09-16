@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import { useStore } from "../state/store";
 import { setLocale, useLocale, useT } from "../i18n";
-import { validateSceneDocument } from "../core/validate";
+import { validateSceneDocument, detectBundleFormat, PROJECT_FORMAT } from "../core/validate";
 import { cloneDoc, createEmptyDocument } from "../core/types";
 import { downloadBlob } from "../core/videoExport";
 import { demoDocument } from "../core/demoScene";
@@ -28,6 +28,12 @@ export function TopBar() {
     try {
       const text = await file.text();
       const parsed = JSON.parse(text) as unknown;
+      // Refuse a project bundle here with actionable guidance — this importer
+      // only loads the scene; the chat history lives in the Projects modal.
+      if (detectBundleFormat(parsed) === PROJECT_FORMAT) {
+        showToast("error.wrongImporterProject");
+        return;
+      }
       const result = validateSceneDocument(parsed);
       if ("error" in result) {
         showToast(`error.invalidJson|${result.error}`);

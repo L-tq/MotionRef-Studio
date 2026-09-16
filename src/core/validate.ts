@@ -4,6 +4,20 @@
 import { createEmptyDocument, isGeometryType, newId, specOf, DEFAULT_CAMERA_ID, type ActionDesc, type CameraActionDesc, type CameraDesc, type CameraKey, type CollectionDesc, type KeyVec3, type ObjectActionDesc, type ObjectDesc, type SceneDocument, type TransformKey, type Vec3 } from "./types";
 import { clampAspect } from "./cameraMath";
 
+/** Marker strings written at the top of exported files so an importer can
+ *  tell the two kinds apart and refuse the wrong one with a clear message. */
+export const SCENE_FORMAT = "motionref-studio/scene";
+export const PROJECT_FORMAT = "motionref-studio/project";
+
+/** Sniff the `format` field of a parsed JSON object so importers can refuse
+ *  the wrong file kind with actionable guidance instead of a confusing
+ *  structural validation error. */
+export function detectBundleFormat(parsed: unknown): string | null {
+  if (!parsed || typeof parsed !== "object") return null;
+  const fmt = (parsed as Record<string, unknown>).format;
+  return typeof fmt === "string" ? fmt : null;
+}
+
 const HEX_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
 
 function fail(what: string): string {

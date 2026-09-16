@@ -24,9 +24,9 @@ import {
 } from "../core/types";
 import { evaluate, evalCameraById } from "../core/animation";
 import type { GizmoMode } from "../core/engine";
-import { validateSceneDocument } from "../core/validate";
+import { validateSceneDocument, SCENE_FORMAT, PROJECT_FORMAT } from "../core/validate";
 import { clampAspect } from "../core/cameraMath";
-import { putSession } from "./chatPersist";
+import { listSessions, putSession, type ChatSessionRecord } from "./chatPersist";
 import {
   DEFAULT_LLM_SETTINGS,
   isConfigured,
@@ -392,6 +392,13 @@ export interface AppActions {
   deleteProject(id: string): void;
   /** Bind the working scene to a project (or none) and swap the task view. */
   setProjectId(id: string | null): void;
+  /** Download: bundle the working scene + all this project's chat sessions into
+   *  a portable JSON file. Returns the blob + filename, or an error string. */
+  exportProjectBundle(): Promise<{ filename: string; blob: Blob } | { error: string }>;
+  /** Upload: validate and restore an exported project bundle. Generates fresh
+   *  project + session ids (collision-safe), inserts the scene as a new
+   *  project, re-inserts the chat sessions, and binds the working scene. */
+  importProjectBundle(parsed: unknown): Promise<{ ok: true; name: string } | { error: string }>;
 
   // Agent tasks
   /** Append an event to one task's transcript. */
@@ -1263,31 +1270,34 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
       state.showToast("error.storageFull");
       return;
     }
-    set({ projects, projectId: id });
     try {
       localStorage.setItem(CURRENT_PROJECT_KEY, id);
     } catch {
       /* ignore */
     }
     // First save of an unsaved scene: adopt its scratch tasks into the new
-    // project so the task context is saved (and later loaded) with it.
+    // project BEFORE binding the project id. Doing it first means the store
+    // subscription that fires loadProjectTasks(projectId) finds the adopted
+    // sessions already persisted — so the chat history is never wiped.
     if (!state.projectId) {
-      const s2 = get();
-      for (const meta of s2.tasks) {
-        s2.registerTaskProject(meta.id, id);
+      const tasks = state.tasks;
+      for (const meta of tasks) {
+        state.registerTaskProject(meta.id, id);
         void putSession({
           id: meta.id,
           name: meta.name,
           projectId: id,
           createdAt: meta.createdAt,
           updatedAt: meta.updatedAt,
-          events: s2.taskEvents[meta.id] ?? [],
+          events: state.taskEvents[meta.id] ?? [],
         });
       }
-      if (s2.tasks.length > 0) {
-        set((st) => ({ tasks: st.tasks.map((m) => ({ ...m, projectId: id })) }));
-      }
+      // Relabel in-memory tasks to the new project, then bind — one store
+      // update. No wipe: the tasks are already correct.
+      set({ projects, projectId: id, tasks: tasks.map((m) => ({ ...m, projectId: id })) });
+      return;
     }
+    set({ projects, projectId: id });
     get().showToast("notice.projectSaved");
   },
 
@@ -1317,13 +1327,95 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
   },
 
   setProjectId(id) {
-    set({ projectId: id, tasks: [], activeTaskId: null, taskEvents: {}, taskStates: {}, taskSteps: {} });
+    set({ projectId: id });
     try {
       if (id === null) localStorage.removeItem(CURRENT_PROJECT_KEY);
       else localStorage.setItem(CURRENT_PROJECT_KEY, id);
     } catch {
       /* ignore */
     }
+  },
+
+  async exportProjectBundle() {
+    const state = get();
+    const doc = cloneDoc(state.doc);
+    let sessions: ChatSessionRecord[];
+    try {
+      sessions = await listSessions(state.projectId);
+    } catch {
+      sessions = [];
+    }
+    const bundle = {
+      format: "motionref-studio/project",
+      version: 1,
+      exportedAt: Date.now(),
+      project: { name: doc.name || "Untitled", projectId: state.projectId },
+      doc,
+      sessions,
+    };
+    const json = JSON.stringify(bundle);
+    const filename = `${doc.name || "project"}.project.json`;
+    return { filename, blob: new Blob([json], { type: "application/json" }) };
+  },
+
+  async importProjectBundle(parsed) {
+    if (!parsed || typeof parsed !== "object") return { error: "not an object" };
+    const b = parsed as Record<string, unknown>;
+    // Distinguish the three failure modes so the user knows exactly where to
+    // import: a scene-only JSON belongs in the toolbar's Import JSON button;
+    // a non-JSON / unrecognized file is just invalid here.
+    const fmt = b.format;
+    if (fmt === SCENE_FORMAT) return { error: "scene-only" };
+    if (fmt !== PROJECT_FORMAT) return { error: "unrecognized" };
+    const docVal = b.doc;
+    if (!docVal || typeof docVal !== "object") return { error: "missing scene" };
+    const result = validateSceneDocument(docVal);
+    if ("error" in result) return { error: result.error };
+    const doc = result.doc;
+    const rawSessions = b.sessions;
+    if (!Array.isArray(rawSessions)) return { error: "missing sessions" };
+
+    // Collision-safe restore: fresh project id + fresh session ids so re-imports
+    // never overwrite an existing project's chat. Remap each session's projectId.
+    const projectId = newId("p");
+    const name = (b.project && typeof (b.project as Record<string, unknown>).name === "string")
+      ? ((b.project as Record<string, string>).name) || doc.name || "Imported"
+      : doc.name || "Imported";
+    const remapped: ChatSessionRecord[] = [];
+    for (const raw of rawSessions) {
+      if (!raw || typeof raw !== "object") continue;
+      const r = raw as Record<string, unknown>;
+      if (typeof r.id !== "string" || !Array.isArray(r.events)) continue;
+      remapped.push({
+        id: newId("s"),
+        name: typeof r.name === "string" ? r.name : "",
+        projectId,
+        createdAt: typeof r.createdAt === "number" ? r.createdAt : Date.now(),
+        updatedAt: typeof r.updatedAt === "number" ? r.updatedAt : Date.now(),
+        events: r.events as ChatSessionRecord["events"],
+      });
+    }
+
+    const entry: ProjectEntry = { id: projectId, name, savedAt: Date.now(), doc: cloneDoc(doc) };
+    const projects = [entry, ...get().projects.filter((p) => p.id !== projectId)].slice(0, 50);
+    try {
+      localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
+    } catch {
+      get().showToast("error.storageFull");
+      return { error: "storage full" };
+    }
+
+    await Promise.all(remapped.map((r) => putSession(r)));
+
+    get().mutateDoc("import-project", (draft) => {
+      Object.assign(draft, cloneDoc(doc));
+    });
+    set({ projects, selection: [], playhead: 0, playing: false, projectsOpen: false, camPanelSel: null });
+    // Bind the working scene to the new project; the agentLoop subscription
+    // fires loadProjectTasks(projectId), which reads the just-inserted sessions
+    // from IndexedDB and populates the chat view.
+    get().setProjectId(projectId);
+    return { ok: true, name };
   },
 
   // --- agent tasks ------------------------------------------------------------------

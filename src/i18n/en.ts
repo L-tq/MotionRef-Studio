@@ -24,10 +24,12 @@ export const en: Record<string, string> = {
 
   // Top bar / projects
   "topbar.new": "New project",
-  "topbar.save": "Save project",
+  "topbar.save": "Save to this browser (scene + chat stay on this device)",
   "topbar.projects": "Projects",
-  "topbar.importJson": "Import JSON",
-  "topbar.exportJson": "Export JSON",
+  "topbar.importJson": "Import scene JSON (no chat)",
+  "topbar.exportJson": "Export scene JSON (no chat)",
+  "topbar.importProject": "Import project file (scene + chat history) from disk",
+  "topbar.exportProject": "Export project file (scene + chat history) to disk",
   "topbar.exportVideo": "Export video",
   "topbar.settings": "Settings",
   "topbar.demo": "Load demo",
@@ -38,6 +40,7 @@ export const en: Record<string, string> = {
   "projects.load": "Load",
   "projects.confirmNew": "Start a new empty project? Unsaved changes will be lost.",
   "projects.confirmDelete": "Delete project “{name}”?",
+  "projects.storageNote": "💾 Save keeps the project in this browser (localStorage + IndexedDB) — it stays on this device. To back up or move a project to another device, including its chat history, use ⬇/⬆ Export/Import Project in the toolbar.",
 
   // Panels
   "panel.outliner": "Outliner",
@@ -278,9 +281,15 @@ export const en: Record<string, string> = {
 
   // Misc
   "error.invalidJson": "Invalid scene JSON: {msg}",
+  "error.invalidProjectBundle": "Invalid project file: {msg}",
+  "error.wrongImporterScene": "This is a scene-only file (no chat history). Use ⬆ Import JSON in the toolbar, not the Projects menu.",
+  "error.wrongImporterProject": "This is a full project file (scene + chat). Use ⬆ Import in the Projects menu (🗂 button), not Import JSON in the toolbar.",
+  "error.notAProjectBundle": "This file is not a project file. Export a project with ⬇ Export in the Projects menu first.",
   "error.storageFull": "localStorage is full — export the scene JSON instead.",
   "error.docImported": "Scene imported.",
   "notice.docExported": "Scene JSON downloaded.",
+  "notice.projectExported": "Project file downloaded (scene + chat).",
+  "notice.projectImported": "Project “{name}” imported (scene + chat).",
   "notice.projectSaved": "Project saved.",
   "notice.demoLoaded": "Demo scene loaded — press Play.",
 };
