@@ -94,6 +94,12 @@ export function validateSceneDocument(input: unknown): { doc: SceneDocument } | 
   if (typeof raw.duration === "number" && Number.isFinite(raw.duration)) doc.duration = Math.min(Math.max(raw.duration, 0.1), 300);
   if (typeof raw.fps === "number" && Number.isFinite(raw.fps)) doc.fps = Math.min(Math.max(Math.round(raw.fps), 1), 120);
   if (typeof raw.aspect === "number" && Number.isFinite(raw.aspect)) doc.aspect = +clampAspect(raw.aspect).toFixed(4);
+  // 3D cursor (pivot for the "cursor" rotation mode); missing → scene origin.
+  if (raw.cursor !== undefined) {
+    const c = asVec3(raw.cursor, "cursor");
+    if (typeof c === "string") return { error: c };
+    doc.cursor = c;
+  }
 
   // Cameras (Blender-style multi-camera). Legacy documents only carry the
   // single `camera` base pose — synthesize one CameraDesc from it so old

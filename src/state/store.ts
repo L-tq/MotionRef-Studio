@@ -18,6 +18,7 @@ import {
   type GeometryType,
   type KeyVec3,
   type ObjectActionDesc,
+  type PivotMode,
   type SceneDocument,
   type TransformKey,
   type Vec3,
@@ -241,6 +242,9 @@ export interface AppState {
    *  on unkeyed playhead frames, "replace" only overwrites existing keys. */
   autoKeyMode: "addReplace" | "replace";
   gizmo: GizmoMode;
+  /** Pivot point for rotate drags (Blender pivot modes; right-click the
+   *  rotate toolbar button to change). Session UI state, not persisted. */
+  pivotMode: PivotMode;
   showGrid: boolean;
   cameraPreview: boolean;
   /** Camera picked in the inspector/viewport for editing; null = follow the
@@ -296,7 +300,11 @@ export interface AppActions {
   moveToCollection(ids: string[], collectionId: string | null): void;
   /** Show/hide every member of a collection. */
   setCollectionVisible(id: string, visible: boolean): void;
-  commitPose(id: string, pose: Partial<Pick<TransformKey, "position" | "rotation" | "scale">>): void;
+  /** Gizmo / inspector transform edit with auto-key semantics. `skip` lists
+   *  transform channels driven by an onFrame script — the hook re-applies
+   *  them on every evaluate, so recording them would only litter the action
+   *  with keys that never display (and clobber real ones). */
+  commitPose(id: string, pose: Partial<Pick<TransformKey, "position" | "rotation" | "scale">>, skip?: readonly string[]): void;
   setKeyAtPlayhead(id?: string): void;
   /** Insert a full camera key (evaluated pose) for the given camera at the playhead. */
   setCameraKeyAtPlayhead(cameraId?: string): void;
@@ -375,6 +383,10 @@ export interface AppActions {
   /** Select a group of ids at once (Outliner collection rows). */
   selectMany(ids: string[], additive: boolean): void;
   setGizmo(mode: GizmoMode): void;
+  /** Change the rotation pivot point (Blender pivot modes). */
+  setPivotMode(mode: PivotMode): void;
+  /** Move the 3D cursor (doc state — persists with the scene, undoable). */
+  setCursor(pos: Vec3): void;
   setUi<K extends keyof AppState>(key: K, value: AppState[K]): void;
   setLayout(patch: Partial<LayoutState>): void;
   /** Log a message; returns true when it is a NEW entry (repeats only bump
@@ -464,6 +476,7 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
   autoKey: true,
   autoKeyMode: "addReplace",
   gizmo: "select",
+  pivotMode: "median",
   showGrid: true,
   cameraPreview: false,
   camPanelSel: null,
@@ -649,10 +662,18 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
   },
 
   /** Gizmo / inspector transform edit with auto-key semantics. */
-  commitPose(id, pose) {
+  commitPose(id, pose, skip) {
     const state = get();
     const obj = state.doc.objects.find((o) => o.id === id);
     if (!obj) return;
+    if (skip?.length) {
+      const rest: typeof pose = {};
+      if (pose.position && !skip.includes("position")) rest.position = pose.position;
+      if (pose.rotation && !skip.includes("rotation")) rest.rotation = pose.rotation;
+      if (pose.scale && !skip.includes("scale")) rest.scale = pose.scale;
+      if (!rest.position && !rest.rotation && !rest.scale) return;
+      pose = rest;
+    }
     const act = activeActionOfOwner(state.doc, { objectId: id });
     const keys = act && act.kind === "object" ? act.keys : undefined;
     const hasTrack = !!keys?.length;
@@ -1191,6 +1212,16 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
 
   setGizmo(mode) {
     set({ gizmo: mode });
+  },
+
+  setPivotMode(mode) {
+    set({ pivotMode: mode });
+  },
+
+  setCursor(pos) {
+    get().mutateDoc("place-cursor", (draft) => {
+      draft.cursor = [...pos] as Vec3;
+    });
   },
 
   setUi(key, value) {

@@ -58,7 +58,17 @@ export const zh: Record<string, string> = {
   // Viewport
   "viewport.select": "选择 (Q)",
   "viewport.translate": "移动 (W)",
-  "viewport.rotate": "旋转 (E)",
+  "viewport.rotate": "旋转 (E) — 右键选择轴心",
+  "pivot.title": "变换轴心",
+  "pivot.individual": "各自原点",
+  "pivot.median": "中位点",
+  "pivot.bbox": "包围盒中心",
+  "pivot.cursor": "3D 游标",
+  "pivot.individualDesc": "每个选中物体绕自己的原点旋转",
+  "pivot.medianDesc": "整个选区绕各物体原点的平均位置旋转",
+  "pivot.bboxDesc": "整个选区绕其包围盒中心旋转",
+  "pivot.cursorDesc": "整个选区绕 3D 游标旋转",
+  "pivot.cursorHint": "在视口中 Shift + 右键放置 3D 游标",
   "viewport.scale": "缩放 (R)",
   "viewport.grid": "网格与坐标轴",
   "viewport.cameraPreview": "场景相机预览",
@@ -70,6 +80,7 @@ export const zh: Record<string, string> = {
   "viewport.emptyHint": "这里还什么都没有",
   "viewport.emptyHint2": "从左侧面板添加几何体，或在智能体对话中描述你想要的动画。",
   "viewport.hookError": "onFrame 脚本出错：{msg}",
+  "viewport.scriptedPose": "“{names}”由 onFrame 脚本驱动 —— 它的{channels}每帧都会被脚本重设，拖拽无法生效。请在检查器（onFrame 脚本）中修改或删除该脚本。",
 
   // 行走导航
   "walk.title": "行走",

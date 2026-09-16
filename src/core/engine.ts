@@ -9,15 +9,18 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { evaluate, evalCameraById, type EvaluatedState, type HookError } from "./animation";
-import { docAspect, defaultCameraDesc, type ObjectDesc, type SceneDocument } from "./types";
+import { docAspect, defaultCameraDesc, type ObjectDesc, type PivotMode, type SceneDocument } from "./types";
 
 export type GizmoMode = "select" | "translate" | "rotate" | "scale";
 
 /** One object's gizmo-driven pose. Multi-selections emit one entry per
- *  selected object (the gizmo anchor first). */
+ *  selected object (the gizmo anchor first). `scripted` lists transform
+ *  channels an onFrame script re-applies every frame — edits to them can
+ *  never stick, so the store must not record them. */
 export interface GizmoEdit {
   id: string;
   pose: { position: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number] };
+  scripted?: string[];
 }
 
 export interface FrameSource {
@@ -29,6 +32,8 @@ export interface FrameSource {
   autoKey: boolean;
   selection: string[];
   gizmo: GizmoMode;
+  /** Pivot point for rotate drags (Blender pivot modes). */
+  pivotMode: PivotMode;
   showGrid: boolean;
   cameraPreview: boolean;
 }
@@ -47,6 +52,13 @@ export interface EngineCallbacks {
   onWalkCommitCamera?(pose: { position: [number, number, number]; target: [number, number, number] }): void;
   /** Clicked a camera's marker in the viewport (opens it in the inspector). */
   onSelectCamera?(cameraId: string): void;
+  /** A gizmo drag started on an object whose gizmo channel is driven by an
+   *  onFrame script — the edit will be re-applied by the script on the next
+   *  evaluate and can never stick. The UI should tell the user why. */
+  onScriptedDragStart?(affected: Array<{ id: string; channels: string[] }>): void;
+  /** Shift + Right-click in the viewport: move the 3D cursor to the hovered
+   *  surface point (or the ground plane when nothing is hovered). */
+  onPlaceCursor?(pos: [number, number, number]): void;
 }
 
 export type ViewAxis = "px" | "nx" | "py" | "ny" | "pz" | "nz";
@@ -91,6 +103,45 @@ export function isWalkActive(): boolean {
 
 const FLAT_SHADING = new Set(["tetrahedron", "octahedron", "dodecahedron", "icosahedron"]);
 const DOUBLE_SIDED = new Set(["plane", "ring"]);
+
+/** Blender-style 3D cursor: a dashed red/white ring around a quadrant dot,
+ *  drawn once to a canvas texture and shown as a camera-facing sprite. */
+function makeCursorTexture(): THREE.CanvasTexture {
+  const s = 64;
+  const canvas = document.createElement("canvas");
+  canvas.width = s;
+  canvas.height = s;
+  const g = canvas.getContext("2d")!;
+  g.translate(s / 2, s / 2);
+  g.lineWidth = 4;
+  for (let i = 0; i < 8; i++) {
+    g.beginPath();
+    g.strokeStyle = i % 2 === 0 ? "#e84949" : "#f2f2f2";
+    g.arc(0, 0, 25, (i * Math.PI) / 4, ((i + 1) * Math.PI) / 4);
+    g.stroke();
+  }
+  g.fillStyle = "#f2f2f2";
+  g.beginPath();
+  g.arc(0, 0, 7, 0, Math.PI / 2);
+  g.lineTo(0, 0);
+  g.fill();
+  g.beginPath();
+  g.arc(0, 0, 7, Math.PI, Math.PI * 1.5);
+  g.lineTo(0, 0);
+  g.fill();
+  g.fillStyle = "#e84949";
+  g.beginPath();
+  g.arc(0, 0, 7, Math.PI / 2, Math.PI);
+  g.lineTo(0, 0);
+  g.fill();
+  g.beginPath();
+  g.arc(0, 0, 7, Math.PI * 1.5, Math.PI * 2);
+  g.lineTo(0, 0);
+  g.fill();
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
 
 function buildGeometry(obj: ObjectDesc): THREE.BufferGeometry {
   const p = obj.params;
@@ -311,11 +362,25 @@ export class Engine {
    *  the whole selection (translate by the same offset; rotate/scale about
    *  the anchor's pivot). */
   private dragStart = new Map<string, { pos: THREE.Vector3; quat: THREE.Quaternion; scale: THREE.Vector3 }>();
+  /** Rotate drags run on an invisible proxy parked at the pivot (Blender
+   *  pivot modes): the gizmo then measures the pointer's angle around the
+   *  point the selection actually orbits, not around the anchor object. */
+  private readonly pivotProxy = new THREE.Object3D();
+  /** Pivot captured at rotate-drag start; fixed for the whole drag. */
+  private dragPivot = new THREE.Vector3();
+  /** True when the captured rotate drag uses Individual Origins (each object
+   *  spins in place — positions are left untouched). */
+  private dragIndividual = false;
+  /** Red-and-white 3D cursor marker (editor-only, not part of exports). */
+  private cursorSprite: THREE.Sprite;
   private raycaster = new THREE.Raycaster();
   private source: () => FrameSource | null = () => null;
   private raf = 0;
   private lastTime = performance.now();
   private dragging = false;
+  /** Channels the onFrame hooks overrode during the most recent evaluate
+   *  (per object id) — the source of truth for script-owned transforms. */
+  private lastHooked: EvaluatedState["hooked"] = new Map();
   private disposed = false;
   private lastHookErrorAt = 0;
   private resizeObserver: ResizeObserver | null = null;
@@ -326,7 +391,7 @@ export class Engine {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
-    this.docScene = new DocScene({ version: 1, name: "", background: "#191922", duration: 1, fps: 30, aspect: 16 / 9, objects: [], collections: [], cameras: [defaultCameraDesc()], activeCameraId: defaultCameraDesc().id, actions: [], onFrameScripts: [] });
+    this.docScene = new DocScene({ version: 1, name: "", background: "#191922", duration: 1, fps: 30, aspect: 16 / 9, objects: [], collections: [], cameras: [defaultCameraDesc()], activeCameraId: defaultCameraDesc().id, actions: [], onFrameScripts: [], cursor: [0, 0, 0] });
 
     this.editorCamera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000);
     this.editorCamera.position.set(10, 8, 12);
@@ -361,6 +426,15 @@ export class Engine {
 
     this.axes = new THREE.AxesHelper(2.4);
     this.docScene.scene.add(this.axes);
+
+    this.pivotProxy.visible = false;
+    this.docScene.scene.add(this.pivotProxy);
+
+    this.cursorSprite = new THREE.Sprite(
+      new THREE.SpriteMaterial({ map: makeCursorTexture(), transparent: true, depthTest: false }),
+    );
+    this.cursorSprite.renderOrder = 999;
+    this.docScene.scene.add(this.cursorSprite);
 
     canvas.addEventListener("pointerdown", this.onPointerDown);
     canvas.addEventListener("pointerup", this.onPointerUp);
@@ -411,6 +485,7 @@ export class Engine {
 
       const errors: HookError[] = [];
       const state = evaluate(frame.doc, frame.time, errors);
+      this.lastHooked = state.hooked;
       if (errors.length && now - this.lastHookErrorAt > 2000) {
         this.lastHookErrorAt = now;
         this.callbacks.onHookErrors(errors);
@@ -425,6 +500,7 @@ export class Engine {
       this.updateCameraGizmos(frame);
       this.updateSelectionBox(frame);
       this.updateGizmoAttachment(frame);
+      this.updateCursor(frame);
 
       if (this.walk) this.updateWalk(dt);
       else if (this.viewTween) this.updateViewTween();
@@ -558,9 +634,21 @@ export class Engine {
     const id = frame.selection[0];
     const mesh = id ? this.docScene.meshFor(id) : undefined;
     if (frame.gizmo !== "select" && mesh && !frame.cameraPreview) {
-      if (this.transform.object !== mesh) this.transform.attach(mesh);
       const mode = frame.gizmo === "translate" ? "translate" : frame.gizmo === "rotate" ? "rotate" : "scale";
       if (this.transform.mode !== mode) this.transform.setMode(mode);
+      if (mode === "rotate") {
+        // The rotate gizmo sits at the PIVOT (Blender-style), not on the
+        // anchor object, so the pointer's angle is measured around the point
+        // the selection actually orbits. Idle frames keep the proxy parked at
+        // the current pivot with world-aligned rings; a drag freezes it there.
+        if (this.transform.object !== this.pivotProxy) this.transform.attach(this.pivotProxy);
+        if (!this.dragging) {
+          this.pivotProxy.position.copy(this.computeRotatePivot(frame));
+          this.pivotProxy.quaternion.identity();
+        }
+      } else {
+        if (this.transform.object !== mesh) this.transform.attach(mesh);
+      }
       this.transformHelper.visible = true;
     } else {
       if (this.transform.object) this.transform.detach();
@@ -568,47 +656,108 @@ export class Engine {
     }
   }
 
+  /** Current rotate pivot for the frame's mode: the anchor's own origin
+   *  (Individual Origins), the origins' median, the selection's bounding-box
+   *  center, or the 3D cursor. */
+  private computeRotatePivot(frame: FrameSource): THREE.Vector3 {
+    if (frame.pivotMode === "cursor") {
+      const c = frame.doc.cursor;
+      return new THREE.Vector3(c[0], c[1], c[2]);
+    }
+    const meshes = frame.selection
+      .map((sel) => this.docScene.meshFor(sel))
+      .filter((m): m is THREE.Mesh => !!m);
+    if (!meshes.length) return new THREE.Vector3();
+    if (frame.pivotMode === "individual") return meshes[0].position.clone();
+    if (frame.pivotMode === "median") {
+      const center = new THREE.Vector3();
+      for (const m of meshes) center.add(m.position);
+      return center.divideScalar(meshes.length);
+    }
+    const box = new THREE.Box3();
+    for (const m of meshes) box.expandByObject(m);
+    return box.isEmpty() ? meshes[0].position.clone() : box.getCenter(new THREE.Vector3());
+  }
+
+  /** Editor-only 3D cursor marker: shown only while the 3D Cursor pivot mode
+   *  is active (its sole use in this app) and kept at a roughly constant
+   *  apparent size (Blender-like). Hidden in camera preview, since that view
+   *  mirrors the actual export. */
+  private updateCursor(frame: FrameSource): void {
+    const cur = frame.doc.cursor;
+    this.cursorSprite.position.set(cur[0], cur[1], cur[2]);
+    this.cursorSprite.visible = frame.pivotMode === "cursor" && !frame.cameraPreview;
+    const cam = frame.cameraPreview ? this.docScene.sceneCamera : this.editorCamera;
+    const dist = cam.position.distanceTo(this.cursorSprite.position);
+    this.cursorSprite.scale.setScalar(Math.max(dist * 0.04, 0.06));
+  }
+
   // --- gizmo drags (single anchor + carried selection) -------------------------
 
   private beginGizmoDrag(): void {
     this.dragStart.clear();
-    for (const id of this.source()?.selection ?? []) {
+    const selection = this.source()?.selection ?? [];
+    for (const id of selection) {
       const mesh = this.docScene.meshFor(id);
       if (mesh) {
         this.dragStart.set(id, { pos: mesh.position.clone(), quat: mesh.quaternion.clone(), scale: mesh.scale.clone() });
       }
     }
+    if (this.transform.mode === "rotate") {
+      // Freeze the pivot for the whole drag (the proxy is parked there by
+      // updateGizmoAttachment) and start accumulating dq from identity.
+      this.dragPivot.copy(this.pivotProxy.position);
+      this.dragIndividual = (this.source()?.pivotMode ?? "median") === "individual";
+      this.pivotProxy.quaternion.identity();
+    }
+    // Warn once per drag when the gizmo's channel is script-owned: the hook
+    // re-applies it on the next evaluate, so the edit can never stick.
+    const chan =
+      this.transform.mode === "translate" ? "position" : this.transform.mode === "rotate" ? "rotation" : "scale";
+    const affected = selection
+      .filter((id) => this.lastHooked.get(id)?.has(chan))
+      .map((id) => ({ id, channels: this.scriptedChansOf(id) ?? [] }));
+    if (affected.length) this.callbacks.onScriptedDragStart?.(affected);
+  }
+
+  /** Transform channels an onFrame script drives for this object (undefined
+   *  when none — the common case). */
+  private scriptedChansOf(id: string): string[] | undefined {
+    const set = this.lastHooked.get(id);
+    if (!set) return undefined;
+    const chans = [...set].filter((c) => c === "position" || c === "rotation" || c === "scale");
+    return chans.length ? chans : undefined;
+  }
+
+  private poseOf(m: THREE.Object3D): GizmoEdit["pose"] {
+    return {
+      position: [m.position.x, m.position.y, m.position.z],
+      rotation: [m.rotation.x, m.rotation.y, m.rotation.z],
+      scale: [m.scale.x, m.scale.y, m.scale.z],
+    };
   }
 
   /** Report the gizmo-driven pose of the attached anchor — and carry every
    *  other selected object along, recomputed from its drag-start pose so the
    *  result is stable however often this runs: translate shares the anchor's
-   *  offset; rotate orbits positions around the anchor pivot; scale scales
-   *  positions (and each object's own scale) away from that pivot. */
+   *  offset; scale scales positions (and each object's own scale) away from
+   *  that pivot. Rotation goes through emitRotateEdits (pivot proxy). */
   private emitGizmoEdits(): void {
+    if (this.transform.mode === "rotate") {
+      this.emitRotateEdits();
+      return;
+    }
     const anchor = this.transform.object as THREE.Mesh | null;
     if (!anchor?.userData.id) return;
     const anchorId = anchor.userData.id as string;
-    const poseOf = (m: THREE.Object3D): GizmoEdit["pose"] => ({
-      position: [m.position.x, m.position.y, m.position.z],
-      rotation: [m.rotation.x, m.rotation.y, m.rotation.z],
-      scale: [m.scale.x, m.scale.y, m.scale.z],
-    });
-    const edits: GizmoEdit[] = [{ id: anchorId, pose: poseOf(anchor) }];
+    const edits: GizmoEdit[] = [{ id: anchorId, pose: this.poseOf(anchor), scripted: this.scriptedChansOf(anchorId) }];
     const anchorStart = this.dragStart.get(anchorId);
     if (anchorStart && this.dragStart.size > 1) {
-      // Total world-space rotation since drag start (rotate mode only).
-      const dq = this.transform.mode === "rotate"
-        ? anchor.quaternion.clone().multiply(anchorStart.quat.clone().invert())
-        : null;
       for (const [id, start] of this.dragStart) {
         if (id === anchorId) continue;
         const mesh = this.docScene.meshFor(id);
         if (!mesh) continue;
-        if (dq) {
-          mesh.position.copy(start.pos).sub(anchorStart.pos).applyQuaternion(dq).add(anchorStart.pos);
-          mesh.quaternion.multiplyQuaternions(dq, start.quat);
-        } else if (this.transform.mode === "scale") {
+        if (this.transform.mode === "scale") {
           const p = anchorStart.pos;
           const rx = anchor.scale.x / (anchorStart.scale.x || 1);
           const ry = anchor.scale.y / (anchorStart.scale.y || 1);
@@ -618,10 +767,30 @@ export class Engine {
         } else {
           mesh.position.copy(start.pos).add(anchor.position).sub(anchorStart.pos);
         }
-        edits.push({ id, pose: poseOf(mesh) });
+        edits.push({ id, pose: this.poseOf(mesh), scripted: this.scriptedChansOf(id) });
       }
     }
     this.callbacks.onGizmoEdit(edits);
+  }
+
+  /** Rotation via the pivot proxy: its quaternion (identity at drag start) is
+   *  the total world-space rotation dq since the drag began. Individual
+   *  Origins spins every selected object about its own origin; Median,
+   *  Bounding Box and 3D Cursor orbit every origin around the frozen pivot. */
+  private emitRotateEdits(): void {
+    if (!this.dragStart.size || !this.transform.object) return;
+    const dq = this.transform.object.quaternion.clone();
+    const edits: GizmoEdit[] = [];
+    for (const [id, start] of this.dragStart) {
+      const mesh = this.docScene.meshFor(id);
+      if (!mesh) continue;
+      if (!this.dragIndividual) {
+        mesh.position.copy(start.pos).sub(this.dragPivot).applyQuaternion(dq).add(this.dragPivot);
+      }
+      mesh.quaternion.multiplyQuaternions(dq, start.quat);
+      edits.push({ id, pose: this.poseOf(mesh), scripted: this.scriptedChansOf(id) });
+    }
+    if (edits.length) this.callbacks.onGizmoEdit(edits);
   }
 
   // --- selection picking -----------------------------------------------------
@@ -633,7 +802,19 @@ export class Engine {
   };
 
   private onPointerUp = (e: PointerEvent): void => {
-    if (this.walk || e.button !== 0 || this.dragging) return;
+    if (this.walk || this.dragging) return;
+    // Shift + Right-click (a click, not a right-drag pan): place the 3D
+    // cursor on the hovered surface, else on the ground plane.
+    if (e.button === 2 && e.shiftKey) {
+      const dxr = e.clientX - this.downPos.x;
+      const dyr = e.clientY - this.downPos.y;
+      if (dxr * dxr + dyr * dyr > 25) return;
+      // The cursor exists only as the rotation pivot here — placing it in
+      // other modes would invisibly move a marker the user cannot see.
+      if (this.source()?.pivotMode === "cursor") this.placeCursorAt(e.clientX, e.clientY);
+      return;
+    }
+    if (e.button !== 0) return;
     const dx = e.clientX - this.downPos.x;
     const dy = e.clientY - this.downPos.y;
     if (dx * dx + dy * dy > 25) return;
@@ -652,6 +833,28 @@ export class Engine {
     }
     this.callbacks.onSelect(hit ? ((hit.object as THREE.Mesh).userData.id as string) : null, e.shiftKey || e.ctrlKey || e.metaKey);
   };
+
+  /** Raycast a viewport point onto a hovered object's surface (else the
+   *  ground plane) and report the new 3D cursor position. */
+  private placeCursorAt(cx: number, cy: number): void {
+    const rect = this.canvas.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((cx - rect.left) / rect.width) * 2 - 1,
+      -((cy - rect.top) / rect.height) * 2 + 1,
+    );
+    this.raycaster.setFromCamera(ndc, this.editorCamera);
+    const hits = this.raycaster.intersectObjects(this.docScene.pickables, false);
+    const hit = hits.find((h) => (h.object as THREE.Mesh).visible);
+    let point = hit ? hit.point.clone() : null;
+    if (!point) {
+      const dir = this.raycaster.ray.direction;
+      if (Math.abs(dir.y) > 1e-6) {
+        const t = -this.raycaster.ray.origin.y / dir.y;
+        if (t > 0) point = this.raycaster.ray.origin.clone().addScaledVector(dir, t);
+      }
+    }
+    if (point) this.callbacks.onPlaceCursor?.([point.x, point.y, point.z]);
+  }
 
   // --- misc -------------------------------------------------------------------
 
@@ -1025,6 +1228,8 @@ export class Engine {
       (g.pick.material as THREE.Material).dispose();
     }
     this.camGizmos.clear();
+    this.cursorSprite.material.map?.dispose();
+    this.cursorSprite.material.dispose();
     this.docScene.dispose();
     this.renderer.dispose();
   }

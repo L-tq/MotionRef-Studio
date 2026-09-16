@@ -58,7 +58,17 @@ export const en: Record<string, string> = {
   // Viewport
   "viewport.select": "Select (Q)",
   "viewport.translate": "Move (W)",
-  "viewport.rotate": "Rotate (E)",
+  "viewport.rotate": "Rotate (E) — right-click for pivot point",
+  "pivot.title": "Transform Pivot Point",
+  "pivot.individual": "Individual Origins",
+  "pivot.median": "Median Point",
+  "pivot.bbox": "Bounding Box Center",
+  "pivot.cursor": "3D Cursor",
+  "pivot.individualDesc": "Each selected object rotates around its own origin",
+  "pivot.medianDesc": "The selection rotates around the average of the objects' origins",
+  "pivot.bboxDesc": "The selection rotates around the center of its bounding box",
+  "pivot.cursorDesc": "The selection rotates around the 3D cursor",
+  "pivot.cursorHint": "Shift + Right-click the viewport to place the 3D cursor",
   "viewport.scale": "Scale (R)",
   "viewport.grid": "Grid & axes",
   "viewport.cameraPreview": "Scene camera preview",
@@ -70,6 +80,7 @@ export const en: Record<string, string> = {
   "viewport.emptyHint": "Nothing here yet",
   "viewport.emptyHint2": "Add geometries from the left panel, or describe your animation in the agent chat.",
   "viewport.hookError": "onFrame script error(s): {msg}",
+  "viewport.scriptedPose": "\"{names}\" is driven by an onFrame script — its {channels} is re-applied every frame, so dragging won't stick. Edit or remove the script in the Inspector (onFrame scripts).",
 
   // Walk navigation
   "walk.title": "Walk",

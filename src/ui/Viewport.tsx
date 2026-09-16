@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Engine, snapshotDataUrl, type FrameSource, type GizmoMode } from "../core/engine";
+import type { PivotMode } from "../core/types";
 import { downloadBlob } from "../core/videoExport";
 import { aspectDims, aspectLabel } from "../core/cameraMath";
 import { docAspect } from "../core/types";
@@ -12,6 +13,14 @@ const GIZMO_BUTTONS: Array<{ mode: GizmoMode; icon: string; labelKey: string }> 
   { mode: "translate", icon: "✥", labelKey: "viewport.translate" },
   { mode: "rotate", icon: "⟳", labelKey: "viewport.rotate" },
   { mode: "scale", icon: "⤢", labelKey: "viewport.scale" },
+];
+
+/** Blender pivot-point modes, offered by right-clicking the rotate button. */
+const PIVOT_MODES: Array<{ mode: PivotMode; labelKey: string; descKey: string }> = [
+  { mode: "individual", labelKey: "pivot.individual", descKey: "pivot.individualDesc" },
+  { mode: "median", labelKey: "pivot.median", descKey: "pivot.medianDesc" },
+  { mode: "bbox", labelKey: "pivot.bbox", descKey: "pivot.bboxDesc" },
+  { mode: "cursor", labelKey: "pivot.cursor", descKey: "pivot.cursorDesc" },
 ];
 
 /** Blender-style camera passepartout: a framed rectangle matching the scene
@@ -66,8 +75,19 @@ export function Viewport() {
       onSelect: (id, additive) => store.getState().select(id, additive),
       onGizmoEdit: (edits) => {
         const s = store.getState();
-        for (const e of edits) s.commitPose(e.id, e.pose);
+        for (const e of edits) s.commitPose(e.id, e.pose, e.scripted);
       },
+      onScriptedDragStart: (affected) => {
+        const s = store.getState();
+        const names = affected
+          .map((a) => s.doc.objects.find((o) => o.id === a.id)?.name ?? a.id)
+          .join(", ");
+        const chanKey = (c: string) =>
+          c === "position" ? "inspector.position" : c === "rotation" ? "inspector.rotation" : "inspector.scale";
+        const chans = [...new Set(affected.flatMap((a) => a.channels))].map((c) => t(chanKey(c))).join(", ");
+        s.showToast(`viewport.scriptedPose|${names}|${chans}`);
+      },
+      onPlaceCursor: (pos) => store.getState().setCursor(pos),
       onGizmoDragEnd: () => {
         /* history coalescing handles grouping */
       },
@@ -105,6 +125,7 @@ export function Viewport() {
         autoKey: s.autoKey,
         selection: s.selection,
         gizmo: s.gizmo,
+        pivotMode: s.pivotMode,
         showGrid: s.showGrid,
         cameraPreview: s.cameraPreview,
       };
@@ -140,9 +161,40 @@ export function Viewport() {
   }, []);
 
   const gizmo = useStore((s) => s.gizmo);
+  const pivotMode = useStore((s) => s.pivotMode);
+  const setPivotMode = useStore((s) => s.setPivotMode);
   const showGrid = useStore((s) => s.showGrid);
   const setGizmo = useStore((s) => s.setGizmo);
   const setUi = useStore((s) => s.setUi);
+  const rotateBtnRef = useRef<HTMLButtonElement>(null);
+  const [pivotMenuAt, setPivotMenuAt] = useState<{ x: number; y: number } | null>(null);
+
+  // Right-click the rotate button → pivot point menu (closes on Escape or an
+  // outside press).
+  useEffect(() => {
+    if (!pivotMenuAt) return;
+    const close = (e: PointerEvent) => {
+      const el = e.target as Element | null;
+      if (el?.closest?.(".pivot-menu, [data-pivot-btn]")) return;
+      setPivotMenuAt(null);
+    };
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPivotMenuAt(null);
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", esc);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", esc);
+    };
+  }, [pivotMenuAt]);
+
+  const openPivotMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const r = rotateBtnRef.current?.getBoundingClientRect();
+    if (!r) return;
+    setPivotMenuAt({ x: r.left, y: r.bottom + 4 });
+  };
 
   const toggleWalk = () => {
     const eng = engineRef.current;
@@ -168,11 +220,16 @@ export function Viewport() {
         {GIZMO_BUTTONS.map((b) => (
           <button
             key={b.mode}
+            ref={b.mode === "rotate" ? rotateBtnRef : undefined}
+            data-pivot-btn={b.mode === "rotate" ? "" : undefined}
             className={`icon-btn ${gizmo === b.mode ? "active" : ""}`}
             title={t(b.labelKey)}
+            onContextMenu={b.mode === "rotate" ? openPivotMenu : undefined}
             onClick={() => setGizmo(b.mode)}
           >
             {b.icon}
+            {b.mode === "rotate" && <span className="menu-caret" />}
+            {b.mode === "rotate" && pivotMode !== "median" && <span className="pivot-dot" />}
           </button>
         ))}
         <div className="divider" />
@@ -208,6 +265,26 @@ export function Viewport() {
           📷
         </button>
       </div>
+      {pivotMenuAt && (
+        <div className="pivot-menu" style={{ left: pivotMenuAt.x, top: pivotMenuAt.y }}>
+          <div className="pivot-menu-title">{t("pivot.title")}</div>
+          {PIVOT_MODES.map((m) => (
+            <button
+              key={m.mode}
+              className={`pivot-item ${pivotMode === m.mode ? "active" : ""}`}
+              title={t(m.descKey)}
+              onClick={() => {
+                setPivotMode(m.mode);
+                setPivotMenuAt(null);
+              }}
+            >
+              <span className="pivot-check">{pivotMode === m.mode ? "✓" : ""}</span>
+              {t(m.labelKey)}
+            </button>
+          ))}
+          <div className="pivot-menu-hint">{t("pivot.cursorHint")}</div>
+        </div>
+      )}
       {engine && !cameraPreview && <NavGizmo engine={engine} />}
       {walk.active && (
         <div className="walk-hud">

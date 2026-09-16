@@ -27,10 +27,17 @@ export interface EvaluatedObject {
   visible: boolean;
 }
 
+/** A channel an onFrame hook may override on an object. */
+export type HookChan = "position" | "rotation" | "scale" | "color" | "visible";
+
 export interface EvaluatedState {
   time: number;
   objects: Map<string, EvaluatedObject>;
   camera: CameraState;
+  /** Object id -> channels the onFrame hooks overrode at this time. A hooked
+   *  channel is script-owned: the hook re-applies it on every evaluate, so
+   *  manual edits to it can never stick (and must not be recorded as keys). */
+  hooked: Map<string, Set<HookChan>>;
 }
 
 // --- interpolation helpers ---------------------------------------------------
@@ -246,6 +253,12 @@ export interface HookError {
 
 function runHooks(state: EvaluatedState, doc: SceneDocument, t: number): HookError[] {
   const errors: HookError[] = [];
+  const hooked: EvaluatedState["hooked"] = new Map();
+  const touch = (id: string, chan: HookChan) => {
+    let set = hooked.get(id);
+    if (!set) hooked.set(id, (set = new Set()));
+    set.add(chan);
+  };
   doc.onFrameScripts.forEach((source, index) => {
     const hook = getHook(source);
     if (!hook) {
@@ -266,11 +279,11 @@ function runHooks(state: EvaluatedState, doc: SceneDocument, t: number): HookErr
         // Unknown id (object deleted, stale reference) — frame overlays are
         // best-effort; a missing target is a silent no-op, never a crash.
         if (!o) return;
-        if (patch.position) o.position = [...patch.position] as Vec3;
-        if (patch.rotation) o.rotation = [...patch.rotation] as Vec3;
-        if (patch.scale) o.scale = [...patch.scale] as Vec3;
-        if (patch.color !== undefined) o.color = patch.color;
-        if (patch.visible !== undefined) o.visible = patch.visible;
+        if (patch.position) { o.position = [...patch.position] as Vec3; touch(id, "position"); }
+        if (patch.rotation) { o.rotation = [...patch.rotation] as Vec3; touch(id, "rotation"); }
+        if (patch.scale) { o.scale = [...patch.scale] as Vec3; touch(id, "scale"); }
+        if (patch.color !== undefined) { o.color = patch.color; touch(id, "color"); }
+        if (patch.visible !== undefined) { o.visible = patch.visible; touch(id, "visible"); }
       },
       camera: (patch) => {
         if (patch.position) state.camera.position = [...patch.position] as Vec3;
@@ -289,6 +302,7 @@ function runHooks(state: EvaluatedState, doc: SceneDocument, t: number): HookErr
       errors.push({ index, message });
     }
   });
+  state.hooked = hooked;
   return errors;
 }
 
@@ -300,6 +314,7 @@ export function evaluate(doc: SceneDocument, time: number, errorsOut?: HookError
     time: t,
     objects: new Map(),
     camera: evalCamera(doc, t),
+    hooked: new Map(),
   };
   for (const obj of doc.objects) {
     state.objects.set(obj.id, evalObjectTrack(obj, objectKeysOf(doc, obj.id), t));

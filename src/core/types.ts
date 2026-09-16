@@ -149,7 +149,13 @@ export interface SceneDocument {
   actions: ActionDesc[];
   /** Serialized onFrame hook sources, run in order every evaluated frame. */
   onFrameScripts: string[];
+  /** Red-and-white 3D cursor (Blender-style): pivot for "cursor" rotation
+   *  mode, placed with Shift + Right-click in the viewport. */
+  cursor: Vec3;
 }
+
+/** Transform pivot point for multi-object rotation (Blender's pivot modes). */
+export type PivotMode = "individual" | "median" | "bbox" | "cursor";
 
 let idCounter = 0;
 export function newId(prefix = "o"): string {
@@ -188,6 +194,7 @@ export function createEmptyDocument(name = "Untitled"): SceneDocument {
     activeCameraId: DEFAULT_CAMERA_ID,
     actions: [],
     onFrameScripts: [],
+    cursor: [0, 0, 0],
   };
 }
 
