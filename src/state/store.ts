@@ -8,10 +8,12 @@ import {
   randomPaletteColor,
   specOf,
   activeCameraOf,
+  activeCameraIdAt,
   activeActionOfOwner,
   actionsOfOwner,
   defaultActionName,
   defaultCollectionName,
+  defaultMarkerName,
   type ActionDesc,
   type CameraActionDesc,
   type CameraKey,
@@ -250,6 +252,8 @@ export interface AppState {
   /** Camera picked in the inspector/viewport for editing; null = follow the
    *  active camera. */
   camPanelSel: string | null;
+  /** Timeline camera-cut marker currently selected in the marker lane. */
+  selectedMarker: string | null;
 
   // UI
   settingsOpen: boolean;
@@ -366,6 +370,17 @@ export interface AppActions {
   /** Make this camera the one previews/snapshots/exports render (Ctrl-click equivalent). */
   setActiveCamera(id: string): void;
 
+  // Camera-cut markers (Blender-style timeline markers bound to cameras)
+  /** Add a marker at the playhead bound to a camera (default: the selected or
+   *  live camera); selects it. Returns the new marker id. */
+  addMarker(cameraId?: string, t?: number): string;
+  /** Patch a marker's name/time/camera binding. */
+  updateMarker(id: string, patch: { name?: string; t?: number; cameraId?: string }): void;
+  /** Move a marker in time (timeline drag). */
+  retimeMarker(id: string, t: number): void;
+  /** Delete a marker. */
+  removeMarker(id: string): void;
+
   // Camera / timeline
   /** Edit a camera's pose/fov. With auto-key (or existing keys on that
    *  camera) this writes a key at the playhead; otherwise the base pose. */
@@ -480,6 +495,7 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
   showGrid: true,
   cameraPreview: false,
   camPanelSel: null,
+  selectedMarker: null,
 
   settingsOpen: false,
   onboarding: false,
@@ -743,7 +759,8 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
 
   setCameraKeyAtPlayhead(cameraIdArg) {
     const state = get();
-    const cameraId = cameraIdArg ?? activeCameraOf(state.doc).id;
+    // Default to the LIVE camera at the playhead (markers may have switched).
+    const cameraId = cameraIdArg ?? activeCameraIdAt(state.doc, state.playhead);
     const cam = evalCameraById(state.doc, cameraId, state.playhead);
     state.mutateDoc("cam-key", (draft) => {
       const act = ensureTargetAction(draft, { cameraId });
@@ -1081,7 +1098,9 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
 
   commitCamera(patch, cameraIdArg) {
     const state = get();
-    const cameraId = cameraIdArg ?? activeCameraOf(state.doc).id;
+    // Default to the LIVE camera at the playhead (markers may have switched) —
+    // e.g. a walk-mode confirm should edit the camera being looked through.
+    const cameraId = cameraIdArg ?? activeCameraIdAt(state.doc, state.playhead);
     const act = activeActionOfOwner(state.doc, { cameraId });
     const camKeys = act && act.kind === "camera" ? act.keys : [];
     const t = +state.playhead.toFixed(4);
@@ -1138,6 +1157,7 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
       if (draft.cameras.length <= 1) return;
       draft.cameras = draft.cameras.filter((c) => c.id !== id);
       draft.actions = draft.actions.filter((a) => !(a.kind === "camera" && a.cameraId === id));
+      draft.markers = draft.markers.filter((m) => m.cameraId !== id);
       if (draft.activeCameraId === id) draft.activeCameraId = draft.cameras[0].id;
     });
     if (get().camPanelSel === id) set({ camPanelSel: null });
@@ -1147,6 +1167,52 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     get().mutateDoc("set-active-camera", (draft) => {
       if (draft.cameras.some((c) => c.id === id)) draft.activeCameraId = id;
     });
+  },
+
+  addMarker(cameraIdArg, tArg) {
+    const state = get();
+    const id = newId("mk");
+    const t = Math.min(Math.max(tArg ?? state.playhead, 0), state.doc.duration);
+    const cameraId =
+      cameraIdArg ?? (state.camPanelSel && state.doc.cameras.some((c) => c.id === state.camPanelSel) ? state.camPanelSel : activeCameraIdAt(state.doc, state.playhead));
+    state.mutateDoc("add-marker", (draft) => {
+      if (!draft.cameras.some((c) => c.id === cameraId)) return;
+      draft.markers.push({ id, name: defaultMarkerName(draft), t: +t.toFixed(4), cameraId });
+      draft.markers.sort((a, b) => a.t - b.t);
+    });
+    if (!get().doc.markers.some((m) => m.id === id)) return id;
+    set({ selectedMarker: id });
+    return id;
+  },
+
+  updateMarker(id, patch) {
+    get().mutateDoc("update-marker", (draft) => {
+      const mk = draft.markers.find((m) => m.id === id);
+      if (!mk) return;
+      if (patch.name !== undefined) {
+        const clean = String(patch.name).trim().slice(0, 80);
+        if (clean) mk.name = clean;
+      }
+      if (patch.t !== undefined && Number.isFinite(patch.t)) mk.t = +Math.min(Math.max(patch.t, 0), draft.duration).toFixed(4);
+      if (patch.cameraId !== undefined && draft.cameras.some((c) => c.id === patch.cameraId)) mk.cameraId = patch.cameraId;
+      draft.markers.sort((a, b) => a.t - b.t);
+    });
+  },
+
+  retimeMarker(id, t) {
+    get().mutateDoc("move-marker", (draft) => {
+      const mk = draft.markers.find((m) => m.id === id);
+      if (!mk || !Number.isFinite(t)) return;
+      mk.t = +Math.min(Math.max(t, 0), draft.duration).toFixed(4);
+      draft.markers.sort((a, b) => a.t - b.t);
+    });
+  },
+
+  removeMarker(id) {
+    get().mutateDoc("remove-marker", (draft) => {
+      draft.markers = draft.markers.filter((m) => m.id !== id);
+    });
+    if (get().selectedMarker === id) set({ selectedMarker: null });
   },
 
   setAspect(ratio) {

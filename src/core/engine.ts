@@ -9,7 +9,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { evaluate, evalCameraById, type EvaluatedState, type HookError } from "./animation";
-import { docAspect, defaultCameraDesc, type ObjectDesc, type PivotMode, type SceneDocument } from "./types";
+import { docAspect, defaultCameraDesc, activeCameraIdAt, type ObjectDesc, type PivotMode, type SceneDocument } from "./types";
 
 export type GizmoMode = "select" | "translate" | "rotate" | "scale";
 
@@ -391,7 +391,7 @@ export class Engine {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
-    this.docScene = new DocScene({ version: 1, name: "", background: "#191922", duration: 1, fps: 30, aspect: 16 / 9, objects: [], collections: [], cameras: [defaultCameraDesc()], activeCameraId: defaultCameraDesc().id, actions: [], onFrameScripts: [], cursor: [0, 0, 0] });
+    this.docScene = new DocScene({ version: 1, name: "", background: "#191922", duration: 1, fps: 30, aspect: 16 / 9, objects: [], collections: [], markers: [], cameras: [defaultCameraDesc()], activeCameraId: defaultCameraDesc().id, actions: [], onFrameScripts: [], cursor: [0, 0, 0] });
 
     this.editorCamera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000);
     this.editorCamera.position.set(10, 8, 12);
@@ -555,7 +555,9 @@ export class Engine {
    *  its EVALUATED pose so keyed cameras visibly fly during playback. */
   private updateCameraGizmos(frame: FrameSource): void {
     const doc = frame.doc;
-    const activeId = doc.cameras.find((c) => c.id === doc.activeCameraId)?.id ?? doc.cameras[0]?.id;
+    // The "live" camera follows camera-cut markers: during playback the big
+    // active-frustum helper jumps to whichever camera renders at this time.
+    const activeId = activeCameraIdAt(doc, frame.time);
     for (const [id, g] of this.camGizmos) {
       if (!doc.cameras.some((c) => c.id === id)) {
         this.docScene.scene.remove(g.helper);

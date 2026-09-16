@@ -783,6 +783,58 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .keyframe:hover { background: #fff; }
 .keyframe.selected-key { background: var(--warn); border-color: #7a5200; }
 
+/* ---------- camera-cut markers (Blender-style) ---------- */
+.track-label.markers { color: var(--warn); cursor: default; }
+.track-label.markers:hover { background: none; }
+.track-label.markers .tl-marker-glyph { font-size: 10px; }
+.tl-row.markers { background: rgba(255, 176, 32, 0.035); }
+.tl-marker {
+  position: absolute;
+  top: 50%;
+  transform: translate(-1px, -50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 17px;
+  padding: 0 6px 0 4px;
+  background: var(--bg-2);
+  border: 1px solid #7a5200;
+  border-radius: 3px;
+  color: var(--warn);
+  font-size: 10px;
+  line-height: 1;
+  cursor: ew-resize;
+  user-select: none;
+  max-width: 96px;
+  z-index: 4;
+}
+.tl-marker .tl-marker-flag { font-size: 9px; flex-shrink: 0; }
+.tl-marker .tl-marker-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-marker:hover { background: var(--bg-3); color: #ffd27a; }
+.tl-marker.selected { background: var(--warn); color: #241a00; border-color: #ffd27a; }
+.tl-marker.selected .tl-marker-name { font-weight: 600; }
+/* Thin dashed "cut happens here" line at each marker's start frame, drawn
+   across the whole editor view (tracks, graph and action editors). */
+.tl-marker-cut {
+  position: absolute;
+  bottom: 0;
+  width: 0;
+  border-left: 1px dashed rgba(255, 176, 32, 0.5);
+  pointer-events: none;
+  z-index: 2;
+}
+/* Compact chip variant for views without a marker lane (graph/action editors). */
+.tl-marker-compact { top: 25px; transform: translate(-1px, 0); height: 15px; font-size: 9px; opacity: 0.85; }
+.tl-marker-compact:hover, .tl-marker-compact.selected { opacity: 1; }
+.marker-pop { min-width: 190px; gap: 8px; }
+.marker-pop-field { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--text-2); }
+.marker-pop-field input,
+.marker-pop-field select { font-size: 12px; }
+.marker-pop-delete { color: var(--danger); }
+.marker-pop-delete:hover { border-color: var(--danger); background: rgba(255, 92, 124, 0.08); }
+.banner-live-cam { font-weight: 600; margin-left: 4px; }
+.live-badge { color: var(--warn); font-size: 11px; display: inline-flex; align-items: center; gap: 3px; }
+
 .playhead {
   position: absolute;
   top: 0; bottom: 0;

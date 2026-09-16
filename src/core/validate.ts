@@ -153,6 +153,33 @@ export function validateSceneDocument(input: unknown): { doc: SceneDocument } | 
       : cameras[0].id;
   const cameraIds = new Set(cameras.map((c) => c.id));
 
+  // Timeline markers bound to cameras (Blender-style camera cuts). Markers
+  // whose camera is gone are dropped silently, like orphan actions.
+  if (raw.markers !== undefined) {
+    if (!Array.isArray(raw.markers)) return { error: "markers must be an array" };
+    if (raw.markers.length > 128) return { error: "too many markers (max 128)" };
+    const seenMk = new Set<string>();
+    for (const [i, m] of raw.markers.entries()) {
+      if (!m || typeof m !== "object") return { error: `markers[${i}] must be an object` };
+      const mk = m as Record<string, unknown>;
+      if (typeof mk.t !== "number" || !Number.isFinite(mk.t) || mk.t < 0) {
+        return { error: `markers[${i}].t must be a number >= 0` };
+      }
+      const cameraId = typeof mk.cameraId === "string" && cameraIds.has(mk.cameraId) ? mk.cameraId : "";
+      if (!cameraId) continue;
+      let id = typeof mk.id === "string" && mk.id ? mk.id.slice(0, 64) : "";
+      if (!id || seenMk.has(id)) id = `mk${i}_${Math.random().toString(36).slice(2, 8)}`;
+      seenMk.add(id);
+      doc.markers.push({
+        id,
+        name: typeof mk.name === "string" && mk.name.trim() ? mk.name.slice(0, 80) : `Marker ${i + 1}`,
+        t: mk.t,
+        cameraId,
+      });
+    }
+    doc.markers.sort((a, b) => a.t - b.t);
+  }
+
   // Collections (Blender-style Outliner grouping; flat, single-level). Parsed
   // before objects so object membership can be checked against real ids.
   const collections: CollectionDesc[] = [];

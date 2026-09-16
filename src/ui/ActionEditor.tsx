@@ -16,8 +16,10 @@ import {
   activeActionOfOwner,
   activeCameraOf,
   type ActionDesc,
+  type MarkerDesc,
   type SceneDocument,
 } from "../core/types";
+import { MarkerOverlay } from "./Timeline";
 
 type AnyKey = SceneDocument["actions"][number]["keys"][number];
 
@@ -76,7 +78,7 @@ function tickStepFor(zoom: number): number {
   return candidates.find((s) => s * zoom >= 64) ?? 60;
 }
 
-export function ActionEditor() {
+export function ActionEditor({ onMarkerChipDown }: { onMarkerChipDown?: (e: React.PointerEvent, m: MarkerDesc) => void }) {
   const t = useT();
   const doc = useStore((s) => s.doc);
   const selection = useStore((s) => s.selection);
@@ -451,6 +453,7 @@ export function ActionEditor() {
                 })}
               </div>
             ))}
+            <MarkerOverlay tToX={tToX} topOffset={22} onChipDown={onMarkerChipDown} />
             <Playhead duration={doc.duration} tToX={tToX} />
           </div>
         </div>

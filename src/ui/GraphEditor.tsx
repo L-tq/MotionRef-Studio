@@ -20,7 +20,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useStore, type KeyTarget } from "../state/store";
 import { useT } from "../i18n";
-import { activeCameraOf, cameraKeysOf, objectKeysOf, type CameraKey, type KeyVec3, type SceneDocument, type TransformKey, type Vec3 } from "../core/types";
+import { activeCameraOf, cameraKeysOf, objectKeysOf, type CameraKey, type KeyVec3, type MarkerDesc, type SceneDocument, type TransformKey, type Vec3 } from "../core/types";
+import { MarkerOverlay } from "./Timeline";
 
 type AnyKey = TransformKey | CameraKey;
 
@@ -180,7 +181,7 @@ function tickStepFor(zoom: number): number {
   return candidates.find((s) => s * zoom >= 64) ?? 60;
 }
 
-export function GraphEditor() {
+export function GraphEditor({ onMarkerChipDown }: { onMarkerChipDown?: (e: React.PointerEvent, m: MarkerDesc) => void }) {
   const t = useT();
   const doc = useStore((s) => s.doc);
   const selection = useStore((s) => s.selection);
@@ -729,6 +730,7 @@ export function GraphEditor() {
             )}
             <div className="playhead" style={{ left: `${tToX(playhead)}px` }} />
           </div>
+          <MarkerOverlay tToX={tToX} topOffset={22} onChipDown={onMarkerChipDown} />
         </div>
       </div>
     </>

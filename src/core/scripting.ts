@@ -8,7 +8,7 @@
  *   - overlay: created by animation.ts FrameApi during evaluation instead.
  */
 import type { ActionOwner, CameraState, GeometryType, KeyVec3, SceneDocument, TransformKey, Vec3 } from "./types";
-import { activeActionOfOwner, activeCameraOf, defaultActionName, defaultCollectionName, isGeometryType, newId, specOf, type ActionDesc, type CameraActionDesc, type ObjectActionDesc } from "./types";
+import { activeActionOfOwner, activeCameraOf, defaultActionName, defaultCollectionName, defaultMarkerName, isGeometryType, newId, specOf, type ActionDesc, type CameraActionDesc, type ObjectActionDesc } from "./types";
 
 export interface ScriptTarget {
   /** Mutating handles over a SceneDocument owned by the caller. */
@@ -53,6 +53,13 @@ export interface ScriptTarget {
   removeCamera(id: string): void;
   /** Make this camera the active one (what preview/export renders). */
   setActiveCamera(id: string): void;
+  /** Add a camera-cut marker at time t; from t on, that camera renders until
+   *  the next marker. Returns the marker id. */
+  addMarker(marker: { name?: string; t: number; cameraId: string }): string;
+  /** Patch a marker's name/time/camera. */
+  updateMarker(id: string, patch: { name?: string; t?: number; cameraId?: string }): void;
+  /** Delete a marker. */
+  removeMarker(id: string): void;
   /** Create an empty action for an object/camera and make it active; returns its id. */
   createAction(owner: ActionOwner, name?: string): string;
   renameAction(id: string, name: string): void;
@@ -225,6 +232,32 @@ export function createScriptingAPI(target: ScriptTarget, log: (...args: unknown[
     setActiveCamera(id: string): void {
       if (typeof id !== "string") throw new Error("api.setActiveCamera expects a camera id");
       target.setActiveCamera(id);
+    },
+
+    /** Add a camera-cut marker: {t, cameraId, name?}. From t on (until the
+     *  next marker) the given camera renders in preview/snapshot/export.
+     *  Returns the marker id. */
+    addMarker(marker: { name?: string; t: number; cameraId: string }): string {
+      if (!marker || typeof marker !== "object") throw new Error("api.addMarker expects { t, cameraId, name? }");
+      if (typeof marker.t !== "number" || !Number.isFinite(marker.t) || marker.t < 0)
+        throw new Error(`Marker needs a numeric t >= 0, got ${String(marker.t)}`);
+      if (typeof marker.cameraId !== "string") throw new Error("api.addMarker expects a cameraId string");
+      return target.addMarker({ t: marker.t, cameraId: marker.cameraId, name: typeof marker.name === "string" ? marker.name : undefined });
+    },
+
+    /** Patch a marker: name?, t?, cameraId? (id from api.get().markers). */
+    updateMarker(id: string, patch: { name?: string; t?: number; cameraId?: string }): void {
+      if (typeof id !== "string" || !patch || typeof patch !== "object")
+        throw new Error("api.updateMarker expects (id, patch)");
+      if (patch.t !== undefined && (typeof patch.t !== "number" || !Number.isFinite(patch.t) || patch.t < 0))
+        throw new Error(`Marker t must be a number >= 0, got ${String(patch.t)}`);
+      target.updateMarker(id, patch);
+    },
+
+    /** Delete a camera-cut marker. */
+    removeMarker(id: string): void {
+      if (typeof id !== "string") throw new Error("api.removeMarker expects a marker id");
+      target.removeMarker(id);
     },
 
     /** Create an empty action for an object/camera and make it active; returns
@@ -403,6 +436,15 @@ export function createScriptTarget(doc: SceneDocument): ScriptTarget {
     if (!col) throw new Error(`No collection with id "${id}"`);
     return col;
   };
+  const assertMarker = (id: string) => {
+    const mk = doc.markers.find((m) => m.id === id);
+    if (!mk) throw new Error(`No marker with id "${id}"`);
+    return mk;
+  };
+  const assertCameraId = (id: string) => {
+    if (!doc.cameras.some((c) => c.id === id)) throw new Error(`No camera with id "${id}"`);
+    return id;
+  };
   return {
     add(opts) {
       const spec = specOf(opts.type);
@@ -490,12 +532,40 @@ export function createScriptTarget(doc: SceneDocument): ScriptTarget {
       const n = doc.cameras.length;
       doc.cameras = doc.cameras.filter((c) => c.id !== id);
       doc.actions = doc.actions.filter((a) => !(a.kind === "camera" && a.cameraId === id));
+      doc.markers = doc.markers.filter((m) => m.cameraId !== id);
       if (doc.activeCameraId === id) doc.activeCameraId = doc.cameras[0].id;
       if (doc.cameras.length === n) throw new Error(`No camera with id "${id}"`);
     },
     setActiveCamera(id) {
       if (!doc.cameras.some((c) => c.id === id)) throw new Error(`No camera with id "${id}"`);
       doc.activeCameraId = id;
+    },
+    addMarker(marker) {
+      const created = {
+        id: newId("mk"),
+        name: (marker.name ?? "").trim().slice(0, 80) || defaultMarkerName(doc),
+        t: marker.t,
+        cameraId: assertCameraId(marker.cameraId),
+      };
+      doc.markers.push(created);
+      doc.markers.sort((a, b) => a.t - b.t);
+      return created.id;
+    },
+    updateMarker(id, patch) {
+      const mk = assertMarker(id);
+      if (patch.name !== undefined) {
+        const clean = String(patch.name).trim().slice(0, 80);
+        if (clean) mk.name = clean;
+      }
+      if (patch.t !== undefined) {
+        mk.t = patch.t;
+        doc.markers.sort((a, b) => a.t - b.t);
+      }
+      if (patch.cameraId !== undefined) mk.cameraId = assertCameraId(patch.cameraId);
+    },
+    removeMarker(id) {
+      assertMarker(id);
+      doc.markers = doc.markers.filter((m) => m.id !== id);
     },
     createAction(owner, name) {
       if ("objectId" in owner) {

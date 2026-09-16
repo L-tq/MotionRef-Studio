@@ -1,6 +1,6 @@
 import { evalCameraById } from "../core/animation";
 import { ASPECT_PRESETS, aspectLabel, clampAspect, focalToFov, fovToFocal, FOCAL_PRESETS } from "../core/cameraMath";
-import { docAspect, actionsOfOwner, activeActionOfOwner, specOf, type CameraDesc, type ObjectDesc, type Vec3 } from "../core/types";
+import { docAspect, actionsOfOwner, activeActionOfOwner, activeCameraIdAt, specOf, type CameraDesc, type ObjectDesc, type Vec3 } from "../core/types";
 import { useStore } from "../state/store";
 import { getLocale, useT } from "../i18n";
 import { useState } from "react";
@@ -226,6 +226,9 @@ function CameraInspector() {
   // The panel edits ONE camera: the picked one, or the active camera by default.
   const camDesc = doc.cameras.find((c) => c.id === camPanelSel) ?? doc.cameras[0];
   const isLive = camDesc.id === doc.activeCameraId;
+  // "Rendering" = the LIVE camera at the playhead (markers may have cut away
+  // from the manual active camera).
+  const isRendering = camDesc.id === activeCameraIdAt(doc, playhead);
   const ev = evalCameraById(doc, camDesc.id, playhead);
   const focal = fovToFocal(ev.fov);
   const aspect = docAspect(doc);
@@ -288,6 +291,11 @@ function CameraInspector() {
         >
           ★ {isLive ? t("inspector.activeBadge") : t("inspector.setActiveShort")}
         </button>
+        {isRendering && (
+          <span className="live-badge" title={t("inspector.liveBadge")}>
+            ● {t("inspector.liveBadge")}
+          </span>
+        )}
         <button className="btn small" title={t("inspector.alignToView")} onClick={alignToView}>
           {t("inspector.alignToViewShort")}
         </button>

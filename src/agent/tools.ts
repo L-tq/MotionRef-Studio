@@ -72,8 +72,8 @@ export function buildTools(): AgentTool[] {
     {
       name: "get_scene_state",
       description: {
-        en: "Get the full scene document: objects (id, name, type, params, pose, color, collectionId), collections, keyframe tracks, camera keys, base camera, duration, fps, onFrame hooks.",
-        zh: "获取完整场景文档：对象（id、名称、类型、参数、位姿、颜色、collectionId）、集合、关键帧轨道、相机关键帧、基础相机、时长、帧率、onFrame 脚本。",
+        en: "Get the full scene document: objects (id, name, type, params, pose, color, collectionId), collections, markers (camera cuts), keyframe tracks, camera keys, cameras + activeCameraId, duration, fps, onFrame hooks.",
+        zh: "获取完整场景文档：对象（id、名称、类型、参数、位姿、颜色、collectionId）、集合、标记（镜头切换）、关键帧轨道、相机关键帧、相机列表 + activeCameraId、时长、帧率、onFrame 脚本。",
       },
       parameters: { type: "object", properties: {}, additionalProperties: false },
       async handler(_args, ctx) {
@@ -242,8 +242,8 @@ export function buildTools(): AgentTool[] {
     {
       name: "set_active_camera",
       description: {
-        en: "Set which scene camera is ACTIVE — preview, snapshots and export render it. Pass a camera id from get_scene_state (doc.cameras).",
-        zh: "设置哪台场景相机是“活动”相机——预览、快照和导出都渲染它。传入 get_scene_state 中的相机 id（doc.cameras）。",
+        en: "Set which scene camera is ACTIVE — preview, snapshots and export render it. Camera-cut markers (manage_marker) override this from their time onward. Pass a camera id from get_scene_state (doc.cameras).",
+        zh: "设置哪台场景相机是“活动”相机——预览、快照和导出都渲染它。镜头切换标记（manage_marker）会从其时间起覆盖此设置。传入 get_scene_state 中的相机 id（doc.cameras）。",
       },
       parameters: {
         type: "object",
@@ -258,6 +258,68 @@ export function buildTools(): AgentTool[] {
         if (result.isError) return result;
         const cam = ctx.getDoc().cameras.find((c) => c.id === args.id);
         return ok(`Active camera: "${cam?.name ?? args.id}".`);
+      },
+    },
+    {
+      name: "manage_marker",
+      description: {
+        en: "Manage CAMERA-CUT MARKERS on the timeline (Blender-style). A marker pins a camera from its time t onward: preview/snapshot/export CUT to that camera at t and keep it until the next marker; before the first marker the active camera renders. ops: add (t + cameraId required, name?), update / delete (id required, from get_scene_state → markers). Use markers for multi-angle edits (e.g. wide master shot, then a close-up cut at t=3).",
+        zh: "管理时间轴上的“镜头切换标记”（Blender 风格）。标记从其时间 t 起固定一台相机：预览/快照/导出在 t 处硬切到该相机并保持到下一个标记；第一个标记之前渲染活动相机。op：add（必填 t + cameraId，可选 name）、update / delete（必填 id，来自 get_scene_state → markers）。需要多机位剪辑时使用（如全景主镜头，t=3 切近景）。",
+      },
+      parameters: {
+        type: "object",
+        properties: {
+          op: { type: "string", enum: ["add", "update", "delete"] },
+          t: { type: "number", description: "Marker time in seconds (add only; also updatable)" },
+          cameraId: { type: "string", description: "Camera id that renders from this marker on (add; also updatable)" },
+          name: { type: "string", description: "Marker name (add / update)" },
+          id: { type: "string", description: "Marker id (update / delete, from get_scene_state → markers)" },
+        },
+        required: ["op"],
+        additionalProperties: false,
+      },
+      async handler(args, ctx) {
+        const op = String(args.op ?? "");
+        if (op === "add") {
+          if (typeof args.t !== "number" || !Number.isFinite(args.t) || args.t < 0) return err("add requires a numeric t >= 0 (seconds)");
+          if (typeof args.cameraId !== "string" || !args.cameraId) return err("add requires cameraId (see get_scene_state → cameras)");
+          let mkId = "";
+          const result = withDoc(ctx, "agent:marker_add", (target) => {
+            mkId = target.addMarker({
+              t: args.t as number,
+              cameraId: args.cameraId as string,
+              name: typeof args.name === "string" ? args.name : undefined,
+            });
+          });
+          if (result.isError) return result;
+          const doc = ctx.getDoc();
+          const mk = doc.markers.find((m) => m.id === mkId);
+          const cam = doc.cameras.find((c) => c.id === args.cameraId);
+          return ok(`Added marker "${mk?.name}" (id ${mkId}) at t=${(args.t as number).toFixed(2)}s → camera "${cam?.name ?? args.cameraId}". The view cuts to it from that time on.`);
+        }
+        if (typeof args.id !== "string" || !args.id) {
+          return err(`op "${op}" requires a marker id (see get_scene_state → markers)`);
+        }
+        if (op === "update") {
+          const patch: { name?: string; t?: number; cameraId?: string } = {};
+          if (typeof args.name === "string") patch.name = args.name;
+          if (typeof args.t === "number") patch.t = args.t;
+          if (typeof args.cameraId === "string") patch.cameraId = args.cameraId;
+          if (!Object.keys(patch).length) return err("update requires at least one of name / t / cameraId");
+          const result = withDoc(ctx, "agent:marker_update", (target) => {
+            target.updateMarker(args.id as string, patch);
+          });
+          if (result.isError) return result;
+          return ok(`Updated marker ${args.id}.`);
+        }
+        if (op === "delete") {
+          const result = withDoc(ctx, "agent:marker_delete", (target) => {
+            target.removeMarker(args.id as string);
+          });
+          if (result.isError) return result;
+          return ok(`Deleted marker ${args.id}.`);
+        }
+        return err(`Unknown op "${op}" — use add|update|delete`);
       },
     },
     {
@@ -469,8 +531,8 @@ export function buildTools(): AgentTool[] {
     {
       name: "execute_code",
       description: {
-        en: "Run JavaScript in the sandbox to build/animate the scene. Global `api`: add/update/remove/clear/addCollection(name)/get/find/list/keyframes(id,keys,actionId?)/setCamera/addCamera/addCameraKeys(keys,cameraId?,actionId?)/setActiveCamera/updateCamera/removeCamera/createAction(owner,name?)/renameAction/duplicateAction/removeAction/setActiveAction/setDuration/setFps/setAspect(ratio)/onFrame(fn)/log/params/uniqueName. See the Skill Guide for the full reference. No DOM/network/imports; 5s timeout.",
-        zh: "在沙箱中运行 JavaScript 来搭建/动画化场景。全局 `api`：add/update/remove/clear/addCollection(name)/get/find/list/keyframes(id,keys,actionId?)/setCamera/addCamera/addCameraKeys(keys,cameraId?,actionId?)/setActiveCamera/updateCamera/removeCamera/createAction(owner,name?)/renameAction/duplicateAction/removeAction/setActiveAction/setDuration/setFps/setAspect(比例)/onFrame(fn)/log/params/uniqueName。完整参考见技能指南。无 DOM/网络/导入；5 秒超时。",
+        en: "Run JavaScript in the sandbox to build/animate the scene. Global `api`: add/update/remove/clear/addCollection(name)/get/find/list/keyframes(id,keys,actionId?)/setCamera/addCamera/addCameraKeys(keys,cameraId?,actionId?)/setActiveCamera/updateCamera/removeCamera/addMarker({t,cameraId,name?})/updateMarker(id,patch)/removeMarker(id)/createAction(owner,name?)/renameAction/duplicateAction/removeAction/setActiveAction/setDuration/setFps/setAspect(ratio)/onFrame(fn)/log/params/uniqueName. See the Skill Guide for the full reference. No DOM/network/imports; 5s timeout.",
+        zh: "在沙箱中运行 JavaScript 来搭建/动画化场景。全局 `api`：add/update/remove/clear/addCollection(name)/get/find/list/keyframes(id,keys,actionId?)/setCamera/addCamera/addCameraKeys(keys,cameraId?,actionId?)/setActiveCamera/updateCamera/removeCamera/addMarker({t,cameraId,name?})/updateMarker(id,patch)/removeMarker(id)/createAction(owner,name?)/renameAction/duplicateAction/removeAction/setActiveAction/setDuration/setFps/setAspect(比例)/onFrame(fn)/log/params/uniqueName。完整参考见技能指南。无 DOM/网络/导入；5 秒超时。",
       },
       parameters: {
         type: "object",

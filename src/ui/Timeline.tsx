@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useStore, type KeyTarget } from "../state/store";
 import { useT } from "../i18n";
-import { actionsOfOwner, activeActionOfOwner, type SceneDocument } from "../core/types";
+import { actionsOfOwner, activeActionOfOwner, activeCameraIdAt, type MarkerDesc, type SceneDocument } from "../core/types";
 import { GraphEditor } from "./GraphEditor";
 import { ActionEditor } from "./ActionEditor";
 
@@ -10,8 +10,6 @@ interface TrackRow {
   label: string;
   /** Present on camera rows. */
   cameraId?: string;
-  /** Cameras only: is this the active camera (renders/exports). */
-  active?: boolean;
   objectId?: string;
   color?: string;
   keys: Array<{ t: number }>;
@@ -27,7 +25,6 @@ function buildRows(doc: SceneDocument, selection: string[]): TrackRow[] {
       key: `cam:${c.id}`,
       label: `🎥 ${c.name}${multi && act ? ` · ${act.name}` : ""}`,
       cameraId: c.id,
-      active: c.id === doc.activeCameraId,
       keys: act ? act.keys : [],
     };
   });
@@ -83,12 +80,19 @@ export function Timeline() {
   const deleteKey = useStore((s) => s.deleteKey);
   const select = useStore((s) => s.select);
   const setActiveCamera = useStore((s) => s.setActiveCamera);
+  const addMarkerAt = useStore((s) => s.addMarker);
+  const updateMarker = useStore((s) => s.updateMarker);
+  const retimeMarker = useStore((s) => s.retimeMarker);
+  const removeMarker = useStore((s) => s.removeMarker);
+  const selectedMarkerId = useStore((s) => s.selectedMarker);
 
   const rows = buildRows(doc, selection);
   const areaRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(600);
   const [selectedKey, setSelectedKey] = useState<{ rowKey: string; t: number } | null>(null);
+  // Open marker editor popover: viewport coords captured from the marker chip.
+  const [markerPop, setMarkerPop] = useState<{ id: string; x: number; y: number } | null>(null);
 
   useEffect(() => {
     const el = areaRef.current;
@@ -204,27 +208,125 @@ export function Timeline() {
     window.addEventListener("pointerup", up);
   };
 
-  // Delete the selected keyframe via keyboard. Capture phase + stopPropagation
-  // so this beats App's global object-Delete handler (same as the graph
-  // editor): with a timeline key selected, Delete removes the KEY only.
+  // Delete the selected keyframe or marker via keyboard. Capture phase +
+  // stopPropagation so this beats App's global object-Delete handler (same as
+  // the graph editor): with a timeline key/marker selected, Delete removes
+  // that item only.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!selectedKey) return;
+      if (!selectedKey && !selectedMarkerId) return;
       const active = document.activeElement;
       if (active && ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName)) return;
       if (e.key === "Delete" || e.key === "Backspace") {
         e.preventDefault();
         e.stopPropagation();
-        const target: KeyTarget = selectedKey.rowKey.startsWith("cam:")
-          ? { cameraId: selectedKey.rowKey.slice(4) }
-          : { objectId: selectedKey.rowKey };
-        deleteKey(target, selectedKey.t);
-        setSelectedKey(null);
+        if (selectedMarkerId) {
+          removeMarker(selectedMarkerId);
+          setMarkerPop(null);
+        } else if (selectedKey) {
+          const target: KeyTarget = selectedKey.rowKey.startsWith("cam:")
+            ? { cameraId: selectedKey.rowKey.slice(4) }
+            : { objectId: selectedKey.rowKey };
+          deleteKey(target, selectedKey.t);
+          setSelectedKey(null);
+        }
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [selectedKey, deleteKey]);
+  }, [selectedKey, selectedMarkerId, deleteKey, removeMarker]);
+
+  // Marker editor popover: closes on Escape or a press outside it (and
+  // outside the marker chips, so dragging another marker just works).
+  useEffect(() => {
+    if (!markerPop) return;
+    const close = (e: PointerEvent) => {
+      const el = e.target as Element | null;
+      if (el?.closest?.(".marker-pop, .tl-marker")) return;
+      setMarkerPop(null);
+    };
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMarkerPop(null);
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", esc);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", esc);
+    };
+  }, [markerPop]);
+
+  /** Anchor the popover to a marker chip, flipping above it when the window
+   *  has no room below (the timeline sits at the bottom of the screen). */
+  const openMarkerPopAt = useCallback((id: string, chip: { left: number; top: number; bottom: number }) => {
+    const POP_H = 170;
+    const fitsBelow = chip.bottom + 4 + POP_H <= window.innerHeight - 8;
+    setMarkerPop({
+      id,
+      x: chip.left,
+      y: fitsBelow ? chip.bottom + 4 : Math.max(8, chip.top - POP_H - 4),
+    });
+  }, []);
+
+  // Marker chip interaction: drag retimes (cuts reposition live); a plain
+  // click selects and opens the camera-binding popover.
+  const beginMarkerDrag = (e: React.PointerEvent, m: MarkerDesc) => {
+    e.stopPropagation();
+    e.preventDefault();
+    pause();
+    setUi("selectedMarker", m.id);
+    setSelectedKey(null);
+    const content = contentRef.current;
+    const chip = e.currentTarget as HTMLElement;
+    const startX = e.clientX;
+    let moved = false;
+    const move = (ev: PointerEvent) => {
+      if (!moved && Math.abs(ev.clientX - startX) < 3) return;
+      moved = true;
+      setMarkerPop(null);
+      if (!content) return;
+      const rect = content.getBoundingClientRect();
+      const nextT = Math.min(Math.max(xToT(ev.clientX - rect.left), 0), doc.duration);
+      retimeMarker(m.id, nextT);
+      setPlayhead(nextT);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      if (!moved) openMarkerPopAt(m.id, chip.getBoundingClientRect());
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  // Marker chip interaction inside the graph/action editors (no marker lane
+  // there): clicking a chip selects the marker and opens the popover.
+  const editMarkerChip = useCallback(
+    (e: React.PointerEvent, m: MarkerDesc) => {
+      e.stopPropagation();
+      e.preventDefault();
+      pause();
+      setUi("selectedMarker", m.id);
+      setSelectedKey(null);
+      openMarkerPopAt(m.id, (e.currentTarget as HTMLElement).getBoundingClientRect());
+    },
+    [pause, setUi, openMarkerPopAt],
+  );
+
+  // Toolbar entry: add a marker at the playhead bound to the live camera,
+  // then open the popover on the fresh chip so a camera can be picked. Two
+  // rAFs so the new chip is committed to the DOM before it is measured.
+  const addMarkerHere = () => {
+    setSelectedKey(null);
+    const id = addMarkerAt();
+    if (!id) return;
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const el = document.querySelector<HTMLElement>(`[data-marker-id="${id}"]`);
+        if (el) openMarkerPopAt(id, el.getBoundingClientRect());
+      }),
+    );
+  };
 
   const step = tickStep(zoom);
   const tickCount = Math.floor(doc.duration / step + 1e-6);
@@ -298,6 +400,9 @@ export function Timeline() {
         <button className="btn small" onClick={() => setCameraKeyAtPlayhead()}>
           🎥◆ {t("timeline.setCameraKey")}
         </button>
+        <button className="btn small" title={t("timeline.addMarker")} onClick={addMarkerHere}>
+          ⚑ {t("timeline.addMarkerShort")}
+        </button>
         <span className="spacer" />
         <span className="tl-mode" role="group" aria-label={t("timeline.mode")}>
           <button
@@ -337,14 +442,18 @@ export function Timeline() {
 
       <div className="timeline-body">
         {mode === "graph" ? (
-          <GraphEditor />
+          <GraphEditor onMarkerChipDown={editMarkerChip} />
         ) : mode === "actions" ? (
-          <ActionEditor />
+          <ActionEditor onMarkerChipDown={editMarkerChip} />
         ) : (
           <>
             <div className="track-labels">
               <div className="tl-ruler" />
               <div className="tlabels-inner">
+                <div className="track-label markers" title={t("timeline.markersLaneTitle")}>
+                  <span className="tl-marker-glyph">⚑</span>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{t("timeline.markersLane")}</span>
+                </div>
                 {rows.map((row) => (
                   <div
                     key={row.key}
@@ -356,17 +465,11 @@ export function Timeline() {
                     }}
                   >
                     {row.cameraId && (
-                      <button
-                        className={`tl-cam-star ${row.active ? "on" : ""}`}
-                        title={t("inspector.setActive")}
-                        onPointerDown={(e) => e.stopPropagation()}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setActiveCamera(row.cameraId!);
-                        }}
-                      >
-                        {row.active ? "★" : "☆"}
-                      </button>
+                      <LiveStar
+                        cameraId={row.cameraId}
+                        title={t(row.cameraId === doc.activeCameraId ? "inspector.setActive" : "timeline.markerLiveHint")}
+                        onMakeActive={() => setActiveCamera(row.cameraId!)}
+                      />
                     )}
                     {!row.cameraId && (
                       <span
@@ -396,6 +499,25 @@ export function Timeline() {
                     </div>
                   ))}
                 </div>
+                <div className="tl-row markers" onPointerDown={beginScrub}>
+                  {doc.markers.map((m) => {
+                    const isSel = selectedMarkerId === m.id;
+                    const cam = doc.cameras.find((c) => c.id === m.cameraId);
+                    return (
+                      <div
+                        key={m.id}
+                        data-marker-id={m.id}
+                        className={`tl-marker ${isSel ? "selected" : ""}`}
+                        style={{ left: `${tToX(m.t)}px` }}
+                        title={`${m.name} @ ${m.t.toFixed(2)}s → ${cam?.name ?? m.cameraId} (${t("timeline.markerHint")})`}
+                        onPointerDown={(e) => beginMarkerDrag(e, m)}
+                      >
+                        <span className="tl-marker-flag">⚑</span>
+                        <span className="tl-marker-name">{m.name}</span>
+                      </div>
+                    );
+                  })}
+                </div>
                 {rows.map((row) => (
                   <div
                     key={row.key}
@@ -418,12 +540,47 @@ export function Timeline() {
                     })}
                   </div>
                 ))}
+                <MarkerOverlay tToX={tToX} topOffset={22} />
                 <Playhead duration={doc.duration} tToX={tToX} />
               </div>
             </div>
           </>
         )}
       </div>
+
+      {markerPop &&
+        (() => {
+          const m = doc.markers.find((x) => x.id === markerPop.id);
+          if (!m) return null;
+          return (
+            <div className="pivot-menu marker-pop" style={{ left: markerPop.x, top: markerPop.y }}>
+              <div className="pivot-menu-title">{t("timeline.markerEdit")}</div>
+              <label className="marker-pop-field">
+                {t("timeline.markerName")}
+                <input value={m.name} onChange={(e) => updateMarker(m.id, { name: e.target.value })} />
+              </label>
+              <label className="marker-pop-field">
+                {t("timeline.markerCamera")}
+                <select value={m.cameraId} onChange={(e) => updateMarker(m.id, { cameraId: e.target.value })}>
+                  {doc.cameras.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                className="btn small marker-pop-delete"
+                onClick={() => {
+                  removeMarker(m.id);
+                  setMarkerPop(null);
+                }}
+              >
+                {t("timeline.deleteMarker")}
+              </button>
+            </div>
+          );
+        })()}
     </div>
   );
 }
@@ -442,4 +599,67 @@ function Playhead({ duration, tToX }: { duration: number; tToX: (time: number) =
   const playhead = useStore((s) => s.playhead);
   const left = Math.min(Math.max(tToX(playhead), 0), tToX(duration));
   return <div className="playhead" style={{ left: `${left}px` }} />;
+}
+
+/** Per-camera "live" star: filled while THIS camera is the one rendering at
+ *  the playhead (markers may have cut away from the manual active camera).
+ *  Subscribes to the playhead so only the stars tick during playback. */
+function LiveStar({ cameraId, title, onMakeActive }: { cameraId: string; title: string; onMakeActive: () => void }) {
+  const live = useStore((s) => activeCameraIdAt(s.doc, s.playhead) === cameraId);
+  return (
+    <button
+      className={`tl-cam-star ${live ? "on" : ""}`}
+      title={title}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.stopPropagation();
+        onMakeActive();
+      }}
+    >
+      {live ? "★" : "☆"}
+    </button>
+  );
+}
+
+/** Camera-cut markers drawn over one editor view: a thin dashed vertical line
+ *  at each marker's start frame spanning the view, plus — when `onChipDown`
+ *  is given — a compact chip (for views without a marker lane). Render inside
+ *  the view's positioned `.tl-content`; `topOffset` skips the 22px ruler. */
+export function MarkerOverlay({
+  tToX,
+  topOffset = 22,
+  onChipDown,
+}: {
+  tToX: (time: number) => number;
+  topOffset?: number;
+  onChipDown?: (e: React.PointerEvent, m: MarkerDesc) => void;
+}) {
+  const t = useT();
+  const markers = useStore((s) => s.doc.markers);
+  const cameras = useStore((s) => s.doc.cameras);
+  const selectedMarkerId = useStore((s) => s.selectedMarker);
+  return (
+    <>
+      {markers.map((m) => {
+        const cam = cameras.find((c) => c.id === m.cameraId);
+        return (
+          <Fragment key={m.id}>
+            <div className="tl-marker-cut" style={{ left: `${tToX(m.t)}px`, top: topOffset }} />
+            {onChipDown && (
+              <div
+                data-marker-id={m.id}
+                className={`tl-marker tl-marker-compact ${selectedMarkerId === m.id ? "selected" : ""}`}
+                style={{ left: `${tToX(m.t)}px`, top: topOffset + 3 }}
+                title={`${m.name} @ ${m.t.toFixed(2)}s → ${cam?.name ?? m.cameraId} · ${t("timeline.markerClickHint")}`}
+                onPointerDown={(e) => onChipDown(e, m)}
+              >
+                <span className="tl-marker-flag">⚑</span>
+                <span className="tl-marker-name">{m.name}</span>
+              </div>
+            )}
+          </Fragment>
+        );
+      })}
+    </>
+  );
 }

@@ -23,7 +23,8 @@ Never claim success without a verifying snapshot.
   - box: width, height, depth · sphere: radius · cylinder: radiusTop, radiusBottom, height · cone: radius, height · torus: radius, tube · plane: width, height · capsule: radius, length · ring: innerRadius, outerRadius · tetrahedron/octahedron/dodecahedron/icosahedron: radius · torusKnot: radius, tube
 - Colors: hex strings only. Choose distinct, harmonious solid colors; keep the background neutral.
 - Camera: position + lookAt target + vertical fov (degrees). fov 45 ≈ 50mm lens; smaller fov = more telephoto; larger = wider.
-- MULTIPLE CAMERAS (Blender-style): \`doc.cameras\` is a list; one camera is ACTIVE (\`doc.activeCameraId\`) and every snapshot/export renders it. \`api.addCamera({name, position, target, fov})\` returns a camera id; \`api.setActiveCamera(id)\` switches rendering to it; \`api.addCameraKeys(keys, cameraId?)\` keys that camera (default: the active one). \`api.updateCamera(id, {name?, position?, target?, fov?})\` patches and \`api.removeCamera(id)\` deletes an existing camera (with its keys; the last one cannot be removed). Camera ids come from \`api.get().cameras\` / \`get_scene_state\`. Use a second camera for an alternate angle (e.g. wide master + close-up).
+- MULTIPLE CAMERAS (Blender-style): \`doc.cameras\` is a list; one camera is ACTIVE (\`doc.activeCameraId\`) and every snapshot/export renders it. \`api.addCamera({name, position, target, fov})\` returns a camera id; \`api.setActiveCamera(id)\` switches rendering to it; \`api.addCameraKeys(keys, cameraId?)\` keys that camera (default: the active one). \`api.updateCamera(id, {name?, position?, target?, fov?})\` patches and \`api.removeCamera(id)\` deletes an existing camera (with its keys and markers; the last one cannot be removed). Camera ids come from \`api.get().cameras\` / \`get_scene_state\`. Use a second camera for an alternate angle (e.g. wide master + close-up).
+- CAMERA-CUT MARKERS (Blender-style): \`doc.markers\` = timeline markers, each pinned to a camera (\`{id, name, t, cameraId}\`). At every frame the LATEST marker with \`t <= time\` decides which camera renders (a hard CUT); before the first marker the active camera renders. \`api.addMarker({t, cameraId, name?})\` returns a marker id; \`api.updateMarker(id, {name?, t?, cameraId?})\` / \`api.removeMarker(id)\` manage them. Use markers to edit multi-angle videos (cut between a wide master and a close-up) without splitting the clip — each camera keeps its own keyframed motion while the markers switch between them.
 - ACTIONS (Blender-style): keyframes live in named ACTIONS, each owned by ONE object or camera (\`doc.actions\`). Each owner has one ACTIVE action — only it plays and edits; different owners' active actions play SIMULTANEOUSLY. \`api.createAction({objectId} | {cameraId}, name?)\` returns an action id, \`api.setActiveAction(id)\` switches which one plays, \`api.renameAction(id, name)\` / \`api.duplicateAction(id)\` / \`api.removeAction(id)\` manage them. Action ids come from \`api.get().actions\`.
 - COLLECTIONS (Blender-style): \`doc.collections\` groups objects in the Outliner. Create one with \`api.addCollection("Human")\` (returns an id), then file objects under it with \`api.add({..., collectionId})\` or \`api.update(id, { collectionId })\` (\`collectionId: null\` moves an object back to the root). Objects without one sit directly under "Scene Collection". When a scene has several subjects or a multi-part figure, group EACH subject's parts into a named collection (e.g. "Human", "Ground") — the user can then select, show/hide or delete a whole subject with one click in the Outliner.
 - Timeline: duration (seconds, default 6) + fps (export rate, default 30).
@@ -47,6 +48,7 @@ Never claim success without a verifying snapshot.
 - \`set_camera\` {position?, target?, fov?} → base pose of the ACTIVE camera.
 - \`add_camera\` {name?, position?, target?, fov?, setActive?} → new camera id.
 - \`set_active_camera\` {id} → make that camera the one snapshots/export render.
+- \`manage_marker\` {op:"add"|"update"|"delete", t?, cameraId?, name?, id?} → manage camera-cut markers (add needs t + cameraId; the others need the marker id). A marker cuts the render to its camera from its time until the next marker.
 - \`add_camera_keyframes\` {keys:[{t, position?, target?, fov?, interp?}], cameraId?, actionId?} → keys the given camera (default: active) into its ACTIVE action.
 - \`add_keyframes\` {id, keys:[{t, position?, rotation?, scale?, color?, visible?, interp?}], actionId?} → keys the object's ACTIVE action.
 - \`manage_action\` {op:"create"|"duplicate"|"rename"|"delete"|"setActive", owner?:{objectId|cameraId}, id?, name?} → manage per-owner actions (create needs owner; the others need the action id).
@@ -76,7 +78,9 @@ api.addCameraKeys([
 api.addCameraKeys([{ t: 0, position: [14, 2, 0] }, { t: 6, position: [-14, 2, 0] }], wide); // keys "Wide"
 api.setActiveCamera(wide);              // snapshots/export now render "Wide"
 api.updateCamera(wide, { fov: 35 });    // patch a camera's base pose/name
-// api.removeCamera(id) — drops that camera AND its keys (last one protected)
+// api.removeCamera(id) — drops that camera AND its keys/markers (last one protected)
+const cut = api.addMarker({ t: 3, cameraId: wide, name: "Wide cut" }); // CUT to "Wide" at t=3
+api.updateMarker(cut, { t: 2.5 });      // retime a marker; api.removeMarker(id) deletes it
 const spin = api.createAction({ objectId: id }, "Spin"); // a second action for one object
 api.keyframes(id, [
   { t: 0, rotation: [0, 0, 0] },
@@ -98,6 +102,7 @@ api.log("done", id);
 - Orbit: \`onFrame\` with cos/sin; keep the orbit radius small enough to stay in frame.
 - Camera: dollying = translate position keyframes toward the target; crane = move y; orbit = keyframe positions on a circle around the target, always aiming at it.
 - Two cameras: build the wide master first, then \`api.addCamera\` + \`api.addCameraKeys(keys, camId)\` for a second angle (e.g. close-up); \`api.setActiveCamera\` + \`snapshot\` to verify each framing.
+- Camera cut: with two cameras, \`api.addMarker({t: 3, cameraId: closeupId})\` hard-cuts the video to the close-up from t=3; \`snapshot\` just before and just after t verifies both sides of the cut.
 - Two actions: \`api.createAction({objectId}, "VariantB")\` + \`api.keyframes(id, keysB, actionB)\` builds an alternate take without touching the current keys; \`api.setActiveAction(actionB)\` + \`snapshot\` verifies it. Both approaches compose: each camera can hold its own actions too.
 - Composition: subject near center, horizon around the lower third, ground plane larger than the action area, 3–8 objects usually reads best.
 
@@ -134,7 +139,8 @@ api.log("done", id);
   - box: width, height, depth · sphere: radius · cylinder: radiusTop, radiusBottom, height · cone: radius, height · torus: radius, tube · plane: width, height · capsule: radius, length · ring: innerRadius, outerRadius · tetrahedron/octahedron/dodecahedron/icosahedron: radius · torusKnot: radius, tube
 - 颜色：仅十六进制字符串。选区分度好、和谐的纯色；背景保持中性。
 - 相机：位置 + 注视目标 target + 垂直视场角 fov（度）。fov 45 ≈ 50mm 镜头；更小更“长焦”，更大更“广角”。
-- 多相机（Blender 风格）：\`doc.cameras\` 是相机列表；其中一台是“活动”相机（\`doc.activeCameraId\`），所有快照/导出都渲染它。\`api.addCamera({name, position, target, fov})\` 返回相机 id；\`api.setActiveCamera(id)\` 切换渲染目标；\`api.addCameraKeys(keys, cameraId?)\` 为指定相机打关键帧（默认为活动相机）。\`api.updateCamera(id, {name?, position?, target?, fov?})\` 修改、\`api.removeCamera(id)\` 删除已有相机（连同其关键帧；最后一台不可删除）。相机 id 从 \`api.get().cameras\` / \`get_scene_state\` 获取。可用第二台相机拍别的机位（如全景 + 特写）。
+- 多相机（Blender 风格）：\`doc.cameras\` 是相机列表；其中一台是“活动”相机（\`doc.activeCameraId\`），所有快照/导出都渲染它。\`api.addCamera({name, position, target, fov})\` 返回相机 id；\`api.setActiveCamera(id)\` 切换渲染目标；\`api.addCameraKeys(keys, cameraId?)\` 为指定相机打关键帧（默认为活动相机）。\`api.updateCamera(id, {name?, position?, target?, fov?})\` 修改、\`api.removeCamera(id)\` 删除已有相机（连同其关键帧和标记；最后一台不可删除）。相机 id 从 \`api.get().cameras\` / \`get_scene_state\` 获取。可用第二台相机拍别的机位（如全景 + 特写）。
+- 镜头切换标记（Blender 风格）：\`doc.markers\` 是时间轴标记，每个标记绑定一台相机（\`{id, name, t, cameraId}\`）。每一帧都由“时间 ≤ 当前时间的最后一个标记”决定渲染哪台相机（硬切）；第一个标记之前渲染活动相机。\`api.addMarker({t, cameraId, name?})\` 返回标记 id；\`api.updateMarker(id, {name?, t?, cameraId?})\` / \`api.removeMarker(id)\` 管理标记。需要多机位剪辑（全景与特写之间切换）时用标记实现，无需拆分片段——每台相机各自的关键帧运动照常播放，标记只负责切换。
 - 动作（Blender 风格）：关键帧保存在命名的“动作”中，每个动作只属于一个对象或相机（\`doc.actions\`）。每个所有者有一个“活动动作”——只有它参与播放和编辑；不同所有者的活动动作**同时**播放。\`api.createAction({objectId} | {cameraId}, name?)\` 返回动作 id，\`api.setActiveAction(id)\` 切换播放的动作，\`api.renameAction(id, name)\` / \`api.duplicateAction(id)\` / \`api.removeAction(id)\` 管理动作。动作 id 从 \`api.get().actions\` 获取。
 - 集合（Blender 风格）：\`doc.collections\` 在大纲（Outliner）中为对象分组。先用 \`api.addCollection("人形")\` 创建（返回 id），再通过 \`api.add({..., collectionId})\` 或 \`api.update(id, { collectionId })\` 把对象归入（\`collectionId: null\` 表示移回根级）。没有集合的对象直接位于“场景集合”下。当场景包含多个主体或多部件人物时，把**每个主体**的部件归入一个命名集合（如 “人形”、“地面”）——用户即可在大纲中一键选中、显示/隐藏或删除整个主体。
 - 时间轴：duration（秒，默认 6）+ fps（导出帧率，默认 30）。
@@ -158,6 +164,7 @@ api.log("done", id);
 - \`set_camera\` {position?, target?, fov?} → 活动相机的基础位姿。
 - \`add_camera\` {name?, position?, target?, fov?, setActive?} → 新相机 id。
 - \`set_active_camera\` {id} → 设为快照/导出渲染的“活动”相机。
+- \`manage_marker\` {op:"add"|"update"|"delete", t?, cameraId?, name?, id?} → 管理镜头切换标记（add 需 t + cameraId；其余需要标记 id）。标记从其时间起把画面切到绑定的相机，直到下一个标记。
 - \`add_camera_keyframes\` {keys:[{t, position?, target?, fov?, interp?}], cameraId?, actionId?} → 为指定相机（默认活动相机）打关键帧，写入其活动动作。
 - \`add_keyframes\` {id, keys:[{t, position?, rotation?, scale?, color?, visible?, interp?}], actionId?} → 写入对象的活动动作。
 - \`manage_action\` {op:"create"|"duplicate"|"rename"|"delete"|"setActive", owner?:{objectId|cameraId}, id?, name?} → 管理动作（create 需 owner；其余需要动作 id）。
@@ -187,7 +194,9 @@ api.addCameraKeys([
 api.addCameraKeys([{ t: 0, position: [14, 2, 0] }, { t: 6, position: [-14, 2, 0] }], wide); // 为 "Wide" 打关键帧
 api.setActiveCamera(wide);              // 快照/导出改为渲染 "Wide"
 api.updateCamera(wide, { fov: 35 });    // 修改某台相机的基础位姿/名称
-// api.removeCamera(id) — 连同其关键帧一起删除（最后一台不可删）
+// api.removeCamera(id) — 连同其关键帧和标记一起删除（最后一台不可删）
+const cut = api.addMarker({ t: 3, cameraId: wide, name: "切全景" }); // t=3 硬切到 "Wide"
+api.updateMarker(cut, { t: 2.5 });      // 改标记时间；api.removeMarker(id) 删除标记
 const spin = api.createAction({ objectId: id }, "旋转"); // 为同一对象建第二个动作
 api.keyframes(id, [
   { t: 0, rotation: [0, 0, 0] },
@@ -209,6 +218,7 @@ api.log("完成", id);
 - 环绕：\`onFrame\` 用 cos/sin；轨道半径要足够小以保持在画面内。
 - 运镜：推轨 = position 关键帧向 target 靠近；升降 = 改 y；环绕 = 沿目标周围圆周打关键帧并始终注视目标。
 - 双机位：先搭全景主机位，再用 \`api.addCamera\` + \`api.addCameraKeys(keys, 相机id)\` 加一个特写机位；用 \`api.setActiveCamera\` + \`snapshot\` 逐机位验证构图。
+- 镜头切换：有两台相机后，\`api.addMarker({t: 3, cameraId: 特写id})\` 让视频从 t=3 硬切到特写；在 t 前后各 \`snapshot\` 一次即可验证切换两侧的画面。
 - 双动作：\`api.createAction({objectId}, "方案B")\` + \`api.keyframes(id, 关键帧B, 动作B)\` 可以在不影响现有关键帧的情况下准备另一套动画；\`api.setActiveAction(动作B)\` + \`snapshot\` 验证效果。两种做法可以组合：每台相机也可以有自己的动作。
 - 构图：主体居中偏下三分之一，地面大于动作范围，3–8 个对象通常观感最好。
 

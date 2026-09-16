@@ -1,6 +1,7 @@
 /** A small showcase scene: bouncing ball + orbiting companion + camera move.
  *  Demonstrates actions too: the ball owns "Bounce" (active) and "Spin"
- *  (inactive — switch to it in the Action Editor), the camera owns "Fly". */
+ *  (inactive — switch to it in the Action Editor), the camera owns "Fly",
+ *  and a marker cuts to the "Closeup" camera at t=3.5. */
 import { createEmptyDocument, newId, type CameraActionDesc, type ObjectActionDesc, type SceneDocument } from "./types";
 
 export function demoDocument(): SceneDocument {
@@ -122,6 +123,17 @@ export function demoDocument(): SceneDocument {
   };
   doc.actions.push(fly);
   doc.cameras[0].activeActionId = fly.id;
+
+  // Camera-cut marker demo: a close-up on the ball's final rest position;
+  // from t=3.5 the render cuts to it until the end of the clip.
+  doc.cameras.push({
+    id: "cam-closeup",
+    name: "Closeup",
+    position: [4.6, 1.4, 2.6],
+    target: [3.4, 0.8, 0],
+    fov: 40,
+  });
+  doc.markers.push({ id: "mk-closeup", name: "Closeup cut", t: 3.5, cameraId: "cam-closeup" });
 
   return doc;
 }

@@ -81,6 +81,10 @@ export default function App() {
         case "c":
           s.setCameraKeyAtPlayhead();
           break;
+        case "m":
+          // Blender-style: drop a camera-cut marker at the playhead.
+          s.addMarker();
+          break;
         case "f":
           // Shift+F is walk mode (handled in Viewport), plain F frames selection.
           if (!e.shiftKey) window.dispatchEvent(new CustomEvent("mrs:frame-selection"));

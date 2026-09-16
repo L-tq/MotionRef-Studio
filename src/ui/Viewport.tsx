@@ -3,7 +3,7 @@ import { Engine, snapshotDataUrl, type FrameSource, type GizmoMode } from "../co
 import type { PivotMode } from "../core/types";
 import { downloadBlob } from "../core/videoExport";
 import { aspectDims, aspectLabel } from "../core/cameraMath";
-import { docAspect } from "../core/types";
+import { docAspect, activeCameraIdAt } from "../core/types";
 import { useStore } from "../state/store";
 import { useT } from "../i18n";
 import { NavGizmo } from "./NavGizmo";
@@ -293,7 +293,12 @@ export function Viewport() {
           <span className="walk-hud-speed">{t("walk.speed", { pct: walk.speed })}</span>
         </div>
       )}
-      {cameraPreview && <div className="viewport-banner">{t("viewport.previewBanner")}</div>}
+      {cameraPreview && (
+        <div className="viewport-banner">
+          {t("viewport.previewBanner")}
+          <LiveCameraName />
+        </div>
+      )}
       {cameraPreview && <CameraFrame aspect={docAspect(doc)} />}
       {objects === 0 && (
         <div className="viewport-empty">
@@ -314,6 +319,16 @@ function PlayheadStatus() {
       {playhead.toFixed(2)}s / {duration.toFixed(2)}s
     </div>
   );
+}
+
+/** Camera name in the preview banner — follows marker cuts during playback.
+ *  Subscribing here keeps the (name string) re-renders local to this span. */
+function LiveCameraName() {
+  const name = useStore((s) => {
+    const id = activeCameraIdAt(s.doc, s.playhead);
+    return s.doc.cameras.find((c) => c.id === id)?.name ?? "";
+  });
+  return <span className="banner-live-cam"> · {name}</span>;
 }
 
 export { GIZMO_BUTTONS };

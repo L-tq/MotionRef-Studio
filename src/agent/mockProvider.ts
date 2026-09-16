@@ -40,6 +40,9 @@ api.addCameraKeys([
   { t: 3, position: [4, 5, 11], target: [0, 1.2, 0], fov: 42, interp: "smooth" },
   { t: 6, position: [-6, 7, 9], target: [1, 1, 0], fov: 46, interp: "smooth" },
 ]);
+// A second camera + a marker: from t=4.5 the view hard-cuts to this close-up.
+const closeup = api.addCamera({ name: "Closeup", position: [4.6, 1.4, 2.6], target: [3.4, 0.8, 0], fov: 40 });
+api.addMarker({ t: 4.5, cameraId: closeup, name: "Closeup cut" });
 api.log("scene built");`;
 
 export async function runMockTurn(
@@ -77,7 +80,8 @@ export async function runMockTurn(
       "Demo scene is ready (mock provider — no LLM was contacted):\n" +
       "• Ground plane, two pillars, a bouncing ball (squash & stretch keyframes)\n" +
       "• An orbiting icosahedron via api.onFrame\n" +
-      "• Camera sweep with three keyframes (38° → 46° FOV)\n\n" +
+      "• Camera sweep with three keyframes (38° → 46° FOV)\n" +
+      "• A close-up camera + marker: the view cuts to it at t=4.5\n\n" +
       "Press Play to preview, or connect a real multimodal model in Settings for actual prompt-driven generation.",
     step: 2,
   });

@@ -123,6 +123,17 @@ export interface CollectionDesc {
   name: string;
 }
 
+/** A timeline marker bound to a scene camera (Blender-style camera cut):
+ *  from its time on, that camera renders until the next marker. */
+export interface MarkerDesc {
+  id: string;
+  name: string;
+  /** Seconds from clip start. */
+  t: number;
+  /** Camera (doc.cameras id) that renders from this time onward. */
+  cameraId: string;
+}
+
 export interface SceneDocument {
   version: 1;
   name: string;
@@ -138,6 +149,9 @@ export interface SceneDocument {
   objects: ObjectDesc[];
   /** Outliner collections; members reference them via ObjectDesc.collectionId. */
   collections: CollectionDesc[];
+  /** Timeline markers bound to cameras; kept sorted by t. The latest marker
+   *  at/before the current time decides which camera renders (camera cut). */
+  markers: MarkerDesc[];
   /** Scene cameras; the first entry is the legacy default camera. Previews,
    *  snapshots and video export always render the ACTIVE camera. */
   cameras: CameraDesc[];
@@ -190,6 +204,7 @@ export function createEmptyDocument(name = "Untitled"): SceneDocument {
     aspect: 16 / 9,
     objects: [],
     collections: [],
+    markers: [],
     cameras: [defaultCameraDesc()],
     activeCameraId: DEFAULT_CAMERA_ID,
     actions: [],
@@ -201,6 +216,27 @@ export function createEmptyDocument(name = "Untitled"): SceneDocument {
 /** The camera a render/preview currently shows (falls back to the first). */
 export function activeCameraOf(doc: SceneDocument): CameraDesc {
   return doc.cameras.find((c) => c.id === doc.activeCameraId) ?? doc.cameras[0];
+}
+
+/** Which camera renders at time t: the latest camera-bound marker at/before
+ *  t wins (hard cut at its time); before the first marker (or with no
+ *  markers) the manual active camera renders. Tolerant of pre-marker docs
+ *  whose `markers` field is missing. */
+export function activeCameraIdAt(doc: SceneDocument, t: number): string {
+  let id = doc.activeCameraId;
+  for (const m of doc.markers ?? []) {
+    if (m.t <= t + 1e-9) id = m.cameraId;
+    else break;
+  }
+  return doc.cameras.some((c) => c.id === id) ? id : doc.cameras[0]?.id ?? id;
+}
+
+/** Next free default marker name: "Marker", "Marker 2", … */
+export function defaultMarkerName(doc: SceneDocument): string {
+  if (!doc.markers.some((m) => m.name === "Marker")) return "Marker";
+  let n = 2;
+  while (doc.markers.some((m) => m.name === `Marker ${n}`)) n += 1;
+  return `Marker ${n}`;
 }
 
 /** All actions owned by an object or camera (document order). */

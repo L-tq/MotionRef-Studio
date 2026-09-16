@@ -16,7 +16,7 @@ import type {
   TransformKey,
   Vec3,
 } from "./types";
-import { activeCameraOf, cameraKeysOf, objectKeysOf } from "./types";
+import { activeCameraIdAt, cameraKeysOf, objectKeysOf } from "./types";
 
 export interface EvaluatedObject {
   id: string;
@@ -34,6 +34,9 @@ export interface EvaluatedState {
   time: number;
   objects: Map<string, EvaluatedObject>;
   camera: CameraState;
+  /** Which scene camera `camera` is (marker at/before t, else the manual
+   *  active camera) — lets the UI show the live camera without re-resolving. */
+  cameraId: string;
   /** Object id -> channels the onFrame hooks overrode at this time. A hooked
    *  channel is script-owned: the hook re-applies it on every evaluate, so
    *  manual edits to it can never stick (and must not be recorded as keys). */
@@ -185,9 +188,11 @@ export function evalCameraById(doc: SceneDocument, cameraId: string, t: number):
   return evalCameraDesc(cam, cameraKeysOf(doc, cam.id), t);
 }
 
-/** Evaluated pose of the ACTIVE scene camera (what preview/export renders). */
+/** Evaluated pose of the LIVE camera at time t (what preview/export renders):
+ *  the camera bound by the latest marker at/before t, else the manual
+ *  active camera. */
 export function evalCamera(doc: SceneDocument, t: number): CameraState {
-  return evalCameraById(doc, activeCameraOf(doc).id, t);
+  return evalCameraById(doc, activeCameraIdAt(doc, t), t);
 }
 
 // --- onFrame hooks -------------------------------------------------------------
@@ -310,10 +315,12 @@ function runHooks(state: EvaluatedState, doc: SceneDocument, t: number): HookErr
 
 export function evaluate(doc: SceneDocument, time: number, errorsOut?: HookError[]): EvaluatedState {
   const t = Math.min(Math.max(time, 0), Math.max(doc.duration, 0));
+  const cameraId = activeCameraIdAt(doc, t);
   const state: EvaluatedState = {
     time: t,
     objects: new Map(),
-    camera: evalCamera(doc, t),
+    camera: evalCameraById(doc, cameraId, t),
+    cameraId,
     hooked: new Map(),
   };
   for (const obj of doc.objects) {
