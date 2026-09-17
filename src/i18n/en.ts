@@ -21,6 +21,7 @@ export const en: Record<string, string> = {
   "common.deg": "°",
   "common.pcs": "pcs",
   "common.confirm": "Confirm",
+  "common.create": "Create",
 
   // Top bar / projects
   "topbar.new": "New project",
@@ -41,6 +42,7 @@ export const en: Record<string, string> = {
   "projects.confirmNew": "Start a new empty project? Unsaved changes will be lost.",
   "projects.confirmDelete": "Delete project “{name}”?",
   "projects.storageNote": "💾 Save keeps the project in this browser (localStorage + IndexedDB) — it stays on this device. To back up or move a project to another device, including its chat history, use ⬇/⬆ Export/Import Project in the toolbar.",
+  "projects.workspaceNote": "Projects are .mrsproj.json files in the studio server's workspace — external agents can see and version them alongside their code.",
 
   // Panels
   "panel.outliner": "Outliner",
@@ -299,6 +301,27 @@ export const en: Record<string, string> = {
   "settings.guidePreview": "Preview the Agent Skill Guide (system prompt)",
   "settings.savedLocally": "Saved locally.",
 
+  // Studio link (local deployment mode)
+  "studio.title": "Studio Link",
+  "studio.connected": "Connected to the local studio server — this tab is a synced client.",
+  "studio.connecting": "Connecting to the studio server…",
+  "studio.presence": "{agents} external agent(s) · {tabs} browser tab(s)",
+  "studio.lockedBy": "Edit lock held by: {name}",
+  "studio.youAreEditing": "This tab holds the edit lock ({name}).",
+  "studio.viewOnly": "{name} is editing — view only. Playback and inspection stay available.",
+  "studio.forceUnlock": "Force unlock",
+  "studio.workspace": "Workspace",
+  "studio.externalAgents": "External Agents (MCP)",
+  "studio.mcpEndpoint": "MCP endpoint",
+  "studio.token": "Access token",
+  "studio.tokenHint": "The token is stored in ~/.motionref-studio/config.json; the server only accepts connections from this machine.",
+  "studio.snippetHint": "Attach MotionRef Studio to your agent with a snippet above, then ask it to build or animate a scene — it uses the same tools and the same skill guide as the built-in agent, and while it edits, everyone else is view-only.",
+  "studio.newProject": "New project",
+  "studio.saveProjectAs": "Save project as",
+  "studio.projectName": "Project name",
+  "studio.saveDir": "Save directory (on the studio server)",
+  "studio.parentDir": "Up one level",
+
   // Agent chat errors/notices
   "agent.noVision": "The model may not support images; ask it to work from text only.",
 
@@ -309,6 +332,8 @@ export const en: Record<string, string> = {
   "error.wrongImporterProject": "This is a full project file (scene + chat). Use ⬆ Import in the Projects menu (🗂 button), not Import JSON in the toolbar.",
   "error.notAProjectBundle": "This file is not a project file. Export a project with ⬇ Export in the Projects menu first.",
   "error.storageFull": "localStorage is full — export the scene JSON instead.",
+  "error.sceneLocked": "Scene locked — another agent or tab is editing. View only until it finishes.",
+  "error.studio": "Studio server: {msg}",
   "error.docImported": "Scene imported.",
   "notice.docExported": "Scene JSON downloaded.",
   "notice.projectExported": "Project file downloaded (scene + chat).",

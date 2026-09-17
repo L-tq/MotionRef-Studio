@@ -23,12 +23,15 @@ import {
   saveCurrentSessionId,
   type ChatSessionRecord,
 } from "../state/chatPersist";
-import { streamChatCompletion, userContent, type ToolSchema } from "./llmClient";
+import { streamChatCompletion, userContent } from "./llmClient";
 import { sandbox } from "./sandbox";
-import { getTools, systemPrompt, toWireTools, type ToolContext, type ToolResult } from "./tools";
+import { runTool, type ToolContext, type ToolResult } from "./tools";
+import { systemPrompt, toWireTools } from "./wire";
 import type { SessionEvent, WireMessage } from "./types";
 import { runMockTurn } from "./mockProvider";
 import { t } from "../i18n";
+import type { ToolSchema } from "./types";
+import { acquireTurnLock, invokeRemoteTool, isServerMode, releaseTurnLock, reportTurnState } from "../state/studioLink";
 
 // --- module state -------------------------------------------------------------
 
@@ -56,36 +59,16 @@ function runningTaskIds(): string[] {
 }
 
 // --- tool execution pipeline ----------------------------------------------------
-
-async function executeTool(name: string, argsJson: string, ctx: ToolContext): Promise<ToolResult> {
-  const tool = getTools().find((tl) => tl.name === name);
-  if (!tool) {
-    return { text: `ERROR: unknown tool "${name}"`, isError: true };
-  }
-  let args: Record<string, unknown>;
-  try {
-    args = argsJson ? (JSON.parse(argsJson) as Record<string, unknown>) : {};
-  } catch (err) {
-    return { text: `ERROR: arguments are not valid JSON (${err instanceof Error ? err.message : String(err)}). Received: ${argsJson.slice(0, 400)}`, isError: true };
-  }
-  try {
-    return await Promise.race([
-      tool.handler(args, ctx),
-      new Promise<ToolResult>((_, reject) =>
-        setTimeout(() => reject(new Error("tool timed out after 20s")), 20_000),
-      ),
-    ]);
-  } catch (err) {
-    return { text: `ERROR: ${err instanceof Error ? err.message : String(err)}`, isError: true };
-  }
-}
+// The guarded pipeline (unknown tool / bad args / timeout / thrown errors)
+// lives in tools.ts as runTool() so the studio server executes the exact
+// same code path for external agents.
 
 function makeContext(): ToolContext {
   const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
   return {
     getDoc: () => useStore.getState().doc,
     applyDoc: (doc, label) => useStore.getState().applyDoc(doc, label),
-    snapshot: (time, width, height) => {
+    snapshot: async (time, width, height) => {
       const s = useStore.getState();
       const time2 = clamp(time ?? s.playhead, 0, s.doc.duration);
       // Defaults follow the scene aspect ratio so agent-visible snapshots
@@ -111,6 +94,17 @@ export async function runAgentTurn(input: AgentInput): Promise<void> {
   const store = useStore.getState();
   const taskId = store.activeTaskId;
   if (!taskId || store.taskStates[taskId] === "running") return;
+
+  // In studio-server mode the turn needs the edit lock: while it runs, other
+  // agents and other tabs are view-only (this tab's own edits stay allowed,
+  // matching the browser-only behavior of concurrent user + agent edits).
+  const taskName = store.tasks.find((m) => m.id === taskId)?.name || "";
+  const lockError = await acquireTurnLock(taskName);
+  if (lockError) {
+    store.taskPush(taskId, { id: newId("e"), type: "error", message: lockError });
+    return;
+  }
+  reportTurnState(true);
 
   const rt = runtimeFor(taskId);
   rt.abort = new AbortController();
@@ -149,6 +143,8 @@ export async function runAgentTurn(input: AgentInput): Promise<void> {
   } finally {
     rt.abort = null;
     if (turnTaskId === taskId) turnTaskId = null;
+    releaseTurnLock();
+    reportTurnState(false);
   }
 }
 
@@ -172,7 +168,10 @@ export function turnTaskPatch(eventId: string, patch: Partial<SessionEvent>): vo
   if (turnTaskId) useStore.getState().taskPatch(turnTaskId, eventId, patch);
 }
 
-/** Exported for the mock provider so it shares the same event plumbing. */
+/** Event plumbing shared by the real loop and the mock provider: everything
+ *  goes to the task the current turn belongs to. In studio-server mode the
+ *  call is relayed to the server — the exact same pipeline external MCP
+ *  agents execute through. */
 export async function executeToolWithEvents(name: string, argsJson: string, ctx: ToolContext): Promise<ToolResult> {
   const eventId = newId("e");
   turnTaskPush({
@@ -184,7 +183,9 @@ export async function executeToolWithEvents(name: string, argsJson: string, ctx:
     status: "running",
   });
   const t0 = performance.now();
-  const result = await executeTool(name, argsJson, ctx);
+  const result = isServerMode()
+    ? await invokeRemoteTool(name, argsJson)
+    : await runTool(name, argsJson, ctx);
   turnTaskPatch(eventId, {
     status: result.isError ? "error" : "ok",
     resultText: result.text,

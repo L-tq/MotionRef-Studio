@@ -3,14 +3,15 @@
  *  (plus optional snapshot payloads the loop forwards as images).
  *
  *  Declarative scene tools reuse the same ScriptTarget used by the sandbox,
- *  so tools and code have identical semantics. */
+ *  so tools and code have identical semantics.
+ *
+ *  This module must stay DOM-free: the Node studio server imports the same
+ *  registry + runTool() pipeline so built-in and external agents execute
+ *  through ONE implementation. Locale-dependent helpers live in wire.ts. */
 import { createScriptTarget } from "../core/scripting";
 import { cloneDoc, type SceneDocument } from "../core/types";
 import { validateSceneDocument } from "../core/validate";
-import { AGENT_SKILL_GUIDE } from "./guide";
-import type { ToolSchema } from "./llmClient";
-import type { SandboxResult } from "./sandbox";
-import { getLocale } from "../i18n";
+import type { SandboxResult, ToolSchema } from "./types";
 
 export interface SnapshotPayload {
   dataUrl: string;
@@ -23,7 +24,8 @@ export interface ToolContext {
   getDoc(): SceneDocument;
   /** Validated apply of a new document to the editor. */
   applyDoc(doc: SceneDocument, label: string): void;
-  snapshot(time?: number, width?: number, height?: number): SnapshotPayload;
+  /** Async so the studio server can relay rendering to a browser client. */
+  snapshot(time?: number, width?: number, height?: number): Promise<SnapshotPayload>;
   runSandbox(code: string): Promise<SandboxResult>;
 }
 
@@ -37,6 +39,9 @@ export interface AgentTool {
   name: string;
   description: { en: string; zh: string };
   parameters: object;
+  /** Read-only tools (get_scene_state, snapshot) never mutate the document
+   *  and therefore skip the studio server's edit lock. */
+  readOnly?: boolean;
   handler(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult>;
 }
 
@@ -71,6 +76,7 @@ export function buildTools(): AgentTool[] {
   return [
     {
       name: "get_scene_state",
+      readOnly: true,
       description: {
         en: "Get the full scene document: objects (id, name, type, params, pose, color, collectionId), collections, markers (camera cuts), keyframe tracks, camera keys, cameras + activeCameraId, duration, fps, onFrame hooks.",
         zh: "获取完整场景文档：对象（id、名称、类型、参数、位姿、颜色、collectionId）、集合、标记（镜头切换）、关键帧轨道、相机关键帧、相机列表 + activeCameraId、时长、帧率、onFrame 脚本。",
@@ -506,6 +512,7 @@ export function buildTools(): AgentTool[] {
     },
     {
       name: "snapshot",
+      readOnly: true,
       description: {
         en: "Render the SCENE CAMERA (export framing) to an image and look at it to verify the scene. Args: time? (seconds, default current playhead), width?, height? (default derived from the scene aspect ratio, longest edge 1024). The image arrives as your next input message.",
         zh: "用场景相机（导出取景）渲染一张图片并查看以验证场景。参数：time?（秒，默认当前时间轴位置）、width?、height?（默认按场景画面比例推导，长边 1024）。图片将作为你的下一条输入消息。",
@@ -520,7 +527,7 @@ export function buildTools(): AgentTool[] {
         additionalProperties: false,
       },
       async handler(args, ctx) {
-        const snap = ctx.snapshot(
+        const snap = await ctx.snapshot(
           typeof args.time === "number" ? args.time : undefined,
           typeof args.width === "number" ? args.width : undefined,
           typeof args.height === "number" ? args.height : undefined,
@@ -569,9 +576,35 @@ export function getTools(): AgentTool[] {
   return cachedTools;
 }
 
-/** Convert to OpenAI wire tool schemas, localized. */
-export function toWireTools(): ToolSchema[] {
-  const locale = getLocale();
+/** The guarded tool pipeline shared by the browser agent loop, the mock
+ *  provider and the studio server (MCP + relayed built-in calls): unknown
+ *  tool / bad JSON args / timeout / thrown errors all normalize to isError
+ *  results the model can read. */
+export async function runTool(name: string, argsJson: string, ctx: ToolContext): Promise<ToolResult> {
+  const tool = getTools().find((tl) => tl.name === name);
+  if (!tool) {
+    return { text: `ERROR: unknown tool "${name}"`, isError: true };
+  }
+  let args: Record<string, unknown>;
+  try {
+    args = argsJson ? (JSON.parse(argsJson) as Record<string, unknown>) : {};
+  } catch (err) {
+    return { text: `ERROR: arguments are not valid JSON (${err instanceof Error ? err.message : String(err)}). Received: ${argsJson.slice(0, 400)}`, isError: true };
+  }
+  try {
+    return await Promise.race([
+      tool.handler(args, ctx),
+      new Promise<ToolResult>((_, reject) =>
+        setTimeout(() => reject(new Error("tool timed out after 20s")), 20_000),
+      ),
+    ]);
+  } catch (err) {
+    return { text: `ERROR: ${err instanceof Error ? err.message : String(err)}`, isError: true };
+  }
+}
+
+/** Convert to OpenAI wire tool schemas for a given locale. */
+export function toolsForLocale(locale: "en" | "zh"): ToolSchema[] {
   return getTools().map((tool) => ({
     type: "function" as const,
     function: {
@@ -580,9 +613,4 @@ export function toWireTools(): ToolSchema[] {
       parameters: tool.parameters,
     },
   }));
-}
-
-/** The system prompt: the Agent Skill Guide in the UI language. */
-export function systemPrompt(): string {
-  return AGENT_SKILL_GUIDE[getLocale()];
 }

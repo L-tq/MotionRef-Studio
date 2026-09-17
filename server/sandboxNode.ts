@@ -1,43 +1,41 @@
-/** Main-thread manager for the sandbox Web Worker: single-flight execution
- *  with a hard timeout (terminate + respawn), deepseek-harness style. */
-import type { SceneDocument } from "../core/types";
-import type { SandboxResult } from "./types";
-
-export type { SandboxResult };
+/** Main-thread manager for the Node sandbox worker: single-flight execution
+ *  with a hard timeout (terminate + respawn), mirroring src/agent/sandbox.ts.
+ *  Satisfies the ToolContext.runSandbox contract for the server tool ctx. */
+import { Worker } from "node:worker_threads";
+import type { SceneDocument } from "../src/core/types";
+import type { SandboxResult } from "../src/agent/types";
 
 const TIMEOUT_MS = 5000;
 
-export class Sandbox {
+export class NodeSandbox {
   private worker: Worker | null = null;
   private busy = false;
   private nextId = 1;
   private pending: {
     resolve: (r: SandboxResult) => void;
     id: number;
-    timer: number;
+    timer: ReturnType<typeof setTimeout>;
   } | null = null;
 
   private spawn(): Worker {
-    const worker = new Worker(new URL("./sandboxWorker.ts", import.meta.url), { type: "module" });
-    worker.onmessage = (e: MessageEvent) => {
-      const msg = e.data as { type: string; id: number } & SandboxResult;
+    const worker = new Worker(new URL("./sandboxNodeWorker.ts", import.meta.url));
+    worker.on("message", (msg: { type: string; id: number } & SandboxResult) => {
       if (msg.type !== "done" || !this.pending || msg.id !== this.pending.id) return;
       clearTimeout(this.pending.timer);
       const resolve = this.pending.resolve;
       this.pending = null;
       this.busy = false;
       resolve(msg);
-    };
-    worker.onerror = (e) => {
+    });
+    worker.on("error", (e: Error) => {
       if (!this.pending) return;
       clearTimeout(this.pending.timer);
       const resolve = this.pending.resolve;
-      const id = this.pending.id;
       this.pending = null;
       this.busy = false;
       resolve({ ok: false, logs: [], error: `Worker error: ${e.message ?? "unknown"}` });
-      void id;
-    };
+      this.worker = null;
+    });
     this.worker = worker;
     return worker;
   }
@@ -54,9 +52,9 @@ export class Sandbox {
     const worker = this.ensure();
     const id = this.nextId++;
     return new Promise<SandboxResult>((resolve) => {
-      const timer = window.setTimeout(() => {
+      const timer = setTimeout(() => {
         // Hard timeout: kill and respawn the worker.
-        worker.terminate();
+        void worker.terminate();
         this.worker = null;
         this.pending = null;
         this.busy = false;
@@ -70,11 +68,8 @@ export class Sandbox {
   dispose(): void {
     if (this.pending) clearTimeout(this.pending.timer);
     this.pending = null;
-    this.worker?.terminate();
+    void this.worker?.terminate();
     this.worker = null;
     this.busy = false;
   }
 }
-
-/** Shared singleton (agent loop + script console). */
-export const sandbox = new Sandbox();

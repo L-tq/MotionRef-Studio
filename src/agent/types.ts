@@ -1,5 +1,23 @@
 /** Shared agent-harness types: session log events (deepseek-harness-style
- *  append-only record projected into model messages + chat UI). */
+ *  append-only record projected into model messages + chat UI).
+ *
+ *  This module must stay DOM-free: it is imported by the Node studio server
+ *  (which shares the tool registry and sandbox result shape with the browser). */
+
+/** OpenAI-style function-tool wire schema. */
+export interface ToolSchema {
+  type: "function";
+  function: { name: string; description: string; parameters: object };
+}
+
+/** Result of a sandboxed execute_code run (mirrored doc + logs). */
+export interface SandboxResult {
+  ok: boolean;
+  doc?: import("../core/types").SceneDocument;
+  logs: string[];
+  error?: string;
+  result?: string;
+}
 
 export interface UserEvent {
   id: string;

@@ -73,6 +73,70 @@ proxy forwards `{baseUrl, apiKey, path, payload}` to your endpoint and streams
 the SSE response back; it stores nothing. (Or import the repo in the Vercel
 dashboard — framework preset is auto-detected.)
 
+## Local Studio Mode (external agents via MCP) / 本地工作室模式（MCP 外部智能体）
+
+Besides the browser-only deployment, you can run MotionRef Studio as a **local
+studio server** that owns the scene document and exposes an **MCP endpoint**,
+so your own coding agent — ZCode, Claude Code, Codex, OpenCode, DeepSeek
+Harness — can drive it headlessly while you watch and hand-edit in the Web UI:
+
+```bash
+npm run studio                  # build + serve the Web UI + MCP on 127.0.0.1:8787
+npm run studio:serve            # skip the build step
+npm run studio -- --workspace /path/to/agent-workspace   # where projects are saved
+npm run studio:dev              # vite (HMR) + studio server side by side
+```
+
+**本地工作室模式**：`npm run studio` 启动本地服务器（默认 `127.0.0.1:8787`），它拥有场景文档、撤销历史与编辑锁，通过 MCP 端点供外部编码智能体（ZCode、Claude Code、Codex、OpenCode、DeepSeek Harness）驱动；同时提供完整 Web UI 供查看与手动编辑。
+
+### How it fits together / 工作方式
+
+- **One execution path.** The built-in agent's tool calls are relayed to the
+  server and run through the *same* tool registry + guarded pipeline the MCP
+  endpoint uses; the system prompt is the *same Agent Skill Guide* (only the
+  header/footer adapt to the runtime). Internal and external agents behave
+  identically by construction. **内置与外部智能体共用同一条工具执行管线与同一份技能指南，行为天然一致。**
+- **Server-authoritative.** The browser tab is a synced client: your edits
+  apply optimistically and are confirmed by the server; every writer shares
+  one validated document and one undo history. **服务器为唯一权威，浏览器是同步客户端。**
+- **Single-writer edit lock.** While an agent is editing, other agents and
+  other tabs are **view-only** (a banner says who holds the lock; reads,
+  playback and scrubbing always work). Waiting writers retry for a few
+  seconds, crashed holders are reclaimed by an idle timeout, and "Force
+  unlock" is the escape hatch. **任一智能体编辑时，其他智能体与用户均为只读；空闲超时自动回收，可强制解锁。**
+- **Projects are workspace files.** Each project is a `.mrsproj.json` bundle
+  in the workspace (default `--workspace`, else `~/.motionref-studio/projects`);
+  the stdio bridge adopts the launching agent's working directory on first
+  contact. Manually created projects — and Save on an unsaved scene — prompt
+  for a name and save directory. External agents can see and version these
+  files next to their code. **项目保存为工作区中的 JSON 文件，可与智能体代码一起版本管理。**
+- **Snapshots render in the browser — headless agents auto-exit headless.**
+  WebGL rendering only exists in the Web UI, so the `snapshot` tool relays to
+  a connected tab; when none is connected the server **opens one in your
+  default browser automatically** and waits for it (opt out with
+  `--no-open-browser`) — the first headless snapshot takes a few extra
+  seconds while the browser starts. The image comes back as MCP image
+  content *and* a file under `<workspace>/.motionref/snapshots/`.
+  **快照由浏览器渲染；无浏览器时服务器会自动打开一个（`--no-open-browser` 可关闭），首个快照会多等几秒。**
+
+### Connecting an external agent / 接入外部智能体
+
+The server prints its URLs at startup; the token lives in
+`~/.motionref-studio/config.json`, and Settings → **External Agents (MCP)** in
+the Web UI shows copy-paste snippets with the token filled in:
+
+| Agent | Config |
+| --- | --- |
+| ZCode | `mcp.json`: `{"mcpServers": {"motionref": {"url": "http://127.0.0.1:8787/mcp", "headers": {"Authorization": "Bearer <token>"}}}}` |
+| Claude Code | `claude mcp add --transport http motionref http://127.0.0.1:8787/mcp --header "Authorization: Bearer <token>"` |
+| Codex | `~/.codex/config.toml`: `[mcp_servers.motionref]` with `url` + `http_headers` |
+| OpenCode | `opencode.json`: `{"mcp": {"motionref": {"type": "remote", "url": "...", "headers": {...}}}}` |
+| DeepSeek Harness / any stdio client | `npm run mcp` (stdio bridge; also `--url`/`--token`) |
+
+Security posture: the server binds `127.0.0.1` only, `/mcp` requires the
+bearer token, `/studio/*` and the WebSocket refuse foreign origins, and the
+LLM proxy port of `api/llm.ts` is unchanged. 服务器仅监听环回地址，MCP 需要令牌，跨源请求被拒绝。
+
 ## Agent architecture / 智能体架构
 
 Inspired by the lightweight core of
@@ -110,7 +174,7 @@ Walk mode: `W/A/S/D` move on the ground plane, `Q/E` move down/up, mouse looks a
 - Solid colors only — the renderer uses untextured `MeshStandardMaterial` and simple lighting; grid/gizmos are editor-only and excluded from snapshots/exports.
 - Exports are rendered offscreen at the chosen resolution with a fixed timestep, independent of the viewport size.
 - The image cap per message is a setting (default 8) — raise it to match your provider.
-- Browser-only app; nothing about your scenes or keys is sent anywhere except the LLM endpoint you configure.
+- In the default (Vercel/browser-only) deployment nothing about your scenes or keys is sent anywhere except the LLM endpoint you configure. Local Studio Mode additionally keeps everything on your machine: the server binds to `127.0.0.1` and project files stay in your workspace.
 
 ## License
 

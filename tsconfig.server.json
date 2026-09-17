@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "verbatimModuleSyntax": true,
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "esModuleInterop": true,
+    "isolatedModules": true
+  },
+  "include": [
+    "server/**/*.ts",
+    "src/agent/tools.ts",
+    "src/agent/guide.ts",
+    "src/agent/types.ts",
+    "src/shared/protocol.ts",
+    "src/core/**/*.ts"
+  ],
+  "exclude": ["src/core/engine.ts", "src/core/videoExport.ts", "src/core/demoScene.ts"]
+}

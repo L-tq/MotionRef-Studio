@@ -37,6 +37,7 @@ import {
   type LlmSettings,
   type SessionEvent,
 } from "../agent/types";
+import type { LockHolder, ProjectInfo, ProjectOpMsg } from "../shared/protocol";
 
 export interface ProjectEntry {
   id: string;
@@ -259,6 +260,12 @@ export interface AppState {
   settingsOpen: boolean;
   onboarding: boolean;
   projectsOpen: boolean;
+  /** Server mode: open the Projects modal with the new-project form (the
+   *  user picks a name and a save directory on the studio server). */
+  newProjectOpen: boolean;
+  /** Server mode: open the Projects modal with the save-as form — Save on an
+   *  unsaved scene must ask for name + directory before creating the file. */
+  saveAsOpen: boolean;
   exportOpen: boolean;
   lightbox: string | null;
   rightTab: "chat" | "script";
@@ -282,6 +289,27 @@ export interface AppState {
   activeTaskId: string | null;
   taskStates: Record<string, AgentState>;
   taskSteps: Record<string, number>;
+
+  // Local studio mode: when a studio server owns the document, this browser
+  // is a synced client (optimistic edits confirmed by the server). Set by
+  // state/studioLink.ts when the /studio/info probe succeeds.
+  docAuthority: "local" | "server";
+  studio: {
+    status: "off" | "connecting" | "connected";
+    /** This tab's actor id (its WS clientId — user and built-in agent locks). */
+    clientId: string;
+    lock: LockHolder | null;
+    mcpClients: number;
+    browsers: number;
+    workspace: string;
+    mcpUrl: string;
+    token: string;
+    version: string;
+  };
+  /** Undo availability mirror while the server owns the history. */
+  studioHistory: { canUndo: boolean; canRedo: boolean };
+  /** Workspace projects while in server mode (files on disk). */
+  serverProjects: ProjectInfo[];
 }
 
 export interface AppActions {
@@ -447,6 +475,22 @@ const COALESCE_MS = 700;
  *  is currently open when the debounced save fires. */
 const taskProjectOf = new Map<string, string | null>();
 
+/** Server-authority hooks — filled in by state/studioLink.ts when the local
+ *  studio server is connected. The store branches on docAuthority and calls
+ *  through these instead of importing studioLink (avoids a module cycle). */
+export const serverAuthority: {
+  sendDoc: ((doc: SceneDocument, label: string) => void) | null;
+  sendHistory: ((op: "history.undo" | "history.redo") => void) | null;
+  projectOp: ((op: ProjectOpMsg) => void) | null;
+} = { sendDoc: null, sendHistory: null, projectOp: null };
+
+/** While another writer (external agent, other tab…) holds the edit lock,
+ *  this tab is view-only. */
+export function isViewOnly(): boolean {
+  const s = useStore.getState();
+  return s.docAuthority === "server" && !!s.studio.lock && s.studio.lock.id !== s.studio.clientId;
+}
+
 const taskSaveTimers = new Map<string, number>();
 
 function scheduleTaskSave(taskId: string): void {
@@ -485,6 +529,21 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
   lastHistoryLabel: null,
   lastHistoryAt: 0,
 
+  docAuthority: "local",
+  studio: {
+    status: "off",
+    clientId: "",
+    lock: null,
+    mcpClients: 0,
+    browsers: 0,
+    workspace: "",
+    mcpUrl: "",
+    token: "",
+    version: "",
+  },
+  studioHistory: { canUndo: false, canRedo: false },
+  serverProjects: [],
+
   selection: [],
   playhead: 0,
   playing: false,
@@ -500,6 +559,8 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
   settingsOpen: false,
   onboarding: false,
   projectsOpen: false,
+  newProjectOpen: false,
+  saveAsOpen: false,
   exportOpen: false,
   lightbox: null,
   rightTab: "chat",
@@ -525,6 +586,18 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     const state = get();
     const draft = cloneDoc(state.doc);
     fn(draft);
+    if (state.docAuthority === "server") {
+      // Server owns the doc: apply optimistically (snappy UI), then confirm.
+      // History lives server-side; doc.rejected rolls back if we lost a race
+      // for the edit lock or the server rejects the document.
+      if (isViewOnly()) {
+        get().showToast("error.sceneLocked");
+        return;
+      }
+      set({ doc: draft, future: [] });
+      serverAuthority.sendDoc?.(draft, label);
+      return;
+    }
     const useHistory = opts?.history !== false;
     if (useHistory) {
       const now = Date.now();
@@ -537,6 +610,10 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
   },
 
   undo() {
+    if (get().docAuthority === "server") {
+      serverAuthority.sendHistory?.("history.undo");
+      return;
+    }
     const { past, future, doc } = get();
     if (!past.length) return;
     const prev = past[past.length - 1];
@@ -549,12 +626,16 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
   },
 
   redo() {
+    if (get().docAuthority === "server") {
+      serverAuthority.sendHistory?.("history.redo");
+      return;
+    }
     const { past, future, doc } = get();
     if (!future.length) return;
     const next = future[0];
     set({
       doc: JSON.parse(next) as SceneDocument,
-      past: [...past, JSON.stringify(doc)].slice(-HISTORY_LIMIT),
+      past: [...past, JSON.stringify(doc)].slice(0, HISTORY_LIMIT),
       future: future.slice(1),
       lastHistoryLabel: null,
     });
@@ -1350,6 +1431,19 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
 
   saveProject() {
     const state = get();
+    if (state.docAuthority === "server") {
+      // First save of an unsaved scene is a workspace FILE: ask for name +
+      // directory (like manual new projects) instead of silently writing to
+      // the workspace default. The scratch-task adoption happens in
+      // studioLink when the new project id arrives.
+      if (!state.projectId) {
+        useStore.setState({ projectsOpen: true, saveAsOpen: true });
+        return;
+      }
+      serverAuthority.projectOp?.({ type: "projects.save" });
+      state.showToast("notice.projectSaved");
+      return;
+    }
     // Save updates the bound project in place; a new/unsaved scene gets an id
     // and becomes bound so later saves keep updating the same project (and its
     // task list stays attached).
@@ -1399,6 +1493,10 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
   },
 
   loadProject(id) {
+    if (get().docAuthority === "server") {
+      serverAuthority.projectOp?.({ type: "projects.open", id });
+      return;
+    }
     const entry = get().projects.find((p) => p.id === id);
     if (!entry) return;
     get().mutateDoc("load-project", (draft) => {
@@ -1412,6 +1510,10 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
   },
 
   deleteProject(id) {
+    if (get().docAuthority === "server") {
+      serverAuthority.projectOp?.({ type: "projects.delete", id });
+      return;
+    }
     const projects = get().projects.filter((p) => p.id !== id);
     try {
       localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
@@ -1425,6 +1527,7 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
 
   setProjectId(id) {
     set({ projectId: id });
+    if (get().docAuthority === "server") return; // driven by projects.update
     try {
       if (id === null) localStorage.removeItem(CURRENT_PROJECT_KEY);
       else localStorage.setItem(CURRENT_PROJECT_KEY, id);
@@ -1581,6 +1684,7 @@ const AUTOSAVE_KEY = "mrs.autosave";
 
 let autosaveTimer: number | undefined;
 useStore.subscribe((state, prev) => {
+  if (state.docAuthority === "server") return; // server owns persistence
   if (state.doc === prev.doc) return;
   window.clearTimeout(autosaveTimer);
   autosaveTimer = window.setTimeout(() => {

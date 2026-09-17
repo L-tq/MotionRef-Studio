@@ -1,12 +1,9 @@
 /** OpenAI-compatible chat completions client with streaming, tool calls and
  *  multimodal (image_url) content. Transport is either direct fetch or the
  *  Vercel edge proxy (/api/llm), chosen by settings. */
-import type { LlmSettings, WireContentPart, WireMessage, WireToolCall } from "./types";
+import type { LlmSettings, ToolSchema, WireContentPart, WireMessage, WireToolCall } from "./types";
 
-export interface ToolSchema {
-  type: "function";
-  function: { name: string; description: string; parameters: object };
-}
+export type { ToolSchema };
 
 export interface StreamDelta {
   content?: string;

@@ -7,12 +7,19 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "studio": "npm run build && tsx server/index.ts",
+    "studio:serve": "tsx server/index.ts",
+    "studio:dev": "concurrently -n vite,studio -c blue,green \"vite\" \"tsx server/index.ts\"",
+    "mcp": "tsx server/mcpStdio.ts",
+    "typecheck:server": "tsc -p tsconfig.server.json --noEmit"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "three": "^0.180.0",
+    "ws": "^8.21.3",
     "zustand": "^5.0.5"
   },
   "devDependencies": {
@@ -20,7 +27,10 @@
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@types/three": "^0.180.0",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^4.5.2",
+    "concurrently": "^10.0.5",
+    "tsx": "^4.23.13",
     "typescript": "~5.8.3",
     "vite": "^6.3.5"
   }

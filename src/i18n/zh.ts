@@ -21,6 +21,7 @@ export const zh: Record<string, string> = {
   "common.deg": "°",
   "common.pcs": "个",
   "common.confirm": "确认",
+  "common.create": "创建",
 
   // Top bar / projects
   "topbar.new": "新建项目",
@@ -41,6 +42,7 @@ export const zh: Record<string, string> = {
   "projects.confirmNew": "确定新建空项目？未保存的修改将丢失。",
   "projects.confirmDelete": "删除项目“{name}”？",
   "projects.storageNote": "💾 保存将项目保存在此浏览器中（localStorage + IndexedDB）——仅限本设备。如需备份或将项目（连同聊天记录）转移到其他设备，请使用工具栏的 ⬇/⬆ 导出/导入项目。",
+  "projects.workspaceNote": "项目是工作室服务器工作区中的 .mrsproj.json 文件——外部智能体可以像查看代码一样查看并版本化管理它们。",
 
   // Panels
   "panel.outliner": "大纲",
@@ -299,6 +301,27 @@ export const zh: Record<string, string> = {
   "settings.guidePreview": "预览智能体技能指南（系统提示词）",
   "settings.savedLocally": "已保存到本地。",
 
+  // 工作室链接（本地部署模式）
+  "studio.title": "工作室链接",
+  "studio.connected": "已连接本地工作室服务器——本标签页是同步客户端。",
+  "studio.connecting": "正在连接工作室服务器…",
+  "studio.presence": "{agents} 个外部智能体 · {tabs} 个浏览器标签页",
+  "studio.lockedBy": "编辑锁持有者：{name}",
+  "studio.youAreEditing": "本标签页持有编辑锁（{name}）。",
+  "studio.viewOnly": "{name} 正在编辑——当前为只读模式。播放与查看仍然可用。",
+  "studio.forceUnlock": "强制解锁",
+  "studio.workspace": "工作区",
+  "studio.externalAgents": "外部智能体（MCP）",
+  "studio.mcpEndpoint": "MCP 端点",
+  "studio.token": "访问令牌",
+  "studio.tokenHint": "令牌保存在 ~/.motionref-studio/config.json；服务器只接受来自本机的连接。",
+  "studio.snippetHint": "用上方片段把 MotionRef Studio 接入你的智能体，然后让它搭建或动画化场景——它使用与内置智能体相同的工具和技能指南；它编辑期间，其他人均为只读。",
+  "studio.newProject": "新建项目",
+  "studio.saveProjectAs": "项目另存为",
+  "studio.projectName": "项目名称",
+  "studio.saveDir": "保存目录（位于工作室服务器）",
+  "studio.parentDir": "上一级",
+
   // Agent chat errors/notices
   "agent.noVision": "该模型可能不支持图片输入；可改为纯文本方式协作。",
 
@@ -309,6 +332,8 @@ export const zh: Record<string, string> = {
   "error.wrongImporterProject": "这是完整项目文件（场景 + 聊天）。请使用 🗂 项目菜单中的 ⬆ 导入，而不是工具栏的导入 JSON。",
   "error.notAProjectBundle": "此文件不是项目文件。请先用 🗂 项目菜单中的 ⬇ 导出项目生成项目文件。",
   "error.storageFull": "localStorage 空间不足——请改为导出场景 JSON。",
+  "error.sceneLocked": "场景已锁定——其他智能体或标签页正在编辑，完成前为只读模式。",
+  "error.studio": "工作室服务器：{msg}",
   "error.docImported": "场景已导入。",
   "notice.docExported": "场景 JSON 已下载。",
   "notice.projectExported": "项目文件已下载（场景 + 聊天）。",

@@ -1,5 +1,12 @@
 /** The embedded Agent Skill Guide (bilingual). This text becomes the system
- *  prompt for the in-app agent, and is previewable in Settings. */
+ *  prompt for the in-app agent, and is previewable in Settings.
+ *
+ *  buildAgentGuide(mode, locale) derives the EXTERNAL-variant prompt for
+ *  agents connecting through the studio server's MCP endpoint: the body
+ *  (workflow, scene model, animation semantics, tools, scripting API,
+ *  patterns, constraints) is shared verbatim with the built-in agent so both
+ *  behave identically; only the header sentence and the closing notes adapt
+ *  to the external runtime (MCP tools, workspace project files, edit lock). */
 
 export const AGENT_SKILL_GUIDE: Record<"en" | "zh", string> = {
   en: `# MotionRef Studio — Agent Skill Guide
@@ -234,3 +241,47 @@ api.log("完成", id);
 - 用少量有意义的关键帧，而不是密集关键帧；用户之后可在时间轴上手调。
 - 视频由用户在界面导出；你的任务止于交付一个经过验证、关键帧完善的场景。`,
 };
+
+// --- external-agent variant ------------------------------------------------------
+
+export type AgentMode = "builtin" | "external";
+
+/** Sentence in the builtin header that names the runtime; swapped for MCP. */
+const HEADER_BUILTIN: Record<"en" | "zh", string> = {
+  en: "You are the scene agent inside MotionRef Studio, a browser 3D animation editor.",
+  zh: "你是 MotionRef Studio（浏览器端 3D 动画编辑器）中的场景智能体。",
+};
+
+const HEADER_EXTERNAL: Record<"en" | "zh", string> = {
+  en: "You are an external coding agent driving MotionRef Studio, a 3D animation editor, through its MCP tools. A human may be watching the scene in the Web UI and may inspect your work at any time.",
+  zh: "你是一个通过 MCP 工具驱动 MotionRef Studio（3D 动画编辑器）的外部编码智能体。用户可能随时在 Web UI 中查看你的工作成果。",
+};
+
+/** Closing line of the builtin guide; the external variant extends it with
+ *  runtime-specific notes (kept last so the shared conclusion stays last). */
+const FOOTER_BUILTIN: Record<"en" | "zh", string> = {
+  en: "- The user exports the video from the GUI; your job ends with a verified, well-keyed scene.",
+  zh: "- 视频由用户在界面导出；你的任务止于交付一个经过验证、关键帧完善的场景。",
+};
+
+const FOOTER_EXTERNAL: Record<"en" | "zh", string> = {
+  en: `- If a tool returns a lock error, the user or another agent is currently editing the scene — wait a few seconds and retry.
+- Projects are files in your workspace; manage them with list_projects / open_project / save_project / new_project instead of editing files directly.
+- \`snapshot\` renders through the Web UI: if no browser is open, the server opens one automatically — the FIRST snapshot after that may take several extra seconds while the browser starts, so be patient and retry once on a timeout. If it still fails, verify via \`get_scene_state\`.
+- The user exports the video from the GUI; your job ends with a verified, well-keyed scene.`,
+  zh: `- 如果工具返回锁定（lock）错误，说明用户或其他智能体正在编辑场景——请等待几秒后重试。
+- 项目是工作区中的文件；请用 list_projects / open_project / save_project / new_project 管理，而不是直接编辑文件。
+- \`snapshot\` 通过 Web UI 渲染：若没有打开的浏览器，服务器会自动打开一个——之后的第一次快照可能因浏览器启动多等几秒，超时请耐心重试一次。若仍失败，请用 \`get_scene_state\` 验证。
+- 视频由用户在界面导出；你的任务止于交付一个经过验证、关键帧完善的场景。`,
+};
+
+/** Build the system prompt for either agent runtime. The builtin variant is
+ *  the guide verbatim; the external variant swaps the header sentence and
+ *  extends the closing notes while sharing the entire body. */
+export function buildAgentGuide(mode: AgentMode, locale: "en" | "zh" = "en"): string {
+  const text = AGENT_SKILL_GUIDE[locale];
+  if (mode === "builtin") return text;
+  return text
+    .replace(HEADER_BUILTIN[locale], HEADER_EXTERNAL[locale])
+    .replace(FOOTER_BUILTIN[locale], FOOTER_EXTERNAL[locale]);
+}

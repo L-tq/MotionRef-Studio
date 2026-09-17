@@ -5,6 +5,92 @@ import { testConnection } from "../agent/llmClient";
 import { AGENT_SKILL_GUIDE } from "../agent/guide";
 import { getLocale } from "../i18n";
 
+/** Local studio mode: connection info + copy-paste MCP configs for the five
+ *  supported external agent CLIs. The system prompt they get (the external
+ *  Agent Skill Guide) shares its body with the built-in agent. */
+function ExternalAgentsSection() {
+  const t = useT();
+  const studio = useStore((s) => s.studio);
+  const [copied, setCopied] = useState<string | null>(null);
+  if (studio.status !== "connected") return null;
+
+  const copy = async (key: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(key);
+      setTimeout(() => setCopied((k) => (k === key ? null : k)), 1500);
+    } catch {
+      /* clipboard denied — the text is selectable */
+    }
+  };
+
+  const url = studio.mcpUrl;
+  const tok = studio.token;
+  const repoCmd = "npm run mcp"; // stdio shim from the motionref-studio repo
+  const snippets: Array<{ key: string; label: string; code: string }> = [
+    {
+      key: "zcode",
+      label: "ZCode",
+      code: JSON.stringify({ mcpServers: { motionref: { url, headers: { Authorization: `Bearer ${tok}` } } } }, null, 2),
+    },
+    {
+      key: "claude",
+      label: "Claude Code",
+      code: `claude mcp add --transport http motionref ${url} --header "Authorization: Bearer ${tok}"`,
+    },
+    {
+      key: "codex",
+      label: "Codex",
+      code: `# ~/.codex/config.toml\n[mcp_servers.motionref]\nurl = "${url}"\nhttp_headers = { "Authorization" = "Bearer ${tok}" }`,
+    },
+    {
+      key: "opencode",
+      label: "OpenCode",
+      code: JSON.stringify({ mcp: { motionref: { type: "remote", url, headers: { Authorization: `Bearer ${tok}` } } } }, null, 2),
+    },
+    {
+      key: "deepseek",
+      label: "DeepSeek Harness",
+      code: `# stdio bridge (run inside your agent workspace)\n${repoCmd} --url ${url} --token ${tok}`,
+    },
+  ];
+
+  return (
+    <details className="docs">
+      <summary>🤖 {t("studio.externalAgents")}</summary>
+      <div className="field" style={{ marginTop: 8 }}>
+        <label>{t("studio.mcpEndpoint")}</label>
+        <div style={{ display: "flex", gap: 6 }}>
+          <input readOnly value={url} style={{ flex: 1 }} onFocus={(e) => e.target.select()} />
+          <button className="btn small" onClick={() => void copy("url", url)}>
+            {copied === "url" ? "✓" : "⧉"}
+          </button>
+        </div>
+        <label style={{ marginTop: 8 }}>{t("studio.token")}</label>
+        <div style={{ display: "flex", gap: 6 }}>
+          <input readOnly value={tok} style={{ flex: 1 }} onFocus={(e) => e.target.select()} />
+          <button className="btn small" onClick={() => void copy("tok", tok)}>
+            {copied === "tok" ? "✓" : "⧉"}
+          </button>
+        </div>
+        <span className="hint">{t("studio.tokenHint")}</span>
+      </div>
+      {snippets.map((s) => (
+        <div className="field" key={s.key}>
+          <label>
+            {s.label}{" "}
+            <button className="btn small" style={{ marginLeft: 6 }} onClick={() => void copy(s.key, s.code)}>
+              {copied === s.key ? "✓" : "⧉"}
+            </button>
+          </label>
+          <pre style={{ margin: 0, userSelect: "text" }}>{s.code}</pre>
+        </div>
+      ))}
+      <span className="hint">{t("studio.snippetHint")}</span>
+    </details>
+  );
+}
+
 export function SettingsDialog({ onboarding }: { onboarding?: boolean }) {
   const t = useT();
   const settings = useStore((s) => s.settings);
@@ -133,6 +219,8 @@ export function SettingsDialog({ onboarding }: { onboarding?: boolean }) {
               </div>
             </>
           )}
+
+          <ExternalAgentsSection />
 
           <details className="docs" open={showGuide} onToggle={(e) => setShowGuide((e.target as HTMLDetailsElement).open)}>
             <summary>📘 {t("settings.guidePreview")}</summary>

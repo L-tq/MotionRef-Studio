@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useStore } from "../state/store";
+import { isViewOnly, useStore } from "../state/store";
 import { getLocale, useT } from "../i18n";
 import { isConfigured } from "../agent/types";
 import {
@@ -267,6 +267,12 @@ function ChatTab() {
 
   const send = () => {
     if (!configured || agentState === "running") return;
+    // View-only while another writer (external agent, other tab) holds the
+    // edit lock — a turn here could not mutate the scene anyway.
+    if (isViewOnly()) {
+      showToast("error.sceneLocked");
+      return;
+    }
     const message = text.trim();
     if (!message && images.length === 0) return;
     setText("");

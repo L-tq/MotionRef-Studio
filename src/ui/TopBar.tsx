@@ -6,6 +6,7 @@ import { cloneDoc, createEmptyDocument } from "../core/types";
 import { downloadBlob } from "../core/videoExport";
 import { demoDocument } from "../core/demoScene";
 import { MessagesPanel } from "./MessagesPanel";
+import { StudioLinkBadge, ViewOnlyBanner } from "./StudioLinkBadge";
 
 export function TopBar() {
   const t = useT();
@@ -49,6 +50,11 @@ export function TopBar() {
   };
 
   const newProject = () => {
+    // Server mode: a new project is a workspace file — ask for name + dir.
+    if (useStore.getState().docAuthority === "server") {
+      useStore.setState({ projectsOpen: true, newProjectOpen: true });
+      return;
+    }
     if (!window.confirm(t("projects.confirmNew"))) return;
     mutateDoc("new", (draft) => {
       Object.assign(draft, createEmptyDocument());
@@ -114,6 +120,7 @@ export function TopBar() {
         }}
       />
       <div className="spacer" />
+      <StudioLinkBadge />
       <button
         className={`btn small ${messagesOpen ? "active" : ""}`}
         title={t("messages.title")}
@@ -139,6 +146,7 @@ export function TopBar() {
         {t("topbar.language")}
       </button>
       </div>
+      <ViewOnlyBanner />
       {messagesOpen && <MessagesPanel />}
     </>
   );
