@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { isViewOnly, useStore } from "../state/store";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { isViewOnly, useStore, type ChatFloatState } from "../state/store";
 import { getLocale, useT } from "../i18n";
 import { isConfigured } from "../agent/types";
 import {
@@ -13,6 +13,7 @@ import {
 import { sandbox } from "../agent/sandbox";
 import { snapshotDataUrl } from "../core/engine";
 import { aspectDims } from "../core/cameraMath";
+import { Resizer } from "./Resizer";
 import type { SessionEvent } from "../agent/types";
 
 // --- image helpers -------------------------------------------------------------
@@ -42,9 +43,47 @@ async function fileToDataUrl(file: File, maxEdge = 1024): Promise<string> {
   }
 }
 
+// --- floating window helpers ------------------------------------------------------
+
+/** Bounds of the composer textarea height: the user drags between these and
+ *  the textarea auto-grows up to the dragged height. */
+export const COMPOSER_MIN = 48;
+export const COMPOSER_MAX = 400;
+
+function defaultChatFloat(): ChatFloatState {
+  const w = Math.min(560, Math.max(340, Math.floor(window.innerWidth * 0.4)));
+  const h = Math.min(680, Math.max(320, window.innerHeight - 160));
+  return {
+    open: true,
+    w,
+    h,
+    x: Math.max(16, window.innerWidth - w - 40),
+    y: Math.max(16, Math.min(96, window.innerHeight - h - 40)),
+  };
+}
+
+export function undockChat(): void {
+  const s = useStore.getState();
+  if (s.layout.chatFloat?.open) return;
+  s.setLayout({ chatFloat: defaultChatFloat() });
+}
+
+export function dockChat(): void {
+  const s = useStore.getState();
+  const f = s.layout.chatFloat ?? defaultChatFloat();
+  s.setLayout({ chatFloat: { ...f, open: false }, rightOpen: true });
+}
+
 // --- component -------------------------------------------------------------------
 
-export function ChatPanel() {
+export function ChatPanel({
+  floating = false,
+  onHeaderPointerDown,
+}: {
+  floating?: boolean;
+  /** When floating, the tab bar doubles as the window's drag handle. */
+  onHeaderPointerDown?: (e: React.PointerEvent) => void;
+}) {
   const t = useT();
   const rightTab = useStore((s) => s.rightTab);
   const anyRunning = useStore((s) => Object.values(s.taskStates).some((st) => st === "running"));
@@ -52,8 +91,18 @@ export function ChatPanel() {
   const [tasksOpen, setTasksOpen] = useState(false);
 
   return (
-    <div className="panel" style={{ flex: 1, minHeight: 0, position: "relative" }}>
-      <div className="right-tabs">
+    <div
+      className="panel"
+      // Floating: flex:1 + min-width:0 — inside .chat-float-inner (a row flex
+      // container) the panel must fill the window instead of hugging its
+      // content's max-content width (text would stop at the longest line and
+      // only re-fill once a long wrapping message arrived).
+      style={floating ? { flex: 1, minWidth: 0, height: "100%", minHeight: 0, position: "relative" } : { flex: 1, minHeight: 0, position: "relative" }}
+    >
+      <div
+        className={`right-tabs ${floating ? "floating" : ""}`}
+        onPointerDown={floating ? onHeaderPointerDown : undefined}
+      >
         <button
           className={rightTab === "chat" ? "active" : ""}
           onClick={() => setUi("rightTab", "chat")}
@@ -75,6 +124,13 @@ export function ChatPanel() {
         >
           ☰
         </button>
+        <button
+          title={floating ? t("chat.dock") : t("chat.undock")}
+          onClick={() => (floating ? dockChat() : undockChat())}
+          style={{ flex: "0 0 auto", padding: "0 12px" }}
+        >
+          {floating ? "⇲" : "⤢"}
+        </button>
       </div>
       {tasksOpen && <TasksPopover onClose={() => setTasksOpen(false)} />}
       {rightTab === "chat" ? <ChatTab /> : <ScriptTab />}
@@ -94,6 +150,24 @@ function TasksPopover({ onClose }: { onClose: () => void }) {
   const showToast = useStore((s) => s.showToast);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameText, setRenameText] = useState("");
+  const popRef = useRef<HTMLDivElement>(null);
+
+  // Dismiss on outside click / Escape — a silently-stuck popover covers the
+  // top of the chat log and eats clicks on cards underneath it.
+  useEffect(() => {
+    const onPointer = (e: PointerEvent) => {
+      if (popRef.current && !popRef.current.contains(e.target as Node)) onClose();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("pointerdown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
 
   const projectName = projectId ? projects.find((p) => p.id === projectId)?.name : null;
 
@@ -118,7 +192,7 @@ function TasksPopover({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div className="session-pop">
+    <div className="session-pop" ref={popRef}>
       <div className="session-pop-header">
         <span>{t("task.title")}</span>
         {projectName && <span className="task-project">{projectName}</span>}
@@ -195,6 +269,7 @@ function ChatTab() {
   const events = useStore((s) => (s.activeTaskId ? s.taskEvents[s.activeTaskId] : undefined)) ?? EMPTY_EVENTS;
   const agentState = useStore((s) => (s.activeTaskId ? s.taskStates[s.activeTaskId] : undefined)) ?? "idle";
   const agentStep = useStore((s) => (s.activeTaskId ? s.taskSteps[s.activeTaskId] : 0)) ?? 0;
+  const composerH = useStore((s) => s.layout.composerH);
   const settings = useStore((s) => s.settings);
   const showToast = useStore((s) => s.showToast);
 
@@ -203,11 +278,27 @@ function ChatTab() {
   const [dragOver, setDragOver] = useState(false);
   const [atBottom, setAtBottom] = useState(true);
   const logRef = useRef<HTMLDivElement>(null);
+  const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   // Autoscroll only while the reader is at the bottom: events stream in
   // continuously while the agent runs, so unconditional scrolling would pin
   // the log down and make history unreadable mid-run.
   const stickToBottom = useRef(true);
+  // While a pointer is down inside the log, streaming flushes must not scroll
+  // — otherwise the pressed summary moves out from under the cursor between
+  // mousedown and mouseup and the click never toggles the card.
+  const interactingRef = useRef(false);
+  // Viewport anchor for a just-toggled card: streaming flushes re-apply it so
+  // the card stays under the cursor instead of being scrolled away. Stores the
+  // summary element and its viewport distance; the summary's content position
+  // is re-resolved on every apply, so toggles and growth above/below it are
+  // all handled.
+  const anchorRef = useRef<{ summary: HTMLElement; dView: number } | null>(null);
+  // True for the one scroll event caused by programmatically applying the
+  // anchor — without this the "near bottom" check would read the anchor's own
+  // scroll as the user re-pinning and clear the anchor every flush.
+  const suppressScrollRef = useRef(false);
+  const composerDragRef = useRef<{ y: number; h: number } | null>(null);
   const configured = isConfigured(settings);
 
   const scrollToBottom = useCallback(() => {
@@ -216,15 +307,53 @@ function ChatTab() {
   }, []);
 
   const onLogScroll = useCallback(() => {
+    if (suppressScrollRef.current) {
+      suppressScrollRef.current = false;
+      return;
+    }
     const el = logRef.current;
     if (!el) return;
     // Tolerance absorbs rounding and late image height changes at the bottom.
     const near = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
     stickToBottom.current = near;
+    if (near) anchorRef.current = null;
     setAtBottom(near);
   }, []);
 
   useEffect(() => {
+    const up = () => {
+      interactingRef.current = false;
+    };
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+    return () => {
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+    };
+  }, []);
+
+  useEffect(() => {
+    const el = logRef.current;
+    if (!el || interactingRef.current) return;
+    const anchor = anchorRef.current;
+    if (anchor) {
+      // Keep the toggled card's summary at its viewport position while
+      // streamed content changes the log around it.
+      if (!anchor.summary.isConnected) {
+        anchorRef.current = null;
+      } else {
+        const lr = el.getBoundingClientRect();
+        const sr = anchor.summary.getBoundingClientRect();
+        const sumTopContent = sr.top - lr.top + el.scrollTop;
+        suppressScrollRef.current = true;
+        el.scrollTop = sumTopContent - (el.clientHeight - anchor.dView);
+        // A no-op assignment fires no scroll event — never keep the flag stale.
+        requestAnimationFrame(() => {
+          suppressScrollRef.current = false;
+        });
+      }
+      return;
+    }
     if (stickToBottom.current) scrollToBottom();
   }, [events, scrollToBottom]);
 
@@ -232,9 +361,38 @@ function ChatTab() {
   // regardless of where the previous task was left scrolled.
   useEffect(() => {
     stickToBottom.current = true;
+    anchorRef.current = null;
     setAtBottom(true);
     scrollToBottom();
   }, [activeTaskId, scrollToBottom]);
+
+  // Auto-grow the textarea with its content: floor = user-dragged composer
+  // height, cap = hard limit. Clearing the text returns to the floor. Set
+  // imperatively — a state-derived height would bail out when the value is
+  // unchanged and leave the measurement's 0px height in place.
+  useEffect(() => {
+    const el = taRef.current;
+    if (!el) return;
+    el.style.height = "0px";
+    const content = el.scrollHeight;
+    el.style.height = `${Math.max(composerH, Math.min(content, COMPOSER_MAX), COMPOSER_MIN)}px`;
+  }, [text, composerH]);
+
+  // Anchors the log when the user expands/collapses a card (via its summary)
+  // so the next streaming flush keeps the card in place instead of jumping to
+  // the newest message. Measured synchronously — a summary's own position is
+  // unaffected by its own toggle, so pre-toggle geometry is already correct,
+  // and the anchor must not depend on rAF timing. Programmatic auto-open/
+  // close intentionally does NOT anchor.
+  const onCardClick = useCallback((summary: HTMLElement) => {
+    const log = logRef.current;
+    if (!log) return;
+    anchorRef.current = {
+      summary,
+      dView: log.getBoundingClientRect().bottom - summary.getBoundingClientRect().top,
+    };
+    stickToBottom.current = false;
+  }, []);
 
   const addImages = useCallback(
     async (files: File[]) => {
@@ -280,9 +438,29 @@ function ChatTab() {
     setImages([]);
     // A message the user just sent must always be visible.
     stickToBottom.current = true;
+    anchorRef.current = null;
     setAtBottom(true);
     void runAgentTurn({ text: message, images: sent });
   };
+
+  // The event currently being streamed by the agent — drives the typing
+  // dots, the caret and the auto-expanded thinking cards. A step pushes its
+  // assistant event BEFORE the reasoning that follows it, so the live
+  // assistant is the first non-reasoning event scanning from the end (any
+  // tool_call/user/snapshot after it means that step is over).
+  let liveAssistantId: string | null = null;
+  let liveReasoningId: string | null = null;
+  if (agentState === "running" && events.length > 0) {
+    const last = events[events.length - 1];
+    if (last.type === "reasoning") liveReasoningId = last.id;
+    for (let i = events.length - 1; i >= 0; i--) {
+      const e = events[i];
+      if (e.type === "reasoning") continue;
+      if (e.type === "assistant") liveAssistantId = e.id;
+      break;
+    }
+  }
+  const isLive = (id: string) => id === liveAssistantId || id === liveReasoningId;
 
   return (
     <div
@@ -299,14 +477,14 @@ function ChatTab() {
       }}
       style={{ position: "relative" }}
     >
-      <div className="chat-log" ref={logRef} onScroll={onLogScroll}>
+      <div className="chat-log" ref={logRef} onScroll={onLogScroll} onPointerDown={() => (interactingRef.current = true)}>
         {events.length === 0 && configured && (
           <div className="msg notice" style={{ textAlign: "left" }}>
             {t("chat.placeholder")}
           </div>
         )}
         {events.map((event) => (
-          <SessionEventView key={event.id} event={event} />
+          <SessionEventView key={event.id} event={event} live={isLive(event.id)} onSummaryClick={onCardClick} />
         ))}
         {agentState === "running" && (
           <div className="msg notice">
@@ -326,6 +504,7 @@ function ChatTab() {
               className="btn small chat-jump"
               onClick={() => {
                 stickToBottom.current = true;
+                anchorRef.current = null;
                 setAtBottom(true);
                 scrollToBottom();
               }}
@@ -345,6 +524,19 @@ function ChatTab() {
         </div>
       ) : (
         <div className="composer">
+          <Resizer
+            dir="row"
+            onStart={(e) => {
+              composerDragRef.current = { y: e.clientY, h: composerH };
+            }}
+            onMove={(e) => {
+              const start = composerDragRef.current;
+              if (!start) return;
+              useStore.getState().setLayout({
+                composerH: Math.min(COMPOSER_MAX, Math.max(COMPOSER_MIN, start.h + (start.y - e.clientY))),
+              });
+            }}
+          />
           {images.length > 0 && (
             <div className="attach-row">
               {images.map((img, i) => (
@@ -362,6 +554,7 @@ function ChatTab() {
             </div>
           )}
           <textarea
+            ref={taRef}
             value={text}
             placeholder={t("chat.placeholder")}
             onChange={(e) => setText(e.target.value)}
@@ -419,44 +612,92 @@ function ChatTab() {
   );
 }
 
-function SessionEventView({ event }: { event: SessionEvent }) {
+// --- event rendering -----------------------------------------------------------------
+// Memoized: streaming patches replace one event object every ~90ms, so with
+// memo the untouched rows skip re-rendering entirely.
+
+const SessionEventView = memo(function SessionEventView({
+  event,
+  live = false,
+  onSummaryClick,
+}: {
+  event: SessionEvent;
+  live?: boolean;
+  onSummaryClick?: (summary: HTMLElement) => void;
+}) {
   const t = useT();
-  const setLightbox = (url: string) => useStore.setState({ lightbox: url });
 
   switch (event.type) {
     case "user":
       return (
         <div className="msg user">
           <span className="who">{t("chat.you")}</span>
-          {event.images.length > 0 && (
-            <div className="thumbs">
-              {event.images.map((img, i) => (
-                <img key={i} src={img} alt="" onClick={() => setLightbox(img)} />
-              ))}
-            </div>
-          )}
+          {event.images.length > 0 && <UserImages images={event.images} />}
           {event.text && <div className="bubble">{event.text}</div>}
         </div>
       );
     case "assistant":
       return (
         <div className="msg">
-          <span className="who">{t("chat.agent")}</span>
-          {event.text ? <div className="bubble">{event.text}</div> : null}
+          <span className="who">
+            {t("chat.agent")}
+            {event.step ? ` · ${t("chat.step", { i: event.step })}` : ""}
+          </span>
+          {!event.text && live ? (
+            // Waiting for the first token of this step.
+            <div className="bubble typing" aria-label={t("chat.thinking")}>
+              <span />
+              <span />
+              <span />
+            </div>
+          ) : event.text ? (
+            <div className="bubble">
+              {event.text}
+              {live && <span className="stream-caret" />}
+            </div>
+          ) : null}
         </div>
       );
     case "reasoning":
       if (!event.text) return null;
       return (
-        <details className="tool-card">
-          <summary>💭 {t("chat.thinking")}</summary>
+        <details
+          className="tool-card"
+          ref={(el) => {
+            // Auto-expand while this card actively streams and auto-collapse
+            // when the stream moves on — unless the user toggled it manually.
+            if (el && !el.dataset.manual) el.open = live;
+          }}
+        >
+          <summary
+            onClick={(e) => {
+              const d = e.currentTarget.parentElement as HTMLDetailsElement | null;
+              if (d) d.dataset.manual = "1";
+              onSummaryClick?.(e.currentTarget);
+            }}
+          >
+            💭 {t("chat.thinking")}
+          </summary>
           <pre>{event.text}</pre>
         </details>
       );
     case "tool_call":
       return (
-        <details className={`tool-card ${event.status === "error" ? "error" : ""}`}>
-          <summary>
+        <details
+          className={`tool-card ${event.status === "error" ? "error" : ""}`}
+          ref={(el) => {
+            // Auto-open while the tool executes; the result stays visible
+            // until the user closes the card themselves.
+            if (el && !el.dataset.manual && event.status === "running") el.open = true;
+          }}
+        >
+          <summary
+            onClick={(e) => {
+              const d = e.currentTarget.parentElement as HTMLDetailsElement | null;
+              if (d) d.dataset.manual = "1";
+              onSummaryClick?.(e.currentTarget);
+            }}
+          >
             🛠 {event.name}
             <span className={`status ${event.status}`}>
               {event.status === "running" ? t("chat.toolRunning") : `${event.status}${event.durationMs ? ` ${event.durationMs}ms` : ""}`}
@@ -466,12 +707,7 @@ function SessionEventView({ event }: { event: SessionEvent }) {
         </details>
       );
     case "snapshot":
-      return (
-        <div className="msg snapshot-msg">
-          <span className="cap">🖼 {t("chat.snapshotAt", { t: event.t.toFixed(2) })} — {event.width}×{event.height}</span>
-          <img src={event.dataUrl} alt={`snapshot @ ${event.t}s`} onClick={() => setLightbox(event.dataUrl)} />
-        </div>
-      );
+      return <SnapshotImage event={event} />;
     case "error":
       return <div className="msg error-banner">⚠ {t("chat.error")}: {event.message}</div>;
     case "notice":
@@ -479,6 +715,75 @@ function SessionEventView({ event }: { event: SessionEvent }) {
     default:
       return null;
   }
+});
+
+// Attached user images follow the same collapse/expand pattern as snapshots:
+// a row of small thumbnails by default; clicking one expands it inline
+// (clicking the expanded image opens the full-size lightbox).
+function UserImages({ images }: { images: string[] }) {
+  const t = useT();
+  const [expanded, setExpanded] = useState<number | null>(null);
+  if (expanded === null) {
+    return (
+      <div className="thumbs">
+        {images.map((img, i) => (
+          <button key={i} type="button" className="thumb-wrap" title={t("chat.expandImage")} onClick={() => setExpanded(i)}>
+            <img src={img} alt="" />
+          </button>
+        ))}
+      </div>
+    );
+  }
+  return (
+    <div className="thumbs has-expanded">
+      <img
+        className="expanded-img"
+        src={images[expanded]}
+        alt=""
+        onClick={() => useStore.setState({ lightbox: images[expanded] })}
+      />
+      <div className="thumbs mini-row">
+        {images.map((img, i) => (
+          <button
+            key={i}
+            type="button"
+            className={`thumb-wrap ${i === expanded ? "current" : ""}`}
+            onClick={() => setExpanded(i)}
+          >
+            <img src={img} alt="" />
+          </button>
+        ))}
+      </div>
+      <button type="button" className="img-toggle" onClick={() => setExpanded(null)}>
+        ▸ {t("chat.collapseImage")}
+      </button>
+    </div>
+  );
+}
+
+// Snapshots default to a small thumbnail so a multi-snapshot turn doesn't
+// flood the log; the caption toggles inline expansion and the expanded image
+// still opens the lightbox for full-size viewing.
+function SnapshotImage({ event }: { event: Extract<SessionEvent, { type: "snapshot" }> }) {
+  const t = useT();
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="msg snapshot-msg">
+      <span
+        className="cap"
+        title={expanded ? t("chat.collapseImage") : t("chat.expandImage")}
+        onClick={() => setExpanded(!expanded)}
+      >
+        <span className="toggle">{expanded ? "▾" : "▸"}</span> 🖼 {t("chat.snapshotAt", { t: event.t.toFixed(2) })} — {event.width}×{event.height}
+      </span>
+      <img
+        src={event.dataUrl}
+        alt={`snapshot @ ${event.t}s`}
+        className={expanded ? "expanded" : "thumb"}
+        onClick={() => (expanded ? useStore.setState({ lightbox: event.dataUrl }) : setExpanded(true))}
+      />
+    </div>
+  );
 }
 
 // --- script tab ----------------------------------------------------------------------

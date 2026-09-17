@@ -223,6 +223,11 @@ export const en: Record<string, string> = {
   "chat.dropImages": "Drop images to attach",
   "chat.jumpToLatest": "Jump to latest",
   "chat.restored": "Previous chat restored.",
+  "chat.undock": "Float the chat — drag it anywhere, resize it freely",
+  "chat.dock": "Dock the chat back to the sidebar",
+  "chat.floatingStrip": "Agent chat is floating — click to dock",
+  "chat.expandImage": "Expand image",
+  "chat.collapseImage": "Collapse image",
 
   // Chat tasks (per project)
   "task.title": "Tasks",

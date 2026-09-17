@@ -43,9 +43,6 @@ export interface TaskRuntime {
 }
 const runtimes = new Map<string, TaskRuntime>();
 
-/** The task the currently executing turn writes to (mock provider included). */
-let turnTaskId: string | null = null;
-
 export function stopAgentTurn(taskId?: string): void {
   const id = taskId ?? useStore.getState().activeTaskId;
   if (id) runtimes.get(id)?.abort?.abort();
@@ -108,7 +105,6 @@ export async function runAgentTurn(input: AgentInput): Promise<void> {
 
   const rt = runtimeFor(taskId);
   rt.abort = new AbortController();
-  turnTaskId = taskId;
   store.setTaskState(taskId, "running");
   store.setTaskStep(taskId, 0);
 
@@ -123,7 +119,7 @@ export async function runAgentTurn(input: AgentInput): Promise<void> {
 
   try {
     if (store.settings.provider === "mock") {
-      await runMockTurn(input, makeContext(), executeToolWithEvents, rt);
+      await runMockTurn(taskId, input, makeContext(), (name, argsJson, ctx) => executeToolWithEvents(taskId, name, argsJson, ctx), rt);
     } else {
       // Unlimited steps unless the user enabled the cap; Infinity keeps the
       // runRealTurn loop running until the model stops calling tools.
@@ -145,7 +141,6 @@ export async function runAgentTurn(input: AgentInput): Promise<void> {
     }
   } finally {
     rt.abort = null;
-    if (turnTaskId === taskId) turnTaskId = null;
     releaseTurnLock();
     reportTurnState(false);
   }
@@ -161,23 +156,24 @@ function runtimeFor(taskId: string): TaskRuntime {
   return rt;
 }
 
-/** Event plumbing shared by the real loop and the mock provider: everything
- *  goes to the task the current turn belongs to. */
-export function turnTaskPush(event: SessionEvent): void {
-  if (turnTaskId) useStore.getState().taskPush(turnTaskId, event);
+/** Event plumbing shared by the real loop and the mock provider: the taskId is
+ *  always passed explicitly so a turn keeps writing into ITS task even if
+ *  another turn starts elsewhere while this one is still streaming. */
+export function turnTaskPush(taskId: string, event: SessionEvent): void {
+  useStore.getState().taskPush(taskId, event);
 }
 
-export function turnTaskPatch(eventId: string, patch: Partial<SessionEvent>): void {
-  if (turnTaskId) useStore.getState().taskPatch(turnTaskId, eventId, patch);
+export function turnTaskPatch(taskId: string, eventId: string, patch: Partial<SessionEvent>): void {
+  useStore.getState().taskPatch(taskId, eventId, patch);
 }
 
 /** Event plumbing shared by the real loop and the mock provider: everything
- *  goes to the task the current turn belongs to. In studio-server mode the
- *  call is relayed to the server — the exact same pipeline external MCP
- *  agents execute through. */
-export async function executeToolWithEvents(name: string, argsJson: string, ctx: ToolContext): Promise<ToolResult> {
+ *  goes to the task the turn belongs to. In studio-server mode the call is
+ *  relayed to the server — the exact same pipeline external MCP agents
+ *  execute through. */
+export async function executeToolWithEvents(taskId: string, name: string, argsJson: string, ctx: ToolContext): Promise<ToolResult> {
   const eventId = newId("e");
-  turnTaskPush({
+  turnTaskPush(taskId, {
     id: eventId,
     type: "tool_call",
     callId: newId("c"),
@@ -189,7 +185,7 @@ export async function executeToolWithEvents(name: string, argsJson: string, ctx:
   const result = isServerMode()
     ? await invokeRemoteTool(name, argsJson)
     : await runTool(name, argsJson, ctx);
-  turnTaskPatch(eventId, {
+  turnTaskPatch(taskId, eventId, {
     status: result.isError ? "error" : "ok",
     resultText: result.text,
     durationMs: Math.round(performance.now() - t0),
@@ -197,7 +193,7 @@ export async function executeToolWithEvents(name: string, argsJson: string, ctx:
 
   if (result.snapshot) {
     const snap = result.snapshot;
-    turnTaskPush({
+    turnTaskPush(taskId, {
       id: newId("e"),
       type: "snapshot",
       dataUrl: snap.dataUrl,
@@ -434,7 +430,7 @@ async function runRealTurn(
     const snapshots: Array<{ dataUrl: string; t: number; w: number; h: number }> = [];
     for (const call of result.toolCalls) {
       if (signal.aborted) throw new DOMException("aborted", "AbortError");
-      const toolResult = await executeToolWithEvents(call.function.name, call.function.arguments, ctx);
+      const toolResult = await executeToolWithEvents(taskId, call.function.name, call.function.arguments, ctx);
       rt.wireLog.push({ role: "tool", tool_call_id: call.id, name: call.function.name, content: toolResult.text });
       if (toolResult.snapshot) snapshots.push(toolResult.snapshot);
     }

@@ -1001,10 +1001,17 @@ input[type="checkbox"] { accent-color: var(--accent); }
 
 .chat { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .chat-log { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+/* Flex children must not shrink: with overflow hidden on .tool-card their
+   automatic minimum size is 0, so once the transcript overflows the panel the
+   cards squash flat and overlap — summaries stop being clickable. */
+.chat-log > * { flex: 0 0 auto; }
+/* Own row at the bottom of the log — it must not overlap the last card's
+   summary, or the button eats that card's clicks. */
 .chat-jump-row {
   position: sticky; bottom: 0;
   display: flex; justify-content: flex-end;
-  margin-top: -34px; pointer-events: none; z-index: 2;
+  padding: 4px 0 0;
+  pointer-events: none; z-index: 2;
 }
 .chat-jump { pointer-events: auto; box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45); }
 .msg { display: flex; flex-direction: column; gap: 4px; max-width: 100%; }
@@ -1033,11 +1040,38 @@ input[type="checkbox"] { accent-color: var(--accent); }
 }
 .msg .thumbs { display: flex; gap: 6px; flex-wrap: wrap; }
 .msg .thumbs img {
-  height: 64px;
+  height: 48px;
   border-radius: 6px;
   border: 1px solid var(--border-2);
   cursor: zoom-in;
+  display: block;
 }
+/* collapsed user-attached thumbnails (click = expand inline) */
+.msg .thumbs .thumb-wrap { padding: 0; background: none; border: none; line-height: 0; cursor: zoom-in; }
+.msg .thumbs .thumb-wrap:hover img { border-color: var(--accent); }
+/* one image expanded to normal size; the rest stay as a mini strip */
+.msg .thumbs.has-expanded { flex-direction: column; align-items: flex-end; }
+.msg .thumbs .expanded-img {
+  height: auto;
+  max-width: 100%;
+  max-height: 380px;
+  border-radius: 8px;
+  cursor: zoom-in;
+  display: block;
+}
+.msg .thumbs .mini-row { justify-content: flex-end; }
+.msg .thumbs .thumb-wrap.current img { border-color: var(--accent); }
+.img-toggle {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-3);
+  font-size: 10px;
+  padding: 1px 8px;
+  cursor: pointer;
+  align-self: flex-end;
+}
+.img-toggle:hover { color: var(--text); border-color: var(--accent); }
 
 .tool-card {
   background: var(--bg-3);
@@ -1059,6 +1093,16 @@ input[type="checkbox"] { accent-color: var(--accent); }
   user-select: none;
 }
 .tool-card > summary::-webkit-details-marker { display: none; }
+/* Disclosure affordance (the native marker is hidden above). */
+.tool-card > summary::after {
+  content: "▸";
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--text-3);
+  font-size: 10px;
+  transition: transform 0.12s;
+}
+.tool-card[open] > summary::after { content: "▾"; }
 .tool-card > summary .status { font-size: 10px; padding: 1px 6px; border-radius: 999px; }
 .tool-card .status.ok { background: rgba(61, 220, 151, 0.15); color: var(--accent-2); }
 .tool-card .status.error { background: rgba(255, 92, 124, 0.15); color: var(--danger); }
@@ -1083,7 +1127,10 @@ input[type="checkbox"] { accent-color: var(--accent); }
   border: 1px solid var(--border-2);
   cursor: zoom-in;
 }
-.snapshot-msg .cap { font-size: 11px; color: var(--text-3); font-family: var(--mono); }
+.snapshot-msg img.thumb { height: 72px; width: auto; align-self: flex-start; }
+.snapshot-msg .cap { font-size: 11px; color: var(--text-3); font-family: var(--mono); cursor: pointer; user-select: none; }
+.snapshot-msg .cap:hover { color: var(--text-2); }
+.snapshot-msg .cap .toggle { display: inline-block; width: 11px; }
 
 .msg.error-banner {
   background: rgba(255, 92, 124, 0.1);
@@ -1115,11 +1162,14 @@ input[type="checkbox"] { accent-color: var(--accent); }
   font-size: 10px; line-height: 1; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
 }
+/* Drag strip on the composer's top edge: sets the textarea's max height. */
+.composer > .resizer.row { margin: 0 -10px 6px; height: 6px; border-radius: 3px; }
 .composer textarea {
   resize: none;
-  min-height: 64px;
-  max-height: 160px;
+  min-height: 48px;
+  max-height: 400px;
   line-height: 1.5;
+  overflow-y: auto;
 }
 .composer .actions { display: flex; gap: 6px; align-items: center; }
 .composer .actions .spacer { flex: 1; }
@@ -1143,6 +1193,81 @@ input[type="checkbox"] { accent-color: var(--accent); }
   pointer-events: none;
   z-index: 10;
 }
+
+/* live-streaming feedback */
+.msg .bubble.typing { display: inline-flex; gap: 4px; align-items: center; padding: 10px 12px; }
+.msg .bubble.typing span {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--text-3);
+  animation: typingDot 1.2s infinite;
+}
+.msg .bubble.typing span:nth-child(2) { animation-delay: 0.15s; }
+.msg .bubble.typing span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes typingDot {
+  0%, 60%, 100% { opacity: 0.25; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-2px); }
+}
+.stream-caret {
+  display: inline-block;
+  width: 7px; height: 1em;
+  margin-left: 2px;
+  background: var(--accent);
+  vertical-align: text-bottom;
+  animation: caretBlink 1s steps(2, start) infinite;
+}
+@keyframes caretBlink { 50% { opacity: 0; } }
+
+/* docked-column strip shown while the chat floats elsewhere */
+.chat-dock-strip {
+  flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  margin: 0 8px 8px;
+  padding: 8px;
+  border: 1px dashed var(--border-2);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 11.5px;
+}
+.chat-dock-strip:hover { color: var(--text); border-color: var(--accent); }
+
+/* ---------- floating agent chat window ---------- */
+.chat-float {
+  position: fixed;
+  z-index: 85; /* above panels/popovers, below modals (90+) / lightbox / toast */
+}
+.chat-float-inner {
+  position: absolute; inset: 0;
+  display: flex;
+  overflow: hidden;
+  background: var(--bg-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+/* The panel must fill the window: as a plain flex item its width would hug
+   the content's max-content width (text stops at the longest line). */
+.chat-float-inner > .panel { flex: 1; min-width: 0; }
+.chat-float.dragging .chat-float-inner,
+.chat-float.resizing .chat-float-inner {
+  border-color: var(--accent);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.65);
+}
+.right-tabs.floating { cursor: move; }
+.right-tabs.floating button { cursor: pointer; }
+body.chatfloat-drag { cursor: move; user-select: none; }
+body.chatfloat-resize { user-select: none; }
+/* Edge/corner resize handles (inside the window bounds). */
+.float-rz { position: absolute; z-index: 6; }
+.float-rz.n  { top: 0; left: 10px; right: 10px; height: 6px; cursor: ns-resize; }
+.float-rz.s  { bottom: 0; left: 10px; right: 10px; height: 6px; cursor: ns-resize; }
+.float-rz.e  { right: 0; top: 10px; bottom: 10px; width: 6px; cursor: ew-resize; }
+.float-rz.w  { left: 0; top: 10px; bottom: 10px; width: 6px; cursor: ew-resize; }
+.float-rz.ne { top: 0; right: 0; width: 14px; height: 14px; cursor: nesw-resize; }
+.float-rz.nw { top: 0; left: 0; width: 14px; height: 14px; cursor: nwse-resize; }
+.float-rz.se { bottom: 0; right: 0; width: 14px; height: 14px; cursor: nwse-resize; }
+.float-rz.sw { bottom: 0; left: 0; width: 14px; height: 14px; cursor: nesw-resize; }
 
 /* script console */
 .script { display: flex; flex-direction: column; flex: 1; min-height: 0; }

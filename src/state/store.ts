@@ -133,12 +133,25 @@ export interface TaskMeta {
   updatedAt: number;
 }
 
+/** Geometry of the undocked (floating) agent chat window. */
+export interface ChatFloatState {
+  open: boolean;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 /** User-resizable panel geometry (px) + timeline zoom + panel visibility. */
 export interface LayoutState {
   leftW: number;
   rightW: number;
   timelineH: number;
   inspH: number;
+  /** Max height of the chat composer textarea (the input box). */
+  composerH: number;
+  /** The agent chat undocked into a draggable / freely resizable window. */
+  chatFloat?: ChatFloatState;
   /** Left / right / bottom panels can be collapsed via the viewport's
    *  triangle tabs; sizes are kept so reopening restores the layout. */
   leftOpen: boolean;
@@ -157,6 +170,7 @@ export const DEFAULT_LAYOUT: LayoutState = {
   rightW: 384,
   timelineH: 232,
   inspH: 320,
+  composerH: 96,
   leftOpen: true,
   rightOpen: true,
   timelineOpen: true,

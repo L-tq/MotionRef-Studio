@@ -46,6 +46,7 @@ api.addMarker({ t: 4.5, cameraId: closeup, name: "Closeup cut" });
 api.log("scene built");`;
 
 export async function runMockTurn(
+  taskId: string,
   input: AgentInput,
   ctx: ToolContext,
   execute: (name: string, argsJson: string, ctx: ToolContext) => Promise<ToolResult>,
@@ -55,14 +56,14 @@ export async function runMockTurn(
 
   // Stream a little opening text for realism.
   const eventId = `e${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
-  turnTaskPush({ id: eventId, type: "assistant", text: "", step: 1 });
+  turnTaskPush(taskId, { id: eventId, type: "assistant", text: "", step: 1 });
   const opener = sawImages
     ? `Thanks — I see ${input.images.length} reference image(s). Running the offline mock pipeline: I'll build a demo scene with a bouncing ball, an orbiting moon and a moving camera.`
     : `Running the offline mock pipeline: I'll build a demo scene with a bouncing ball, an orbiting moon and a moving camera.`;
   let streamed = "";
   for (const chunk of opener.match(/.{1,24}/gs) ?? []) {
     streamed += chunk;
-    turnTaskPatch(eventId, { text: streamed } as never);
+    turnTaskPatch(taskId, eventId, { text: streamed } as never);
     await sleep(24);
   }
 
@@ -73,7 +74,7 @@ export async function runMockTurn(
   const snap2 = await execute("snapshot", JSON.stringify({ time: 3 }), ctx);
   if (snap2.snapshot) appendSnapshotFeedback(rt, snap2.snapshot);
 
-  turnTaskPush({
+  turnTaskPush(taskId, {
     id: `${eventId}f`,
     type: "assistant",
     text:

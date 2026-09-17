@@ -4,7 +4,8 @@ import { LeftPanel } from "./ui/LeftPanel";
 import { Viewport } from "./ui/Viewport";
 import { Timeline } from "./ui/Timeline";
 import { Inspector } from "./ui/Inspector";
-import { ChatPanel } from "./ui/ChatPanel";
+import { ChatPanel, dockChat } from "./ui/ChatPanel";
+import { ChatFloat } from "./ui/ChatFloat";
 import { Resizer } from "./ui/Resizer";
 import { SettingsDialog } from "./ui/SettingsDialog";
 import { ProjectsModal } from "./ui/ProjectsModal";
@@ -26,6 +27,7 @@ export default function App() {
   const toast = useStore((s) => s.toast);
   const layout = useStore((s) => s.layout);
   const setLayout = useStore((s) => s.setLayout);
+  const chatFloatOpen = !!layout.chatFloat?.open;
   const leftOpen = layout.leftOpen;
   const rightOpen = layout.rightOpen;
   const timelineOpen = layout.timelineOpen;
@@ -152,19 +154,34 @@ export default function App() {
           <>
             <Resizer
               dir="col"
-              onMove={(e) => setLayout({ rightW: clamp(window.innerWidth - e.clientX, 280, 640) })}
+              onMove={(e) => setLayout({ rightW: clamp(window.innerWidth - e.clientX, 280, Math.max(420, Math.min(900, Math.floor(window.innerWidth * 0.75)))) })}
               onReset={() => setLayout({ rightW: DEFAULT_LAYOUT.rightW })}
             />
             <div className="app-right region" style={{ width: layout.rightW }}>
-              <div className="region" style={{ height: layout.inspH, flex: "0 0 auto" }}>
-                <Inspector />
-              </div>
-              <Resizer
-                dir="row"
-                onMove={(e) => setLayout({ inspH: clamp(e.clientY - 44, 100, window.innerHeight - 224) })}
-                onReset={() => setLayout({ inspH: DEFAULT_LAYOUT.inspH })}
-              />
-              <ChatPanel />
+              {chatFloatOpen ? (
+                <>
+                  {/* Chat lives in its floating window; the column gives the
+                      space back to the inspector and offers a way back. */}
+                  <div className="region" style={{ flex: "1 1 auto" }}>
+                    <Inspector />
+                  </div>
+                  <button className="chat-dock-strip" title={t("chat.dock")} onClick={dockChat}>
+                    🤖 {t("chat.floatingStrip")}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <div className="region" style={{ height: layout.inspH, flex: "0 0 auto" }}>
+                    <Inspector />
+                  </div>
+                  <Resizer
+                    dir="row"
+                    onMove={(e) => setLayout({ inspH: clamp(e.clientY - 44, 100, window.innerHeight - 224) })}
+                    onReset={() => setLayout({ inspH: DEFAULT_LAYOUT.inspH })}
+                  />
+                  <ChatPanel />
+                </>
+              )}
             </div>
           </>
         )}
@@ -173,6 +190,7 @@ export default function App() {
       {settingsOpen && <SettingsDialog onboarding={onboarding} />}
       {projectsOpen && <ProjectsModal />}
       {exportOpen && <ExportDialog />}
+      {chatFloatOpen && <ChatFloat />}
       {lightbox && (
         <div className="lightbox" onClick={() => useStore.setState({ lightbox: null })}>
           <img src={lightbox} alt="snapshot" />

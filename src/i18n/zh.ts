@@ -223,6 +223,11 @@ export const zh: Record<string, string> = {
   "chat.dropImages": "拖拽图片到此处以附加",
   "chat.jumpToLatest": "回到底部",
   "chat.restored": "已恢复上次的对话记录。",
+  "chat.undock": "浮动聊天窗口 — 可自由拖动、调整大小",
+  "chat.dock": "把聊天停靠回侧栏",
+  "chat.floatingStrip": "智能体聊天已浮动 — 点击停靠",
+  "chat.expandImage": "展开图片",
+  "chat.collapseImage": "收起图片",
 
   // 任务管理（按项目）
   "task.title": "任务",
