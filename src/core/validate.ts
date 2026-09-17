@@ -1,7 +1,7 @@
 /** Strict validation for SceneDocuments coming from untrusted sources
  *  (agent tool calls, JSON imports). Returns a normalized document or a
  *  human-readable error string. */
-import { createEmptyDocument, isGeometryType, newId, specOf, DEFAULT_CAMERA_ID, type ActionDesc, type CameraActionDesc, type CameraDesc, type CameraKey, type CollectionDesc, type KeyVec3, type ObjectActionDesc, type ObjectDesc, type SceneDocument, type TransformKey, type Vec3 } from "./types";
+import { createEmptyDocument, isGeometryType, newId, specOf, DEFAULT_CAMERA_ID, clampFarClip, type ActionDesc, type CameraActionDesc, type CameraDesc, type CameraKey, type CollectionDesc, type KeyVec3, type ObjectActionDesc, type ObjectDesc, type SceneDocument, type TransformKey, type Vec3 } from "./types";
 import { clampAspect } from "./cameraMath";
 
 /** Marker strings written at the top of exported files so an importer can
@@ -41,6 +41,14 @@ function asKeyVec3(v: unknown, what: string): Vec3 | KeyVec3 | string {
 }
 
 const INTERPS = ["linear", "step", "smooth"];
+
+/** Camera far clip: optional positive number, clamped to the supported
+ *  range; absent = default. Returns the value or an error message. */
+function cameraFarClipOf(v: unknown, what: string): number | undefined | string {
+  if (v === undefined) return undefined;
+  if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) return `${what} must be a number > 0`;
+  return clampFarClip(v);
+}
 
 /** Normalize one object keyframe; returns the key or an error string. */
 function cleanObjectKey(k: Record<string, unknown>, what: string): TransformKey | string {
@@ -124,12 +132,15 @@ export function validateSceneDocument(input: unknown): { doc: SceneDocument } | 
       let id = typeof cam.id === "string" && cam.id ? cam.id.slice(0, 64) : "";
       if (!id || seenCam.has(id)) id = `cam${i}_${Math.random().toString(36).slice(2, 8)}`;
       seenCam.add(id);
+      const farClip = cameraFarClipOf(cam.farClip, `cameras[${i}].farClip`);
+      if (typeof farClip === "string") return { error: farClip };
       cameras.push({
         id,
         name: typeof cam.name === "string" && cam.name.trim() ? cam.name.slice(0, 80) : `Camera ${i + 1}`,
         position: p,
         target: tg,
         fov,
+        farClip,
       });
     }
   }
@@ -144,7 +155,9 @@ export function validateSceneDocument(input: unknown): { doc: SceneDocument } | 
       if (typeof legacy.fov !== "number" || legacy.fov <= 0 || legacy.fov >= 180) return { error: "camera.fov must be in (0, 180)" };
       fov = legacy.fov;
     }
-    cameras.push({ id: DEFAULT_CAMERA_ID, name: "Camera", position: p, target: tg, fov });
+    const legacyFarClip = cameraFarClipOf(legacy.farClip, "camera.farClip");
+    if (typeof legacyFarClip === "string") return { error: legacyFarClip };
+    cameras.push({ id: DEFAULT_CAMERA_ID, name: "Camera", position: p, target: tg, fov, farClip: legacyFarClip });
   }
   doc.cameras = cameras;
   doc.activeCameraId =

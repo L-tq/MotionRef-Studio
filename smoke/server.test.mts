@@ -18,11 +18,14 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import WebSocket from "ws";
 
-const REPO = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+// fileURLToPath: a raw URL .pathname keeps a leading "/" on Windows, which
+// path.resolve turns into a doubled drive letter and spawn() then fails on.
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), "mrs-home-"));
 const WORKSPACE = fs.mkdtempSync(path.join(os.tmpdir(), "mrs-ws-"));
 const PORT = 9300 + Math.floor(Math.random() * 400);
@@ -56,6 +59,9 @@ async function main(): Promise<void> {
     env: {
       ...process.env,
       HOME,
+      // Windows os.homedir() reads USERPROFILE, not HOME — set both so the
+      // child keeps its config/token inside the isolated test HOME.
+      USERPROFILE: HOME,
       MOTIONREF_PORT: String(PORT),
       MOTIONREF_WORKSPACE: WORKSPACE,
       // Never open real browser tabs from the test environment.
@@ -285,6 +291,7 @@ async function main(): Promise<void> {
       env: {
         ...process.env,
         HOME,
+        USERPROFILE: HOME,
         MOTIONREF_PORT: String(PORT2),
         MOTIONREF_WORKSPACE: WORKSPACE,
         MOTIONREF_BROWSER_CMD: "true",

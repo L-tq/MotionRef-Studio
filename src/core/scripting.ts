@@ -46,9 +46,9 @@ export interface ScriptTarget {
   /** Patch the ACTIVE camera's base pose. */
   setCamera(patch: Partial<CameraState>): void;
   /** Add a scene camera; returns its id. */
-  addCamera(cam: { name?: string; position?: Vec3; target?: Vec3; fov?: number }): string;
-  /** Patch a camera's name/base pose/fov. */
-  updateCamera(id: string, patch: { name?: string; position?: Vec3; target?: Vec3; fov?: number }): void;
+  addCamera(cam: { name?: string; position?: Vec3; target?: Vec3; fov?: number; farClip?: number }): string;
+  /** Patch a camera's name/base pose/fov/far clip. */
+  updateCamera(id: string, patch: { name?: string; position?: Vec3; target?: Vec3; fov?: number; farClip?: number }): void;
   /** Delete a camera and its keys (the last camera cannot be removed). */
   removeCamera(id: string): void;
   /** Make this camera the active one (what preview/export renders). */
@@ -101,6 +101,11 @@ function checkVec3(v: Vec3, what: string): void {
 function checkKeyVec3(v: KeyVec3, what: string): void {
   if (!v.every((n) => n === null || (typeof n === "number" && Number.isFinite(n))))
     throw new Error(`${what} must be [x, y, z] numbers (null = axis not keyed)`);
+}
+
+function checkFarClip(v: number | undefined, what: string): void {
+  if (v !== undefined && (typeof v !== "number" || !Number.isFinite(v) || v <= 0))
+    throw new Error(`${what} must be a number > 0 (far clip distance)`);
 }
 
 /** Create the `api` object bound to a ScriptTarget. */
@@ -195,30 +200,33 @@ export function createScriptingAPI(target: ScriptTarget, log: (...args: unknown[
     },
 
     /** Patch the ACTIVE camera's base pose (used when it has no keyframes). */
-    setCamera(patch: { position?: Vec3; target?: Vec3; fov?: number }): void {
+    setCamera(patch: { position?: Vec3; target?: Vec3; fov?: number; farClip?: number }): void {
       if (patch?.position) checkVec3(patch.position, "camera position");
       if (patch?.target) checkVec3(patch.target, "camera target");
       if (patch?.fov !== undefined && (typeof patch.fov !== "number" || patch.fov <= 0 || patch.fov >= 180))
         throw new Error("camera fov must be a number in (0, 180)");
+      checkFarClip(patch?.farClip, "camera farClip");
       target.setCamera(patch ?? {});
     },
 
     /** Add a scene camera; returns its id. setActiveCamera switches rendering to it. */
-    addCamera(opts: { name?: string; position?: Vec3; target?: Vec3; fov?: number } = {}): string {
+    addCamera(opts: { name?: string; position?: Vec3; target?: Vec3; fov?: number; farClip?: number } = {}): string {
       if (opts.position) checkVec3(opts.position, "camera position");
       if (opts.target) checkVec3(opts.target, "camera target");
       if (opts.fov !== undefined && (typeof opts.fov !== "number" || opts.fov <= 0 || opts.fov >= 180))
         throw new Error("camera fov must be a number in (0, 180)");
+      checkFarClip(opts.farClip, "camera farClip");
       return target.addCamera(opts);
     },
 
-    /** Patch an existing camera: name?, position?, target?, fov?. */
-    updateCamera(id: string, patch: { name?: string; position?: Vec3; target?: Vec3; fov?: number }): void {
+    /** Patch an existing camera: name?, position?, target?, fov?, farClip?. */
+    updateCamera(id: string, patch: { name?: string; position?: Vec3; target?: Vec3; fov?: number; farClip?: number }): void {
       if (typeof id !== "string") throw new Error("api.updateCamera expects (id, patch)");
       if (patch?.position) checkVec3(patch.position, "camera position");
       if (patch?.target) checkVec3(patch.target, "camera target");
       if (patch?.fov !== undefined && (typeof patch.fov !== "number" || patch.fov <= 0 || patch.fov >= 180))
         throw new Error("camera fov must be a number in (0, 180)");
+      checkFarClip(patch?.farClip, "camera farClip");
       target.updateCamera(id, patch ?? {});
     },
 
@@ -506,6 +514,7 @@ export function createScriptTarget(doc: SceneDocument): ScriptTarget {
       if (patch.position) cam.position = [...patch.position];
       if (patch.target) cam.target = [...patch.target];
       if (patch.fov !== undefined) cam.fov = patch.fov;
+      if (patch.farClip !== undefined) cam.farClip = patch.farClip;
     },
     addCamera(c) {
       const id = newId("cam");
@@ -516,6 +525,7 @@ export function createScriptTarget(doc: SceneDocument): ScriptTarget {
         position: c.position ? [...c.position] : [src.position[0], src.position[1] + 1.5, src.position[2]],
         target: c.target ? [...c.target] : [...src.target],
         fov: c.fov ?? src.fov,
+        farClip: c.farClip ?? src.farClip,
       });
       return id;
     },
@@ -526,6 +536,7 @@ export function createScriptTarget(doc: SceneDocument): ScriptTarget {
       if (patch.position) cam.position = [...patch.position];
       if (patch.target) cam.target = [...patch.target];
       if (patch.fov !== undefined) cam.fov = patch.fov;
+      if (patch.farClip !== undefined) cam.farClip = patch.farClip;
     },
     removeCamera(id) {
       if (doc.cameras.length <= 1) throw new Error("Cannot remove the last camera — a scene needs at least one");

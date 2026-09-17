@@ -1,6 +1,6 @@
 import { evalCameraById } from "../core/animation";
 import { ASPECT_PRESETS, aspectLabel, clampAspect, focalToFov, fovToFocal, FOCAL_PRESETS } from "../core/cameraMath";
-import { docAspect, actionsOfOwner, activeActionOfOwner, activeCameraIdAt, specOf, type CameraDesc, type ObjectDesc, type Vec3 } from "../core/types";
+import { cameraFarClip, clampFarClip, docAspect, actionsOfOwner, activeActionOfOwner, activeCameraIdAt, specOf, type CameraDesc, type ObjectDesc, type Vec3 } from "../core/types";
 import { useStore } from "../state/store";
 import { getLocale, useT } from "../i18n";
 import { useState } from "react";
@@ -215,6 +215,8 @@ function CameraInspector() {
   const addCamera = useStore((s) => s.addCamera);
   const removeCamera = useStore((s) => s.removeCamera);
   const setActiveCamera = useStore((s) => s.setActiveCamera);
+  const setLayout = useStore((s) => s.setLayout);
+  const viewportFarClip = useStore((s) => s.layout.viewportFarClip);
   const camPanelSel = useStore((s) => s.camPanelSel);
   const setUi = useStore((s) => s.setUi);
   const createAction = useStore((s) => s.createAction);
@@ -351,6 +353,18 @@ function CameraInspector() {
         <Vec3Input value={ev.position} onChange={(v) => commitCamera({ position: v }, camDesc.id)} />
       </div>
       <div className="field">
+        <label>{t("inspector.farClip")}</label>
+        <div className="insp-row">
+          <Num
+            value={cameraFarClip(camDesc)}
+            step={50}
+            min={1}
+            onChange={(v) => patchCam((c) => void (c.farClip = clampFarClip(v)), "camera-farclip")}
+          />
+          <span className="hint" style={{ color: "var(--text-3)", flex: 1 }}>{t("inspector.farClipHint")}</span>
+        </div>
+      </div>
+      <div className="field">
         <label>{t("inspector.cameraTarget")}</label>
         <Vec3Input value={ev.target} onChange={(v) => commitCamera({ target: v }, camDesc.id)} />
       </div>
@@ -416,6 +430,16 @@ function CameraInspector() {
           />
         </div>
         <span className="hint" style={{ color: "var(--text-3)" }}>{t("inspector.aspectHint")}</span>
+      </div>
+      <div className="field">
+        <label>{t("inspector.viewportFarClip")}</label>
+        <Num
+          value={viewportFarClip}
+          step={50}
+          min={1}
+          onChange={(v) => setLayout({ viewportFarClip: clampFarClip(v) })}
+        />
+        <span className="hint" style={{ color: "var(--text-3)" }}>{t("inspector.viewportFarClipHint")}</span>
       </div>
     </div>
   );

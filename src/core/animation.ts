@@ -16,7 +16,7 @@ import type {
   TransformKey,
   Vec3,
 } from "./types";
-import { activeCameraIdAt, cameraKeysOf, objectKeysOf } from "./types";
+import { activeCameraIdAt, cameraFarClip, cameraKeysOf, objectKeysOf, DEFAULT_FAR_CLIP } from "./types";
 
 export interface EvaluatedObject {
   id: string;
@@ -169,6 +169,7 @@ function evalCameraDesc(base: CameraDesc, keys: CameraKey[], t: number): CameraS
     position: [...base.position] as Vec3,
     target: [...base.target] as Vec3,
     fov: base.fov,
+    farClip: cameraFarClip(base),
   };
   (["position", "target"] as const).forEach((comp) => {
     for (let axis = 0; axis < 3; axis++) {
@@ -184,7 +185,7 @@ function evalCameraDesc(base: CameraDesc, keys: CameraKey[], t: number): CameraS
 /** Evaluated pose of ANY camera by id at time t (its ACTIVE action's keys). */
 export function evalCameraById(doc: SceneDocument, cameraId: string, t: number): CameraState {
   const cam = doc.cameras.find((c) => c.id === cameraId) ?? doc.cameras[0];
-  if (!cam) return { position: [0, 0, 0], target: [0, 0, 0], fov: 45 };
+  if (!cam) return { position: [0, 0, 0], target: [0, 0, 0], fov: 45, farClip: DEFAULT_FAR_CLIP };
   return evalCameraDesc(cam, cameraKeysOf(doc, cam.id), t);
 }
 

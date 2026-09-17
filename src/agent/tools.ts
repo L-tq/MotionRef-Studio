@@ -59,6 +59,13 @@ function err(message: string): ToolResult {
   return { text: clip(`ERROR: ${message}`), isError: true };
 }
 
+/** farClip args must be positive numbers (undefined = leave unchanged). */
+function checkFarClipArg(v: unknown, tool: string): string | null {
+  if (v === undefined) return null;
+  if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) return `${tool}: farClip must be a number > 0`;
+  return null;
+}
+
 /** Apply a declarative mutation through the shared ScriptTarget. */
 function withDoc(ctx: ToolContext, label: string, fn: (target: ReturnType<typeof createScriptTarget>) => void): ToolResult {
   try {
@@ -199,8 +206,8 @@ export function buildTools(): AgentTool[] {
     {
       name: "set_camera",
       description: {
-        en: "Set the ACTIVE camera's base pose (used when it has no keyframes): position [x,y,z], target [x,y,z] (lookAt), fov (vertical degrees, 45≈50mm). Preview/snapshot/export always render the active camera.",
-        zh: "设置活动相机的基础位姿（该相机无关键帧时生效）：position [x,y,z]、target [x,y,z]（注视点）、fov（垂直角度，45≈50mm）。预览/快照/导出始终使用活动相机。",
+        en: "Set the ACTIVE camera's base pose (used when it has no keyframes): position [x,y,z], target [x,y,z] (lookAt), fov (vertical degrees, 45≈50mm), farClip (far clip plane distance in world units, default 5000; raise it for very large scenes). Preview/snapshot/export always render the active camera.",
+        zh: "设置活动相机的基础位姿（该相机无关键帧时生效）：position [x,y,z]、target [x,y,z]（注视点）、fov（垂直角度，45≈50mm）、farClip（远裁剪面距离，世界单位，默认 5000；超大场景可调大）。预览/快照/导出始终使用活动相机。",
       },
       parameters: {
         type: "object",
@@ -208,10 +215,13 @@ export function buildTools(): AgentTool[] {
           position: { type: "array", items: { type: "number" }, minItems: 3, maxItems: 3 },
           target: { type: "array", items: { type: "number" }, minItems: 3, maxItems: 3 },
           fov: { type: "number" },
+          farClip: { type: "number", description: "Far clip plane distance (> 0); geometry beyond it is not rendered" },
         },
         additionalProperties: false,
       },
       async handler(args, ctx) {
+        const bad = checkFarClipArg(args.farClip, "set_camera");
+        if (bad) return err(bad);
         return withDoc(ctx, "agent:set_camera", (target) => {
           target.setCamera(args as Parameters<typeof target.setCamera>[0]);
         });
@@ -220,8 +230,8 @@ export function buildTools(): AgentTool[] {
     {
       name: "add_camera",
       description: {
-        en: "Add a new scene camera: {name?, position?, target?, fov?, setActive?}. Cameras are Blender-style; the ACTIVE one is what snapshots render. Returns the new camera id.",
-        zh: "添加一台新的场景相机：{name?, position?, target?, fov?, setActive?}。相机为 Blender 风格；快照渲染“活动”相机。返回新相机 id。",
+        en: "Add a new scene camera: {name?, position?, target?, fov?, farClip?, setActive?}. Cameras are Blender-style; the ACTIVE one is what snapshots render. Returns the new camera id.",
+        zh: "添加一台新的场景相机：{name?, position?, target?, fov?, farClip?, setActive?}。相机为 Blender 风格；快照渲染“活动”相机。返回新相机 id。",
       },
       parameters: {
         type: "object",
@@ -230,11 +240,14 @@ export function buildTools(): AgentTool[] {
           position: { type: "array", items: { type: "number" }, minItems: 3, maxItems: 3 },
           target: { type: "array", items: { type: "number" }, minItems: 3, maxItems: 3 },
           fov: { type: "number" },
+          farClip: { type: "number", description: "Far clip plane distance (> 0); geometry beyond it is not rendered" },
           setActive: { type: "boolean", description: "Also make it the active camera (default false)" },
         },
         additionalProperties: false,
       },
       async handler(args, ctx) {
+        const bad = checkFarClipArg(args.farClip, "add_camera");
+        if (bad) return err(bad);
         let camId = "";
         const result = withDoc(ctx, "agent:add_camera", (target) => {
           const { setActive, ...cam } = args as { setActive?: boolean };

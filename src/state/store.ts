@@ -14,6 +14,7 @@ import {
   defaultActionName,
   defaultCollectionName,
   defaultMarkerName,
+  DEFAULT_FAR_CLIP,
   type ActionDesc,
   type CameraActionDesc,
   type CameraKey,
@@ -163,6 +164,10 @@ export interface LayoutState {
   /** Bottom-panel editor type: keyframe rows, the curve graph editor, or the
    *  Blender-style action editor. */
   timelineMode?: "tracks" | "graph" | "actions";
+  /** Far clip plane of the EDITOR viewport navigation camera. View
+   *  preference, persisted with the layout (scene cameras carry their own
+   *  farClip on their CameraDesc). */
+  viewportFarClip: number;
 }
 
 export const DEFAULT_LAYOUT: LayoutState = {
@@ -175,6 +180,7 @@ export const DEFAULT_LAYOUT: LayoutState = {
   rightOpen: true,
   timelineOpen: true,
   timelineZoom: null,
+  viewportFarClip: DEFAULT_FAR_CLIP,
 };
 
 const SETTINGS_KEY = "mrs.settings";

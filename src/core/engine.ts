@@ -9,7 +9,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { evaluate, evalCameraById, type EvaluatedState, type HookError } from "./animation";
-import { docAspect, defaultCameraDesc, activeCameraIdAt, type ObjectDesc, type PivotMode, type SceneDocument } from "./types";
+import { docAspect, defaultCameraDesc, activeCameraIdAt, DEFAULT_FAR_CLIP, clampFarClip, type ObjectDesc, type PivotMode, type SceneDocument } from "./types";
 
 export type GizmoMode = "select" | "translate" | "rotate" | "scale";
 
@@ -36,6 +36,9 @@ export interface FrameSource {
   pivotMode: PivotMode;
   showGrid: boolean;
   cameraPreview: boolean;
+  /** Far clip plane of the EDITOR viewport camera (navigation view; the
+   *  scene camera's own far clip lives on its CameraDesc). */
+  viewportFarClip: number;
 }
 
 export interface EngineCallbacks {
@@ -181,7 +184,7 @@ function buildGeometry(obj: ObjectDesc): THREE.BufferGeometry {
  *  viewport and the offscreen renderer used for snapshots / video export. */
 export class DocScene {
   readonly scene = new THREE.Scene();
-  readonly sceneCamera = new THREE.PerspectiveCamera(45, 16 / 9, 0.1, 500);
+  readonly sceneCamera = new THREE.PerspectiveCamera(45, 16 / 9, 0.1, DEFAULT_FAR_CLIP);
   private meshes = new Map<string, THREE.Mesh>();
   private lastSignature = new Map<string, string>();
 
@@ -258,6 +261,10 @@ export class DocScene {
     this.sceneCamera.lookAt(cam.target[0], cam.target[1], cam.target[2]);
     if (Math.abs(this.sceneCamera.fov - cam.fov) > 1e-6) {
       this.sceneCamera.fov = cam.fov;
+      this.sceneCamera.updateProjectionMatrix();
+    }
+    if (Math.abs(this.sceneCamera.far - cam.farClip) > 1e-6) {
+      this.sceneCamera.far = cam.farClip;
       this.sceneCamera.updateProjectionMatrix();
     }
   }
@@ -393,7 +400,7 @@ export class Engine {
 
     this.docScene = new DocScene({ version: 1, name: "", background: "#191922", duration: 1, fps: 30, aspect: 16 / 9, objects: [], collections: [], markers: [], cameras: [defaultCameraDesc()], activeCameraId: defaultCameraDesc().id, actions: [], onFrameScripts: [], cursor: [0, 0, 0] });
 
-    this.editorCamera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000);
+    this.editorCamera = new THREE.PerspectiveCamera(50, 1, 0.1, DEFAULT_FAR_CLIP);
     this.editorCamera.position.set(10, 8, 12);
 
     this.orbit = new OrbitControls(this.editorCamera, canvas);
@@ -512,6 +519,12 @@ export class Engine {
       const aspect = docAspect(frame.doc);
       this.docScene.sceneCamera.aspect = aspect;
       this.docScene.sceneCamera.updateProjectionMatrix();
+      // Editor navigation camera's far clip is view state, not scene data.
+      const vpFar = clampFarClip(frame.viewportFarClip);
+      if (this.editorCamera.far !== vpFar) {
+        this.editorCamera.far = vpFar;
+        this.editorCamera.updateProjectionMatrix();
+      }
       const W = this.canvas.clientWidth || 1;
       const H = this.canvas.clientHeight || 1;
       if (frame.cameraPreview) {

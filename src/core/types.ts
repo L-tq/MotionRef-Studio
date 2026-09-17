@@ -75,6 +75,8 @@ export interface CameraState {
   position: Vec3;
   target: Vec3;
   fov: number;
+  /** Far clip plane distance (not keyframable; carried from the base camera). */
+  farClip: number;
 }
 
 /** A named keyframe group owned by ONE object (Blender-style action). */
@@ -111,6 +113,8 @@ export interface CameraDesc {
   target: Vec3;
   /** Vertical field of view in degrees. */
   fov: number;
+  /** Far clip plane distance; geometry beyond it is not rendered. */
+  farClip?: number;
   /** Which of this camera's actions is ACTIVE (evaluated/edited). */
   activeActionId?: string;
 }
@@ -183,7 +187,7 @@ export function defaultParams(type: GeometryType): Record<string, number> {
 }
 
 export function defaultCamera(): CameraState {
-  return { position: [8, 6, 10], target: [0, 1, 0], fov: 45 };
+  return { position: [8, 6, 10], target: [0, 1, 0], fov: 45, farClip: DEFAULT_FAR_CLIP };
 }
 
 /** Stable id of the legacy default camera — old documents' camera keys
@@ -294,6 +298,25 @@ export function defaultCollectionName(doc: SceneDocument): string {
 /** Accept documents saved before `aspect` existed. */
 export function docAspect(doc: SceneDocument): number {
   return typeof doc.aspect === "number" && doc.aspect > 0 ? doc.aspect : 16 / 9;
+}
+
+/** Far clip plane defaults and limits, in world units. The default is large
+ *  enough that distant scenery never pops out of frame; the max keeps the
+ *  depth buffer precision usable (near plane is 0.1). */
+export const DEFAULT_FAR_CLIP = 5000;
+export const FAR_CLIP_MIN = 1;
+export const FAR_CLIP_MAX = 1_000_000;
+
+export function clampFarClip(v: number): number {
+  return Math.min(Math.max(v, FAR_CLIP_MIN), FAR_CLIP_MAX);
+}
+
+/** Resolved far clip of a camera: the stored value when usable, else the
+ *  default (documents saved before `farClip` existed). */
+export function cameraFarClip(cam: Pick<CameraDesc, "farClip">): number {
+  return typeof cam.farClip === "number" && Number.isFinite(cam.farClip) && cam.farClip > 0
+    ? clampFarClip(cam.farClip)
+    : DEFAULT_FAR_CLIP;
 }
 
 export function cloneDoc(doc: SceneDocument): SceneDocument {

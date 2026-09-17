@@ -128,6 +128,7 @@ export function Viewport() {
         pivotMode: s.pivotMode,
         showGrid: s.showGrid,
         cameraPreview: s.cameraPreview,
+        viewportFarClip: s.layout.viewportFarClip,
       };
       return frame;
     });
