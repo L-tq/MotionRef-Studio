@@ -197,7 +197,7 @@ export const zh: Record<string, string> = {
   // Chat / agent
   "chat.title": "智能体",
   "chat.script": "脚本控制台",
-  "chat.placeholder": "描述你想要的场景或动画…（回车发送，Shift+回车换行）",
+  "chat.placeholder": "描述你想要的场景或动画…（@ 引用物体/相机/快照 · 回车发送）",
   "chat.send": "发送",
   "chat.stop": "停止",
   "chat.attach": "附加图片",
@@ -228,6 +228,17 @@ export const zh: Record<string, string> = {
   "chat.floatingStrip": "智能体聊天已浮动 — 点击停靠",
   "chat.expandImage": "展开图片",
   "chat.collapseImage": "收起图片",
+  "chat.mentionObjects": "物体",
+  "chat.mentionCameras": "相机",
+  "chat.mentionSnapshots": "快照",
+  "chat.mentionImages": "图片",
+  "chat.mentionActive": "活动",
+  "chat.mentionAttached": "已附加",
+  "chat.mentionFromChat": "来自对话",
+  "chat.mentionImageGeneric": "图片",
+  "chat.mentionHint": "↑↓ 选择 · Enter/Tab 插入 · Esc 关闭",
+  "chat.mentionEmpty": "无匹配项",
+  "chat.mentionSelect": "点击以在场景中选中",
 
   // 任务管理（按项目）
   "task.title": "任务",

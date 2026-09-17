@@ -19,12 +19,33 @@ export interface SandboxResult {
   result?: string;
 }
 
+/** What a `@token` in the composer refers to. */
+export type MentionKind = "object" | "camera" | "snapshot" | "image";
+
+/** A resolved `@` reference from a user message. Snapshots/chat images carry
+ *  no stable id — their dataUrl is merged into the turn's image list at send
+ *  time, so only the token is recorded here. */
+export interface UserMention {
+  kind: MentionKind;
+  /** Exact token text as inserted, e.g. "@Knot", "@Snapshot 2.4s", "@Image 3". */
+  token: string;
+  /** Object/camera id (scene entities only). */
+  id?: string;
+  name?: string;
+  /** Snapshot time in seconds (kind "snapshot"). */
+  t?: number;
+  /** 1-based index into the turn's image list (kind "image"). */
+  index?: number;
+}
+
 export interface UserEvent {
   id: string;
   type: "user";
   text: string;
   /** data-URL images attached by the user */
   images: string[];
+  /** Resolved `@` references; absent on events stored before this existed. */
+  mentions?: UserMention[];
 }
 
 export interface AssistantEvent {

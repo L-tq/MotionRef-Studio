@@ -197,7 +197,7 @@ export const en: Record<string, string> = {
   // Chat / agent
   "chat.title": "Agent",
   "chat.script": "Script console",
-  "chat.placeholder": "Describe the scene or animation… (Enter to send, Shift+Enter for newline)",
+  "chat.placeholder": "Describe the scene or animation… (@ to mention objects/cameras/snapshots · Enter to send)",
   "chat.send": "Send",
   "chat.stop": "Stop",
   "chat.attach": "Attach images",
@@ -228,6 +228,17 @@ export const en: Record<string, string> = {
   "chat.floatingStrip": "Agent chat is floating — click to dock",
   "chat.expandImage": "Expand image",
   "chat.collapseImage": "Collapse image",
+  "chat.mentionObjects": "Objects",
+  "chat.mentionCameras": "Cameras",
+  "chat.mentionSnapshots": "Snapshots",
+  "chat.mentionImages": "Images",
+  "chat.mentionActive": "active",
+  "chat.mentionAttached": "attached",
+  "chat.mentionFromChat": "from chat",
+  "chat.mentionImageGeneric": "Image",
+  "chat.mentionHint": "↑↓ navigate · Enter/Tab insert · Esc close",
+  "chat.mentionEmpty": "No matches",
+  "chat.mentionSelect": "Click to select in the scene",
 
   // Chat tasks (per project)
   "task.title": "Tasks",

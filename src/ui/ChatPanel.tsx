@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isViewOnly, useStore, type ChatFloatState } from "../state/store";
 import { getLocale, useT } from "../i18n";
 import { isConfigured } from "../agent/types";
@@ -10,11 +10,23 @@ import {
   stopAgentTurn,
   switchTask,
 } from "../agent/agentLoop";
+import {
+  filterMentionItems,
+  fromChatImageItems,
+  imageToken,
+  mentionQueryAt,
+  mergeSnapshotImages,
+  parseMentions,
+  snapshotMentionItems,
+  splitByMentions,
+  type MentionItem,
+} from "../agent/mentions";
 import { sandbox } from "../agent/sandbox";
 import { snapshotDataUrl } from "../core/engine";
 import { aspectDims } from "../core/cameraMath";
 import { Resizer } from "./Resizer";
-import type { SessionEvent } from "../agent/types";
+import { MentionPopup } from "./MentionPopup";
+import type { MentionKind, SessionEvent, UserMention } from "../agent/types";
 
 // --- image helpers -------------------------------------------------------------
 
@@ -73,6 +85,71 @@ export function dockChat(): void {
   const f = s.layout.chatFloat ?? defaultChatFloat();
   s.setLayout({ chatFloat: { ...f, open: false }, rightOpen: true });
 }
+
+// --- @mention helpers ----------------------------------------------------------
+
+/** Viewport position of the caret line at `index`, via a hidden mirror div
+ *  that clones the textarea's font/padding/width so the mention popup can
+ *  anchor at the token. `above` flips the popup when the caret sits low. */
+function caretViewportPos(
+  el: HTMLTextAreaElement,
+  text: string,
+  index: number,
+): { x: number; y: number; above: boolean } {
+  const cs = window.getComputedStyle(el);
+  const div = document.createElement("div");
+  const props = [
+    "boxSizing",
+    "width",
+    "fontFamily",
+    "fontSize",
+    "fontWeight",
+    "fontStyle",
+    "letterSpacing",
+    "lineHeight",
+    "textTransform",
+    "wordSpacing",
+    "textIndent",
+    "paddingTop",
+    "paddingRight",
+    "paddingBottom",
+    "paddingLeft",
+    "borderTopWidth",
+    "borderRightWidth",
+    "borderBottomWidth",
+    "borderLeftWidth",
+  ] as const;
+  for (const p of props) div.style[p] = cs[p];
+  div.style.position = "absolute";
+  div.style.top = "0";
+  div.style.left = "-9999px";
+  div.style.visibility = "hidden";
+  div.style.whiteSpace = "pre-wrap";
+  div.style.overflowWrap = "break-word";
+  div.textContent = text.slice(0, index);
+  const marker = document.createElement("span");
+  marker.textContent = "\u200b";
+  div.appendChild(marker);
+  document.body.appendChild(div);
+  const mx = marker.offsetLeft;
+  const my = marker.offsetTop;
+  document.body.removeChild(div);
+  const er = el.getBoundingClientRect();
+  const px = (v: string) => parseFloat(v) || 0;
+  const lh = px(cs.lineHeight) || px(cs.fontSize) * 1.4 || 16;
+  return {
+    x: er.left + px(cs.borderLeftWidth) + mx - el.scrollLeft,
+    y: er.top + px(cs.borderTopWidth) + my - el.scrollTop + lh,
+    above: er.top + my > window.innerHeight * 0.4,
+  };
+}
+
+const MENTION_ICONS: Record<MentionKind, string> = {
+  object: "◆",
+  camera: "📷",
+  snapshot: "📸",
+  image: "🖼",
+};
 
 // --- component -------------------------------------------------------------------
 
@@ -272,11 +349,24 @@ function ChatTab() {
   const composerH = useStore((s) => s.layout.composerH);
   const settings = useStore((s) => s.settings);
   const showToast = useStore((s) => s.showToast);
+  const doc = useStore((s) => s.doc);
 
   const [text, setText] = useState("");
   const [images, setImages] = useState<string[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [atBottom, setAtBottom] = useState(true);
+  // Active `@token` under the caret plus the popup's viewport anchor.
+  const [mention, setMention] = useState<{
+    range: { start: number; end: number; query: string };
+    pos: { x: number; y: number; above: boolean };
+  } | null>(null);
+  const [mentionActive, setMentionActive] = useState(0);
+  // Escape/outside dismissal is scoped to the current query: typing on reopens.
+  const [mentionDismissed, setMentionDismissed] = useState<string | null>(null);
+  // Ctrl+Space keeps the popup open even when nothing matches (manual mode).
+  const [mentionManual, setMentionManual] = useState(false);
+  // Caret position to restore after a programmatic text change (accept/Ctrl+Space).
+  const pendingCaretRef = useRef<number | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -378,6 +468,126 @@ function ChatTab() {
     el.style.height = `${Math.max(composerH, Math.min(content, COMPOSER_MAX), COMPOSER_MIN)}px`;
   }, [text, composerH]);
 
+  // --- @mention popup ----------------------------------------------------------------
+
+  // Popup rows: scene objects/cameras, this task's snapshots, pending
+  // attachments and images already present in the transcript.
+  const mentionItems = useMemo<MentionItem[]>(() => {
+    const objs: MentionItem[] = doc.objects.map((o) => ({
+      kind: "object",
+      section: "objects",
+      label: o.name,
+      token: `@${o.name}`,
+      id: o.id,
+      sublabel: o.type,
+    }));
+    const cams: MentionItem[] = doc.cameras.map((c) => ({
+      kind: "camera",
+      section: "cameras",
+      label: c.name,
+      token: `@${c.name}`,
+      id: c.id,
+      sublabel: c.id === doc.activeCameraId ? t("chat.mentionActive") : undefined,
+    }));
+    const imgs: MentionItem[] = images.map((d, i) => ({
+      kind: "image",
+      section: "images",
+      label: imageToken(i + 1),
+      token: imageToken(i + 1),
+      sublabel: t("chat.mentionAttached"),
+      dataUrl: d,
+      index: i + 1,
+    }));
+    const fromChat = fromChatImageItems(events, images).map((it) => ({
+      ...it,
+      label: t("chat.mentionImageGeneric"),
+    }));
+    return [...objs, ...cams, ...snapshotMentionItems(events), ...imgs, ...fromChat];
+  }, [doc, events, images, t]);
+
+  const filteredMentionItems = useMemo(
+    () => filterMentionItems(mentionItems, mention?.range.query ?? ""),
+    [mentionItems, mention?.range.query],
+  );
+  // Highlighted row, clamped while the filtered list shrinks under the cursor
+  // position; kept valid across renders without extra effects.
+  const mentionIdx = filteredMentionItems.length
+    ? Math.min(mentionActive, filteredMentionItems.length - 1)
+    : 0;
+  const mentionOpen =
+    !!mention &&
+    (mentionManual ||
+      (mentionDismissed !== mention.range.query && filteredMentionItems.length > 0));
+
+  // Re-arm the popup at the top row whenever the query changes.
+  useEffect(() => {
+    setMentionActive(0);
+  }, [mention?.range.query]);
+
+  // Restore the caret after programmatic text changes (mention accept and
+  // Ctrl+Space's "@" insertion) so typing continues where the user expects.
+  useEffect(() => {
+    const c = pendingCaretRef.current;
+    if (c == null) return;
+    pendingCaretRef.current = null;
+    taRef.current?.setSelectionRange(c, c);
+  }, [text]);
+
+  const syncMention = useCallback((value: string, caret: number) => {
+    const ta = taRef.current;
+    if (!ta) return;
+    const range = mentionQueryAt(value, caret);
+    if (!range) {
+      setMention(null);
+      setMentionManual(false);
+      return;
+    }
+    const pos = caretViewportPos(ta, value, range.start);
+    setMention((prev) =>
+      prev && prev.range.start === range.start && prev.range.query === range.query
+        ? prev
+        : { range, pos },
+    );
+  }, []);
+
+  const acceptMention = useCallback(
+    (item: MentionItem) => {
+      const ta = taRef.current;
+      const m = mention;
+      if (!ta || !m) return;
+      let imgs = images;
+      let insertion = item.token;
+      // Snapshots and from-chat images become real attachments on accept so
+      // `@Image n` always indexes a sent image.
+      if (item.dataUrl && !images.includes(item.dataUrl)) {
+        const limit = useStore.getState().settings.maxImages;
+        if (images.length >= limit) {
+          showToast(`chat.tooManyImages|${limit}`);
+        } else {
+          imgs = [...images, item.dataUrl];
+          setImages(imgs);
+        }
+      }
+      if (item.kind === "image" && !item.index && item.dataUrl) {
+        const idx = imgs.indexOf(item.dataUrl);
+        insertion = imageToken(idx + 1);
+      }
+      if (!insertion) {
+        setMention(null);
+        setMentionManual(false);
+        return;
+      }
+      const { start, end } = m.range;
+      pendingCaretRef.current = start + insertion.length + 1;
+      setText(ta.value.slice(0, start) + insertion + " " + ta.value.slice(end));
+      setMention(null);
+      setMentionManual(false);
+      setMentionDismissed(null);
+      ta.focus();
+    },
+    [mention, images, showToast],
+  );
+
   // Anchors the log when the user expands/collapses a card (via its summary)
   // so the next streaming flush keeps the card in place instead of jumping to
   // the newest message. Measured synchronously — a summary's own position is
@@ -433,14 +643,22 @@ function ChatTab() {
     }
     const message = text.trim();
     if (!message && images.length === 0) return;
+    // Resolve @tokens against the live scene: snapshot references pull their
+    // image into the attachment list, entity names get recorded for chips and
+    // for the [References] block the model receives.
+    const docNow = useStore.getState().doc;
+    const mentions = parseMentions(message, docNow);
+    const sent = mergeSnapshotImages(images, mentions, events, useStore.getState().settings.maxImages);
     setText("");
-    const sent = images;
     setImages([]);
+    setMention(null);
+    setMentionManual(false);
+    setMentionDismissed(null);
     // A message the user just sent must always be visible.
     stickToBottom.current = true;
     anchorRef.current = null;
     setAtBottom(true);
-    void runAgentTurn({ text: message, images: sent });
+    void runAgentTurn({ text: message, images: sent, mentions: mentions.length ? mentions : undefined });
   };
 
   // The event currently being streamed by the agent — drives the typing
@@ -557,7 +775,14 @@ function ChatTab() {
             ref={taRef}
             value={text}
             placeholder={t("chat.placeholder")}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => {
+              setText(e.target.value);
+              syncMention(e.target.value, e.target.selectionStart);
+            }}
+            onSelect={() => {
+              const ta = taRef.current;
+              if (ta) syncMention(ta.value, ta.selectionStart);
+            }}
             onPaste={(e) => {
               const files = [...e.clipboardData.files];
               if (files.length) {
@@ -566,12 +791,66 @@ function ChatTab() {
               }
             }}
             onKeyDown={(e) => {
+              // Ctrl/Cmd+Space: invoke the mention popup at the caret — even
+              // with no `@token` present (one is inserted in that case).
+              if ((e.ctrlKey || e.metaKey) && (e.code === "Space" || e.key === " ")) {
+                e.preventDefault();
+                const ta = e.currentTarget;
+                const caret = ta.selectionStart;
+                const range = mentionQueryAt(ta.value, caret);
+                if (!range) {
+                  const next = ta.value.slice(0, caret) + "@" + ta.value.slice(ta.selectionEnd);
+                  pendingCaretRef.current = caret + 1;
+                  setText(next);
+                  syncMention(next, caret + 1);
+                } else {
+                  syncMention(ta.value, caret);
+                }
+                setMentionManual(true);
+                setMentionDismissed(null);
+                return;
+              }
+              if (mentionOpen && filteredMentionItems.length > 0) {
+                if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                  e.preventDefault();
+                  const n = filteredMentionItems.length;
+                  setMentionActive((a) => (e.key === "ArrowDown" ? (a + 1) % n : (a - 1 + n) % n));
+                  return;
+                }
+                if (e.key === "Enter" || e.key === "Tab") {
+                  e.preventDefault();
+                  if (!e.nativeEvent.isComposing) acceptMention(filteredMentionItems[mentionIdx]);
+                  return;
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setMentionDismissed(mention!.range.query);
+                  setMentionManual(false);
+                  return;
+                }
+              }
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 send();
               }
             }}
           />
+          {mentionOpen && mention && (
+            <MentionPopup
+              items={filteredMentionItems}
+              activeIndex={mentionIdx}
+              x={mention.pos.x}
+              y={mention.pos.y}
+              above={mention.pos.above}
+              onHover={setMentionActive}
+              onAccept={acceptMention}
+              onClose={() => {
+                setMentionDismissed(mention.range.query);
+                setMentionManual(false);
+              }}
+            />
+          )}
           <div className="actions">
             <button className="btn small" title={t("chat.attach")} onClick={() => fileRef.current?.click()}>
               📎
@@ -616,6 +895,39 @@ function ChatTab() {
 // Memoized: streaming patches replace one event object every ~90ms, so with
 // memo the untouched rows skip re-rendering entirely.
 
+/** Inline pill for an `@token` in a sent message. Object chips are clickable
+ *  and select the referenced object in the scene — by stored id, falling back
+ *  to a unique name match when the object was rebuilt (new id) since the
+ *  message was sent. */
+function MentionChip({ mention }: { mention: UserMention }) {
+  const t = useT();
+  const label = mention.name ?? mention.token.slice(1);
+  if (mention.kind === "object") {
+    return (
+      <button
+        type="button"
+        className="mention-chip"
+        title={t("chat.mentionSelect")}
+        onClick={() => {
+          const doc = useStore.getState().doc;
+          const target =
+            doc.objects.find((o) => o.id === mention.id) ??
+            doc.objects.find((o) => o.name === mention.name);
+          if (target) useStore.setState({ selection: [target.id] });
+        }}
+      >
+        {MENTION_ICONS[mention.kind]} {label}
+      </button>
+    );
+  }
+  return (
+    <span className="mention-chip">
+      {MENTION_ICONS[mention.kind]} {label}
+    </span>
+  );
+}
+
+
 const SessionEventView = memo(function SessionEventView({
   event,
   live = false,
@@ -628,14 +940,24 @@ const SessionEventView = memo(function SessionEventView({
   const t = useT();
 
   switch (event.type) {
-    case "user":
+    case "user": {
+      const parts = event.mentions?.length ? splitByMentions(event.text, event.mentions) : null;
       return (
         <div className="msg user">
           <span className="who">{t("chat.you")}</span>
           {event.images.length > 0 && <UserImages images={event.images} />}
-          {event.text && <div className="bubble">{event.text}</div>}
+          {event.text && (
+            <div className="bubble">
+              {parts
+                ? parts.map((p, i) =>
+                    typeof p === "string" ? <span key={i}>{p}</span> : <MentionChip key={i} mention={p} />,
+                  )
+                : event.text}
+            </div>
+          )}
         </div>
       );
+    }
     case "assistant":
       return (
         <div className="msg">

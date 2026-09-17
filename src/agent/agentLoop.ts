@@ -24,10 +24,11 @@ import {
   type ChatSessionRecord,
 } from "../state/chatPersist";
 import { streamChatCompletion, userContent } from "./llmClient";
+import { referencesBlock } from "./mentions";
 import { sandbox } from "./sandbox";
 import { runTool, type ToolContext, type ToolResult } from "./tools";
 import { systemPrompt, toWireTools } from "./wire";
-import type { SessionEvent, WireMessage } from "./types";
+import type { SessionEvent, UserMention, WireMessage } from "./types";
 import { runMockTurn } from "./mockProvider";
 import { t } from "../i18n";
 import type { ToolSchema } from "./types";
@@ -85,6 +86,8 @@ function makeContext(): ToolContext {
 export interface AgentInput {
   text: string;
   images: string[];
+  /** Resolved `@` references parsed from text at send time. */
+  mentions?: UserMention[];
 }
 
 export async function runAgentTurn(input: AgentInput): Promise<void> {
@@ -114,8 +117,16 @@ export async function runAgentTurn(input: AgentInput): Promise<void> {
     type: "user",
     text: input.text,
     images: input.images,
+    ...(input.mentions ? { mentions: input.mentions } : {}),
   });
-  rt.wireLog.push({ role: "user", content: userContent(input.text, input.images) });
+  // The transcript keeps the text as typed; only the wire text gets the
+  // resolved [References] block so the model sees exact ids without a
+  // get_scene_state round-trip.
+  const refs = input.mentions?.length ? referencesBlock(input.mentions, store.doc) : "";
+  rt.wireLog.push({
+    role: "user",
+    content: userContent(refs ? `${input.text}\n\n${refs}` : input.text, input.images),
+  });
 
   try {
     if (store.settings.provider === "mock") {
