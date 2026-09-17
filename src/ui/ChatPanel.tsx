@@ -310,7 +310,14 @@ function ChatTab() {
         ))}
         {agentState === "running" && (
           <div className="msg notice">
-            {t("chat.thinking")} {agentStep > 0 ? `· ${t("chat.stepOf", { i: agentStep, max: settings.maxSteps })}` : ""}
+            {t("chat.thinking")}{" "}
+            {agentStep > 0
+              ? `· ${
+                  settings.limitMaxSteps
+                    ? t("chat.stepOf", { i: agentStep, max: settings.maxSteps })
+                    : t("chat.step", { i: agentStep })
+                }`
+              : ""}
           </div>
         )}
         {!atBottom && (

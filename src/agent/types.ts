@@ -92,6 +92,8 @@ export interface LlmSettings {
   connection: "proxy" | "direct";
   maxImages: number;
   maxSteps: number;
+  /** When false (the default) a turn may take unlimited steps. */
+  limitMaxSteps: boolean;
 }
 
 export const DEFAULT_LLM_SETTINGS: LlmSettings = {
@@ -102,6 +104,7 @@ export const DEFAULT_LLM_SETTINGS: LlmSettings = {
   connection: "direct",
   maxImages: 8,
   maxSteps: 100,
+  limitMaxSteps: false,
 };
 
 export function isConfigured(s: LlmSettings): boolean {

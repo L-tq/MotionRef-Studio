@@ -125,7 +125,10 @@ export async function runAgentTurn(input: AgentInput): Promise<void> {
     if (store.settings.provider === "mock") {
       await runMockTurn(input, makeContext(), executeToolWithEvents, rt);
     } else {
-      await runRealTurn(taskId, rt, store.settings.model, store.settings.maxSteps, rt.abort.signal);
+      // Unlimited steps unless the user enabled the cap; Infinity keeps the
+      // runRealTurn loop running until the model stops calling tools.
+      const maxSteps = store.settings.limitMaxSteps ? store.settings.maxSteps : Number.POSITIVE_INFINITY;
+      await runRealTurn(taskId, rt, store.settings.model, maxSteps, rt.abort.signal);
     }
     useStore.getState().setTaskState(taskId, "idle");
   } catch (err) {

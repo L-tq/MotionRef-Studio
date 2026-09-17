@@ -104,6 +104,7 @@ export function SettingsDialog({ onboarding }: { onboarding?: boolean }) {
   const [connection, setConnection] = useState(settings.connection);
   const [maxImages, setMaxImages] = useState(settings.maxImages);
   const [maxSteps, setMaxSteps] = useState(settings.maxSteps);
+  const [limitMaxSteps, setLimitMaxSteps] = useState(settings.limitMaxSteps);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
   const [showGuide, setShowGuide] = useState(false);
@@ -118,7 +119,7 @@ export function SettingsDialog({ onboarding }: { onboarding?: boolean }) {
 
   const apply = (nextProvider?: "real" | "mock") => {
     const p = nextProvider ?? provider;
-    saveSettings({ baseUrl, apiKey, model, provider: p, connection, maxImages, maxSteps });
+    saveSettings({ baseUrl, apiKey, model, provider: p, connection, maxImages, maxSteps, limitMaxSteps });
     close();
   };
 
@@ -126,7 +127,7 @@ export function SettingsDialog({ onboarding }: { onboarding?: boolean }) {
     setTesting(true);
     setTestResult(null);
     try {
-      const result = await testConnection({ baseUrl, apiKey, model, provider, connection, maxImages, maxSteps });
+      const result = await testConnection({ baseUrl, apiKey, model, provider, connection, maxImages, maxSteps, limitMaxSteps });
       setTestResult((result.ok ? "✓ " : "✗ ") + result.detail);
     } catch (err) {
       setTestResult("✗ " + (err instanceof Error ? err.message : String(err)));
@@ -203,8 +204,19 @@ export function SettingsDialog({ onboarding }: { onboarding?: boolean }) {
                   <input type="number" min={1} max={64} value={maxImages} onChange={(e) => setMaxImages(Math.max(1, parseInt(e.target.value, 10) || 1))} />
                 </div>
                 <div className="field">
-                  <label>{t("settings.maxSteps")}</label>
-                  <input type="number" min={1} max={100} value={maxSteps} onChange={(e) => setMaxSteps(Math.max(1, parseInt(e.target.value, 10) || 1))} />
+                  <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <input type="checkbox" checked={limitMaxSteps} onChange={(e) => setLimitMaxSteps(e.target.checked)} />
+                    {t("settings.maxSteps")}
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={maxSteps}
+                    disabled={!limitMaxSteps}
+                    onChange={(e) => setMaxSteps(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                  />
+                  <span className="hint">{t("settings.maxStepsHint")}</span>
                 </div>
               </div>
               <div className="insp-row">

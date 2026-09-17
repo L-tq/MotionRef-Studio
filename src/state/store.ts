@@ -269,6 +269,8 @@ export interface AppState {
   exportOpen: boolean;
   lightbox: string | null;
   rightTab: "chat" | "script";
+  /** Which parallel tab is shown in the Inspector panel. */
+  inspectorTab: "object" | "cameras" | "scene";
   toast: string | null;
   layout: LayoutState;
   messages: AppMessage[];
@@ -564,6 +566,7 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
   exportOpen: false,
   lightbox: null,
   rightTab: "chat",
+  inspectorTab: "object",
   toast: null,
   layout: loadLayout(),
   messages: [],

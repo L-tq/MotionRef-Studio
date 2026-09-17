@@ -507,22 +507,33 @@ function SceneInspector() {
 
 export function Inspector() {
   const t = useT();
+  const setUi = useStore((s) => s.setUi);
+  const tab = useStore((s) => s.inspectorTab);
   const selection = useStore((s) => s.selection);
   const obj = useStore((s) => s.doc.objects.find((o) => o.id === s.selection[0]));
 
   return (
     <div className="panel" style={{ flex: 1, borderBottom: "1px solid var(--border)" }}>
-      <div className="panel-header">
-        <span>{t("inspector.object")}</span>
+      <div className="right-tabs">
+        <button className={tab === "object" ? "active" : ""} onClick={() => setUi("inspectorTab", "object")}>
+          {t("inspector.object")}
+        </button>
+        <button className={tab === "cameras" ? "active" : ""} onClick={() => setUi("inspectorTab", "cameras")}>
+          {t("inspector.cameras")}
+        </button>
+        <button className={tab === "scene" ? "active" : ""} onClick={() => setUi("inspectorTab", "scene")}>
+          {t("inspector.onFrameScripts")}
+        </button>
       </div>
       <div className="inspector">
-        {selection.length === 0 || !obj ? (
-          <div className="empty-note">{t("inspector.noSelection")}</div>
-        ) : (
-          <ObjectInspector key={obj.id} obj={obj} ids={selection} />
-        )}
-        <CameraInspector />
-        <SceneInspector />
+        {tab === "object" &&
+          (selection.length === 0 || !obj ? (
+            <div className="empty-note">{t("inspector.noSelection")}</div>
+          ) : (
+            <ObjectInspector key={obj.id} obj={obj} ids={selection} />
+          ))}
+        {tab === "cameras" && <CameraInspector />}
+        {tab === "scene" && <SceneInspector />}
       </div>
     </div>
   );
