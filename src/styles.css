@@ -95,13 +95,12 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 }
 .topbar .brand {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   margin-right: 8px;
   user-select: none;
 }
 .topbar .brand b { font-size: 14px; letter-spacing: 0.2px; }
-.topbar .brand span { color: var(--text-3); font-size: 11px; }
 .topbar .project-name {
   background: transparent;
   border: 1px solid transparent;

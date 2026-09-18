@@ -2,7 +2,6 @@
 export const zh: Record<string, string> = {
   // App
   "app.title": "MotionRef Studio",
-  "app.subtitle": "3D 动画参考视频生成器",
 
   // Common
   "common.save": "保存",
@@ -24,6 +23,8 @@ export const zh: Record<string, string> = {
   "common.create": "创建",
 
   // Top bar / projects
+  "topbar.undo": "撤销 (Ctrl+Z)",
+  "topbar.redo": "重做 (Ctrl+Shift+Z)",
   "topbar.new": "新建项目",
   "topbar.save": "保存到此浏览器（场景 + 聊天留在本设备）",
   "topbar.projects": "项目",

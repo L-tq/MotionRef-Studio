@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { Bell, Clapperboard, Download, FilePlus, FolderOpen, Save, Settings, Sparkles, Upload } from "lucide-react";
+import { Bell, Clapperboard, Download, FilePlus, FolderOpen, Redo2, Save, Settings, Sparkles, Undo2, Upload } from "lucide-react";
 import { useStore } from "../state/store";
 import { setLocale, useLocale, useT } from "../i18n";
 import { validateSceneDocument, detectBundleFormat, PROJECT_FORMAT } from "../core/validate";
@@ -18,6 +18,11 @@ export function TopBar() {
   const showToast = useStore((s) => s.showToast);
   const unreadMessages = useStore((s) => s.unreadMessages);
   const messagesOpen = useStore((s) => s.messagesOpen);
+  const undo = useStore((s) => s.undo);
+  const redo = useStore((s) => s.redo);
+  // Server mode tracks history server-side; local mode keeps past/future here.
+  const canUndo = useStore((s) => (s.docAuthority === "server" ? s.studioHistory.canUndo : s.past.length > 0));
+  const canRedo = useStore((s) => (s.docAuthority === "server" ? s.studioHistory.canRedo : s.future.length > 0));
   const fileRef = useRef<HTMLInputElement>(null);
 
   const exportJson = () => {
@@ -78,19 +83,24 @@ export function TopBar() {
     <>
       <div className="topbar">
         <div className="brand">
-        <b>MotionRef</b>
-        <span>{t("app.subtitle")}</span>
-      </div>
-      <input
-        className="project-name"
-        value={doc.name}
-        onChange={(e) =>
-          mutateDoc("name", (draft) => {
-            draft.name = e.target.value;
-          })
-        }
-      />
-      <button className="btn small" title={t("topbar.new")} onClick={newProject}>
+          <b>MotionRef</b>
+        </div>
+        <input
+          className="project-name"
+          value={doc.name}
+          onChange={(e) =>
+            mutateDoc("name", (draft) => {
+              draft.name = e.target.value;
+            })
+          }
+        />
+        <button className="btn small" title={t("topbar.undo")} disabled={!canUndo} onClick={() => undo()}>
+          <Undo2 size={13} />
+        </button>
+        <button className="btn small" title={t("topbar.redo")} disabled={!canRedo} onClick={() => redo()}>
+          <Redo2 size={13} />
+        </button>
+        <button className="btn small" title={t("topbar.new")} onClick={newProject}>
         <FilePlus size={13} />
         {t("common.new")}
       </button>

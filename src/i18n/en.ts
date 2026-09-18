@@ -2,7 +2,6 @@
 export const en: Record<string, string> = {
   // App
   "app.title": "MotionRef Studio",
-  "app.subtitle": "3D animation reference generator",
 
   // Common
   "common.save": "Save",
@@ -24,6 +23,8 @@ export const en: Record<string, string> = {
   "common.create": "Create",
 
   // Top bar / projects
+  "topbar.undo": "Undo (Ctrl+Z)",
+  "topbar.redo": "Redo (Ctrl+Shift+Z)",
   "topbar.new": "New project",
   "topbar.save": "Save to this browser (scene + chat stay on this device)",
   "topbar.projects": "Projects",
