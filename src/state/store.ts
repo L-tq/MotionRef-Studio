@@ -125,6 +125,75 @@ function keyIsEmpty(k: TransformKey & CameraKey) {
   );
 }
 
+/** Gaussian-smooth the given points of ONE target's resolved action: each
+ *  selected point's value becomes the Gaussian-weighted average of its own
+ *  channel's values across the whole track, weighted by key-index distance
+ *  with σ in key count. Only selected (channel, key) pairs are written.
+ *  Module-level so the single- and multi-target store actions share it. */
+function smoothTargetKeys(
+  draft: SceneDocument,
+  target: KeyTarget,
+  points: Array<{ chan: "position" | "rotation" | "scale" | "target" | "fov"; index: number; t: number }>,
+  sigma: number,
+) {
+  // Only this target's resolved action is the smoothing neighborhood.
+  const keys = targetActionKeys(draft, target);
+  if (!keys?.length) return;
+  const weight = (i: number, j: number) => Math.exp(-0.5 * ((i - j) / sigma) ** 2);
+  type Comp = "position" | "rotation" | "scale" | "target";
+  const ks = keys as Array<TransformKey & CameraKey>;
+  const readComp = (k: TransformKey & CameraKey, chan: Comp | "fov", index: number): number | undefined => {
+    if (chan === "fov") return k.fov;
+    const v = k[chan];
+    const x = v ? v[index] : undefined;
+    return x === undefined || x === null ? undefined : x;
+  };
+  // In-place writes: the elements are the same key objects the document
+  // stores; `ks` is the action's own array.
+  const writeComp = (i: number, chan: Comp | "fov", index: number, v: number) => {
+    const k = ks[i];
+    if (chan === "fov") {
+      k.fov = v;
+      return;
+    }
+    const cur = k[chan];
+    const arr: KeyVec3 = cur ? [...cur] : [null, null, null];
+    arr[index] = v;
+    k[chan] = arr;
+  };
+  // One weighted average per channel; every key defining that channel
+  // (selected or not) contributes as a neighbor.
+  const groups = new Map<string, Set<number>>();
+  for (const p of points) {
+    const gk = `${p.chan}.${p.index}`;
+    if (!groups.has(gk)) groups.set(gk, new Set());
+    groups.get(gk)!.add(+p.t.toFixed(4));
+  }
+  for (const [gk, times] of groups) {
+    const split = gk.lastIndexOf(".");
+    const chan = gk.slice(0, split) as Comp | "fov";
+    const index = +gk.slice(split + 1);
+    const defined: Array<{ i: number; v: number }> = [];
+    ks.forEach((k, i) => {
+      const v = readComp(k, chan, index);
+      if (v !== undefined) defined.push({ i, v });
+    });
+    if (!defined.length) continue;
+    for (const t of times) {
+      const i = keys.findIndex((k) => Math.abs(k.t - t) < 1e-4);
+      if (i < 0) continue;
+      let wsum = 0;
+      let acc = 0;
+      for (const { i: j, v } of defined) {
+        const w = weight(i, j);
+        wsum += w;
+        acc += w * v;
+      }
+      if (wsum > 1e-9) writeComp(i, chan, index, acc / wsum);
+    }
+  }
+}
+
 /** Lightweight task metadata (transcripts live in IndexedDB, see chatPersist). */
 export interface TaskMeta {
   id: string;
@@ -364,6 +433,9 @@ export interface AppActions {
   setCameraKeyAtPlayhead(cameraId?: string): void;
   retimeKey(target: KeyTarget, fromT: number, toT: number): void;
   deleteKey(target: KeyTarget, atT: number): void;
+  /** Track timeline: delete keys across several owners/times as ONE undo
+   *  step (times matched with the usual 1e-4 tolerance). */
+  deleteKeys(specs: Array<{ target: KeyTarget; t: number }>): void;
   /** Graph editor: remove the given channel axis at the given times from
    *  keys — a key left with no data is removed, other channels (and other
    *  axes of the same vector) keep their keys (unlike deleteKey, which always
@@ -371,6 +443,14 @@ export interface AppActions {
   deleteKeyChans(
     target: KeyTarget,
     specs: Array<{ chan: "position" | "rotation" | "scale" | "target" | "fov"; index: number; t: number }>,
+  ): void;
+  /** Graph editor: remove channel axes across SEVERAL owners (objects and
+   *  cameras) in one undo step — a global selection spans owners. */
+  deleteKeyChansGroups(
+    groups: Array<{
+      target: KeyTarget;
+      specs: Array<{ chan: "position" | "rotation" | "scale" | "target" | "fov"; index: number; t: number }>;
+    }>,
   ): void;
   /** Graph editor: move one channel axis in time, splitting the shared
    *  full-pose key so other channels/axes' keys stay where they are. */
@@ -396,6 +476,15 @@ export interface AppActions {
   smoothKeys(
     target: KeyTarget,
     points: Array<{ chan: "position" | "rotation" | "scale" | "target" | "fov"; index: number; t: number }>,
+    sigma: number,
+  ): void;
+  /** Smooth across SEVERAL owners in one undo step — a global selection
+   *  spans objects and cameras. */
+  smoothKeysGroups(
+    groups: Array<{
+      target: KeyTarget;
+      points: Array<{ chan: "position" | "rotation" | "scale" | "target" | "fov"; index: number; t: number }>;
+    }>,
     sigma: number,
   ): void;
   clearTrack(objectId: string): void;
@@ -924,19 +1013,43 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     });
   },
 
-  deleteKeyChans(target, specs) {
+  deleteKeys(specs) {
     if (!specs.length) return;
-    const want = specs.map((s) => ({ chan: s.chan, index: s.index, t: +s.t.toFixed(4) }));
+    const want = specs.map((s) => ({ target: s.target, t: +s.t.toFixed(4) }));
     get().mutateDoc("delete-key", (draft) => {
-      const keys = targetActionKeys(draft, target);
-      if (!keys?.length) return;
-      for (const { chan, index, t } of want) {
+      for (const { target, t } of want) {
+        const keys = targetActionKeys(draft, target);
+        if (!keys?.length) continue;
         const idx = keys.findIndex((k) => Math.abs(k.t - t) < 1e-4);
-        if (idx < 0) continue;
-        const k = keys[idx] as TransformKey & CameraKey;
-        if (chan === "fov" ? k.fov === undefined : !k[chan] || k[chan]![index] == null) continue;
-        nullKeyAxis(k, chan, index);
-        if (keyIsEmpty(k)) keys.splice(idx, 1);
+        if (idx >= 0) keys.splice(idx, 1);
+      }
+    });
+  },
+
+  deleteKeyChans(target, specs) {
+    get().deleteKeyChansGroups([{ target, specs }]);
+  },
+
+  /** Graph editor: remove channel axes across SEVERAL owners as ONE undo
+   *  step (a global selection can span objects and cameras). */
+  deleteKeyChansGroups(groups) {
+    if (!groups.length) return;
+    const want = groups.map((g) => ({
+      target: g.target,
+      specs: g.specs.map((s) => ({ chan: s.chan, index: s.index, t: +s.t.toFixed(4) })),
+    }));
+    get().mutateDoc("delete-key", (draft) => {
+      for (const { target, specs } of want) {
+        const keys = targetActionKeys(draft, target);
+        if (!keys?.length) continue;
+        for (const { chan, index, t } of specs) {
+          const idx = keys.findIndex((k) => Math.abs(k.t - t) < 1e-4);
+          if (idx < 0) continue;
+          const k = keys[idx] as TransformKey & CameraKey;
+          if (chan === "fov" ? k.fov === undefined : !k[chan] || k[chan]![index] == null) continue;
+          nullKeyAxis(k, chan, index);
+          if (keyIsEmpty(k)) keys.splice(idx, 1);
+        }
       }
     });
   },
@@ -1013,64 +1126,15 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
    *  channel's values across the whole track, weighted by key-index distance
    *  with σ in key count. Only selected (channel, key) pairs are written. */
   smoothKeys(target, points, sigma) {
-    if (!points.length || !(sigma > 0)) return;
+    get().smoothKeysGroups([{ target, points }], sigma);
+  },
+
+  /** Smooth across SEVERAL owners as ONE undo step (a global selection can
+   *  span objects and cameras). */
+  smoothKeysGroups(groups, sigma) {
+    if (!groups.length || !(sigma > 0)) return;
     get().mutateDoc("smooth-keys", (draft) => {
-      // Only this target's resolved action is the smoothing neighborhood.
-      const keys = targetActionKeys(draft, target);
-      if (!keys?.length) return;
-      const weight = (i: number, j: number) => Math.exp(-0.5 * ((i - j) / sigma) ** 2);
-      type Comp = "position" | "rotation" | "scale" | "target";
-      const ks = keys as Array<TransformKey & CameraKey>;
-      const readComp = (k: TransformKey & CameraKey, chan: Comp | "fov", index: number): number | undefined => {
-        if (chan === "fov") return k.fov;
-        const v = k[chan];
-        const x = v ? v[index] : undefined;
-        return x === undefined || x === null ? undefined : x;
-      };
-      // In-place writes: the elements are the same key objects the document
-      // stores; `ks` is the action's own array.
-      const writeComp = (i: number, chan: Comp | "fov", index: number, v: number) => {
-        const k = ks[i];
-        if (chan === "fov") {
-          k.fov = v;
-          return;
-        }
-        const cur = k[chan];
-        const arr: KeyVec3 = cur ? [...cur] : [null, null, null];
-        arr[index] = v;
-        k[chan] = arr;
-      };
-      // One weighted average per channel; every key defining that channel
-      // (selected or not) contributes as a neighbor.
-      const groups = new Map<string, Set<number>>();
-      for (const p of points) {
-        const gk = `${p.chan}.${p.index}`;
-        if (!groups.has(gk)) groups.set(gk, new Set());
-        groups.get(gk)!.add(+p.t.toFixed(4));
-      }
-      for (const [gk, times] of groups) {
-        const split = gk.lastIndexOf(".");
-        const chan = gk.slice(0, split) as Comp | "fov";
-        const index = +gk.slice(split + 1);
-        const defined: Array<{ i: number; v: number }> = [];
-        ks.forEach((k, i) => {
-          const v = readComp(k, chan, index);
-          if (v !== undefined) defined.push({ i, v });
-        });
-        if (!defined.length) continue;
-        for (const t of times) {
-          const i = keys.findIndex((k) => Math.abs(k.t - t) < 1e-4);
-          if (i < 0) continue;
-          let wsum = 0;
-          let acc = 0;
-          for (const { i: j, v } of defined) {
-            const w = weight(i, j);
-            wsum += w;
-            acc += w * v;
-          }
-          if (wsum > 1e-9) writeComp(i, chan, index, acc / wsum);
-        }
-      }
+      for (const { target, points } of groups) smoothTargetKeys(draft, target, points, sigma);
     });
   },
 

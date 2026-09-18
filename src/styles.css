@@ -503,7 +503,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .ak-mode:disabled { opacity: 0.45; }
 .tl-zoom { display: inline-flex; gap: 4px; align-items: center; }
 .timeline-body { display: grid; grid-template-columns: 168px 1fr; min-height: 0; overflow: hidden; }
-.track-labels { border-right: 1px solid var(--border); overflow: hidden; }
+.track-labels { position: relative; border-right: 1px solid var(--border); overflow: hidden; }
 .track-area { position: relative; overflow-x: auto; overflow-y: hidden; }
 .track-area::-webkit-scrollbar { height: 9px; }
 .track-area::-webkit-scrollbar-track { background: var(--bg-1, #14141a); }
@@ -511,6 +511,24 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .track-area::-webkit-scrollbar-thumb:hover { background: #45455a; }
 .tl-content { position: relative; min-width: 100%; overflow: hidden; }
 .tlabels-inner, .tracks-inner { position: relative; }
+/* Rows below the ruler translate together with the labels for scrolling. */
+.tl-rows { position: relative; }
+/* Thin scroll indicator for the track-name column (many rows); the column
+ * itself scrolls via wheel — the thumb is display-only. */
+.tl-vscroll {
+  position: absolute;
+  top: 22px; bottom: 0;
+  right: 0;
+  width: 5px;
+  pointer-events: none;
+  z-index: 2;
+}
+.tl-vscroll-thumb {
+  position: absolute;
+  left: 1px; right: 1px;
+  border-radius: 3px;
+  background: #45455a;
+}
 .tl-mode { display: inline-flex; gap: 2px; align-items: center; }
 
 /* ---------- graph editor ---------- */
@@ -559,9 +577,44 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .graph-eye { background: none; border: none; color: var(--text-3); cursor: pointer; font-size: 11px; padding: 0 2px; }
 .graph-eye:hover { color: var(--text); }
 .graph-eye.off { opacity: 0.45; }
-/* Select all / deselect all buttons above the channel list. */
-.graph-actions { display: flex; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--border); }
-.graph-actions .btn { flex: 1; min-width: 0; padding: 2px 6px; font-size: 11px; }
+/* Outliner-style tree of keyed owners (collections > their objects) above
+   the channel list; clicking a node makes that object the curve target. */
+.graph-tree { border-bottom: 1px solid var(--border); }
+.graph-col,
+.graph-node {
+  height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  font-size: 11px;
+  color: var(--text-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.graph-col { font-weight: 600; }
+.graph-node.child { padding-left: 28px; }
+.graph-col:hover, .graph-node:hover { background: var(--bg-3); }
+.graph-node.active, .graph-node.active:hover { color: var(--warn); }
+.graph-col .tri { font-size: 10px; color: var(--text-3); flex-shrink: 0; width: 10px; }
+.graph-col .name, .graph-node .name { overflow: hidden; text-overflow: ellipsis; }
+.graph-node .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.graph-col .cnt, .graph-node .cnt { font-size: 10px; color: var(--text-3); flex-shrink: 0; }
+/* ★ on the render-active camera in the camera list. */
+.graph-node .star { font-size: 10px; color: #ffc24d; flex-shrink: 0; }
+/* Select all / deselect all toolbar sits IN the time-axis strip at the very
+   top of the label column (same 22px row height as the plot ruler) and stays
+   pinned while the owner tree + channel list scroll. */
+.graph-actions {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 22px;
+  align-items: center;
+  background: var(--bg-2);
+  display: flex; gap: 4px; padding: 0 6px; border-bottom: 1px solid var(--border);
+}
+.graph-actions .btn { flex: 1; min-width: 0; height: 18px; padding: 0 6px; font-size: 11px; }
 /* Gaussian smooth row below the channel list. */
 .graph-smooth {
   display: flex;
@@ -684,6 +737,24 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .track-label:hover { background: var(--bg-3); }
 .track-label.camera { color: #7fd4ff; }
 .track-label .kbadge { font-size: 10px; color: var(--text-3); }
+/* Collection header rows (Outliner grouping) + indented member labels, and
+   the faint merged-key summary diamonds on a collection's lane. */
+.track-label.collection { color: var(--text-1); background: rgba(255, 255, 255, 0.03); font-weight: 600; }
+.track-label.collection:hover { background: var(--bg-3); }
+.track-label.collection.col-active { color: var(--warn); }
+.track-label.collection .action-caret { color: var(--text-3); }
+.track-label.child { padding-left: 28px; }
+.tl-row.col-row { background: rgba(255, 255, 255, 0.02); }
+.col-key {
+  position: absolute;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  margin: -2.5px 0 0 -2.5px;
+  transform: rotate(45deg);
+  background: #5c5c72;
+  pointer-events: none;
+}
 
 .tl-ruler {
   height: 22px;

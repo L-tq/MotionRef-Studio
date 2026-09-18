@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useStore, type KeyTarget } from "../state/store";
 import { useT } from "../i18n";
-import { actionsOfOwner, activeActionOfOwner, activeCameraIdAt, type MarkerDesc, type SceneDocument } from "../core/types";
+import { actionsOfOwner, activeActionOfOwner, activeCameraIdAt, keyedObjectsByCollection, type MarkerDesc, type SceneDocument } from "../core/types";
 import { GraphEditor } from "./GraphEditor";
 import { ActionEditor } from "./ActionEditor";
 
@@ -13,11 +13,23 @@ interface TrackRow {
   objectId?: string;
   color?: string;
   keys: Array<{ t: number }>;
+  /** Collection header row: which collection, its keyed/selected members and
+   *  their merged key times (for the faint summary diamonds). Member rows keep
+   *  keys here EMPTY — keys live only on real owner rows, so box-select and
+   *  the Delete handler can never address a collection row. */
+  collectionId?: string;
+  memberIds?: string[];
+  summary?: number[];
+  /** Object row nested under a collection header (label-column indent). */
+  indent?: boolean;
 }
 
 /** One row per owner; keys come from the owner's ACTIVE action. When the
- *  owner has several actions, the label names the active one. */
-function buildRows(doc: SceneDocument, selection: string[]): TrackRow[] {
+ *  owner has several actions, the label names the active one. Key-framed
+ *  objects are grouped under their Outliner collection (a collapsible header
+ *  row per collection, document order); uncollected owners stay plain rows.
+ *  Cameras never live in collections and always lead the list. */
+function buildRows(doc: SceneDocument, selection: string[], collapsed: Set<string>): TrackRow[] {
   const rows: TrackRow[] = doc.cameras.map((c) => {
     const act = activeActionOfOwner(doc, { cameraId: c.id });
     const multi = actionsOfOwner(doc, { cameraId: c.id }).length > 1;
@@ -28,10 +40,22 @@ function buildRows(doc: SceneDocument, selection: string[]): TrackRow[] {
       keys: act ? act.keys : [],
     };
   });
-  for (const obj of doc.objects) {
-    const act = activeActionOfOwner(doc, { objectId: obj.id });
-    const keys = act ? act.keys : [];
-    if (keys.length > 0 || selection.includes(obj.id)) {
+  for (const { collection, members } of keyedObjectsByCollection(doc, selection)) {
+    if (collection) {
+      const summary = [...new Set(members.flatMap((o) => activeActionOfOwner(doc, { objectId: o.id })?.keys ?? []).map((k) => +k.t.toFixed(4)))].sort((a, b) => a - b);
+      rows.push({
+        key: `col:${collection.id}`,
+        label: collection.name,
+        collectionId: collection.id,
+        memberIds: members.map((o) => o.id),
+        summary,
+        keys: [],
+      });
+      if (collapsed.has(collection.id)) continue;
+    }
+    for (const obj of members) {
+      const act = activeActionOfOwner(doc, { objectId: obj.id });
+      const keys = act ? act.keys : [];
       const multi = actionsOfOwner(doc, { objectId: obj.id }).length > 1;
       rows.push({
         key: obj.id,
@@ -39,6 +63,7 @@ function buildRows(doc: SceneDocument, selection: string[]): TrackRow[] {
         objectId: obj.id,
         color: obj.color,
         keys,
+        indent: !!collection,
       });
     }
   }
@@ -54,6 +79,15 @@ function tickStep(zoom: number): number {
   const candidates = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60];
   return candidates.find((s) => s * zoom >= 64) ?? 60;
 }
+
+/** Stable id for a track key: ``rowKey|time`` (time quantized like the store). */
+const keyId = (rowKey: string, t: number) => `${rowKey}|${t.toFixed(4)}`;
+const parseKeyId = (id: string): { rowKey: string; t: number } => {
+  const i = id.lastIndexOf("|");
+  return { rowKey: id.slice(0, i), t: parseFloat(id.slice(i + 1)) };
+};
+const keyTargetOfRow = (rowKey: string): KeyTarget =>
+  rowKey.startsWith("cam:") ? { cameraId: rowKey.slice(4) } : { objectId: rowKey };
 
 export function Timeline() {
   const t = useT();
@@ -77,8 +111,9 @@ export function Timeline() {
   const setKeyAtPlayhead = useStore((s) => s.setKeyAtPlayhead);
   const setCameraKeyAtPlayhead = useStore((s) => s.setCameraKeyAtPlayhead);
   const retimeKey = useStore((s) => s.retimeKey);
-  const deleteKey = useStore((s) => s.deleteKey);
+  const deleteKeys = useStore((s) => s.deleteKeys);
   const select = useStore((s) => s.select);
+  const selectMany = useStore((s) => s.selectMany);
   const setActiveCamera = useStore((s) => s.setActiveCamera);
   const addMarkerAt = useStore((s) => s.addMarker);
   const updateMarker = useStore((s) => s.updateMarker);
@@ -86,11 +121,28 @@ export function Timeline() {
   const removeMarker = useStore((s) => s.removeMarker);
   const selectedMarkerId = useStore((s) => s.selectedMarker);
 
-  const rows = buildRows(doc, selection);
+  // Collapsed Outliner collections in the tracks list (ephemeral, like the
+  // Outliner's own disclosure state; default is expanded).
+  const [collapsedCols, setCollapsedCols] = useState<Set<string>>(new Set());
+  const toggleCollection = (id: string) =>
+    setCollapsedCols((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const rows = buildRows(doc, selection, collapsedCols);
   const areaRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  const rowsRef = useRef<HTMLDivElement>(null);
+  const labelsRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(600);
-  const [selectedKey, setSelectedKey] = useState<{ rowKey: string; t: number } | null>(null);
+  const [areaH, setAreaH] = useState(0);
+  const [rowsScroll, setRowsScroll] = useState(0);
+  // Multi-select of keys (graph-editor-style): ids are ``rowKey|t``.
+  const [selKeys, setSelKeys] = useState<Set<string>>(new Set());
+  // Rubber-band rectangle while box-selecting on the rows, in rows-wrapper px.
+  const [rubber, setRubber] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   // Open marker editor popover: viewport coords captured from the marker chip.
   const [markerPop, setMarkerPop] = useState<{ id: string; x: number; y: number } | null>(null);
 
@@ -99,6 +151,7 @@ export function Timeline() {
     if (!el) return;
     const measure = () => {
       setWidth(el.clientWidth);
+      setAreaH(el.clientHeight);
       // First visit (no stored zoom): fit the whole duration to the width.
       if (useStore.getState().layout.timelineZoom == null && el.clientWidth > 0 && doc.duration > 0) {
         useStore.getState().setLayout({ timelineZoom: clampZoom(el.clientWidth / doc.duration) });
@@ -109,6 +162,38 @@ export function Timeline() {
     measure();
     return () => ro.disconnect();
   }, [doc.duration, mode]);
+
+  // --- vertical scrolling of the rows (hover the track-name column) ---
+  // The left labels and the rows translate together; ruler stays pinned.
+  const ROW_H = 26;
+  const RULER_H = 22;
+  const rowsH = ROW_H * (rows.length + 1); // markers lane + one row per owner
+  const maxScroll = Math.max(0, rowsH - Math.max(0, areaH - RULER_H));
+  const scrollPx = Math.min(rowsScroll, maxScroll);
+  useEffect(() => {
+    const el = labelsRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        // Ctrl/cmd+wheel over the names zooms the time axis, same as over
+        // the tracks: reuse the cursor-anchored zoom of the track area.
+        e.preventDefault();
+        const area = areaRef.current;
+        if (!area) return;
+        const rect = area.getBoundingClientRect();
+        const pxInView = e.clientX - rect.left;
+        const time = (pxInView + area.scrollLeft) / Math.max(zoom, 0.001);
+        zoomAnchor.current = { pxInView, time };
+        setLayout({ timelineZoom: clampZoom(zoom * (e.deltaY < 0 ? 1.2 : 1 / 1.2)) });
+        return;
+      }
+      if (maxScroll <= 0) return;
+      e.preventDefault();
+      setRowsScroll((s) => Math.min(Math.max(s + e.deltaY, 0), maxScroll));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [zoom, setLayout, maxScroll, mode]);
 
   // Zoomable time axis: pixels per second. The content is at least as wide as
   // the viewport; zooming in makes it scrollable.
@@ -185,36 +270,133 @@ export function Timeline() {
   );
 
   // --- keyframe dragging (time-addressed, robust against re-sorting) ---
+  // Ctrl/Cmd/Shift-click toggles a key in the multi-selection without
+  // dragging. Grabbing an unselected key selects it alone; grabbing a
+  // selected key drags the WHOLE selection in time (each row's shared
+  // full-pose key moves once, exactly as in the graph editor).
   const beginKeyDrag = (e: React.PointerEvent, target: KeyTarget, rowKey: string, startT: number) => {
+    if (e.button !== 0) return;
     e.stopPropagation();
     e.preventDefault();
     pause();
-    setSelectedKey({ rowKey, t: startT });
-    let lastT = startT;
+    const id = keyId(rowKey, startT);
+    if (e.ctrlKey || e.metaKey || e.shiftKey) {
+      setSelKeys((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+      return;
+    }
+    let sel = selKeys;
+    if (!sel.has(id)) {
+      sel = new Set([id]);
+      setSelKeys(sel);
+    }
     const content = contentRef.current;
+    const rect0 = content?.getBoundingClientRect();
+    if (!rect0) return;
+    // Time under the cursor at drag start; per-move deltas derive from it, so
+    // horizontal scrolling mid-drag cannot skew the follow.
+    const startCursorT = Math.min(Math.max(xToT(e.clientX - rect0.left), 0), doc.duration);
+    const clampT = (v: number) => Math.min(Math.max(v, 0), doc.duration);
+    const entries = [...sel].map((k) => {
+      const { rowKey: rk, t } = parseKeyId(k);
+      return { id: k, rowKey: rk, target: keyTargetOfRow(rk), origT: t };
+    });
+    // Absolute current time per dragged key; every move sets time = t0 + dt,
+    // so repeat move events cannot accumulate drift.
+    const curT = new Map(entries.map((en) => [en.id, en.origT]));
+    let curDt = 0;
     const move = (ev: PointerEvent) => {
       if (!content) return;
       const rect = content.getBoundingClientRect();
-      const nextT = Math.min(Math.max(xToT(ev.clientX - rect.left), 0), doc.duration);
-      retimeKey(target, lastT, nextT);
-      setPlayhead(nextT);
-      lastT = nextT;
+      const cursorT = Math.min(Math.max(xToT(ev.clientX - rect.left), 0), doc.duration);
+      const dt = cursorT - startCursorT;
+      if (Math.abs(dt - curDt) <= 1e-6) return;
+      for (const en of entries) {
+        const from = curT.get(en.id)!;
+        const to = clampT(en.origT + dt);
+        if (Math.abs(to - from) > 1e-6) {
+          retimeKey(en.target, from, to);
+          curT.set(en.id, to);
+        }
+      }
+      curDt = dt;
+      setPlayhead(clampT(startT + dt));
+      // Re-key the selection to the moved times so highlights follow mid-drag.
+      setSelKeys(new Set(entries.map((en) => keyId(en.rowKey, clampT(en.origT + dt)))));
     };
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
+      setSelKeys(new Set(entries.map((en) => keyId(en.rowKey, clampT(en.origT + curDt)))));
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   };
 
-  // Delete the selected keyframe or marker via keyboard. Capture phase +
+  /** Rubber-band multi-select on empty row space (Blender box select, same
+   *  interaction as the graph editor). Ctrl/Shift adds to the selection. A
+   *  tiny box counts as a plain click: scrub the playhead there and — unless
+   *  a modifier is held — clear the selection (hybrid row behavior). */
+  const beginBoxSelect = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    pause();
+    const rowsEl = rowsRef.current;
+    if (!rowsEl) return;
+    const rect0 = rowsEl.getBoundingClientRect();
+    const x0 = e.clientX - rect0.left;
+    const y0 = e.clientY - rect0.top;
+    const additive = e.ctrlKey || e.metaKey || e.shiftKey;
+    if (!additive) setSelKeys(new Set());
+    const move = (ev: PointerEvent) => {
+      const r = rowsRef.current?.getBoundingClientRect();
+      if (!r) return;
+      setRubber({ x0, y0, x1: ev.clientX - r.left, y1: ev.clientY - r.top });
+    };
+    const up = (ev: PointerEvent) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      const r = rowsRef.current?.getBoundingClientRect();
+      setRubber(null);
+      if (!r) return;
+      const x1 = ev.clientX - r.left;
+      const y1 = ev.clientY - r.top;
+      const minX = Math.min(x0, x1);
+      const maxX = Math.max(x0, x1);
+      const minY = Math.min(y0, y1);
+      const maxY = Math.max(y0, y1);
+      if (maxX - minX < 3 && maxY - minY < 3) {
+        // Plain click on empty row space: move the playhead (ruler behavior).
+        if (!additive) setPlayhead(Math.min(Math.max(xToT(x0), 0), doc.duration));
+        return;
+      }
+      const next = additive ? new Set(selKeys) : new Set<string>();
+      rows.forEach((row, ri) => {
+        const cy = ROW_H * (ri + 1) + ROW_H / 2; // markers lane is the first row
+        if (cy < minY || cy > maxY) return;
+        for (const k of row.keys) {
+          const px = tToX(k.t);
+          if (px >= minX && px <= maxX) next.add(keyId(row.key, k.t));
+        }
+      });
+      setSelKeys(next);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  // Delete the selected keyframes or marker via keyboard. Capture phase +
   // stopPropagation so this beats App's global object-Delete handler (same as
-  // the graph editor): with a timeline key/marker selected, Delete removes
-  // that item only.
+  // the graph editor): with a timeline key/marker selection, Delete removes
+  // those items only — ALL selected keys in one undo step. Escape clears the
+  // key selection (unless the marker popover is open; its own Escape handler
+  // closes it).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!selectedKey && !selectedMarkerId) return;
+      if (!selKeys.size && !selectedMarkerId) return;
       const active = document.activeElement;
       if (active && ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName)) return;
       if (e.key === "Delete" || e.key === "Backspace") {
@@ -223,18 +405,22 @@ export function Timeline() {
         if (selectedMarkerId) {
           removeMarker(selectedMarkerId);
           setMarkerPop(null);
-        } else if (selectedKey) {
-          const target: KeyTarget = selectedKey.rowKey.startsWith("cam:")
-            ? { cameraId: selectedKey.rowKey.slice(4) }
-            : { objectId: selectedKey.rowKey };
-          deleteKey(target, selectedKey.t);
-          setSelectedKey(null);
+        } else if (selKeys.size) {
+          deleteKeys(
+            [...selKeys].map((id) => {
+              const { rowKey, t } = parseKeyId(id);
+              return { target: keyTargetOfRow(rowKey), t };
+            }),
+          );
+          setSelKeys(new Set());
         }
+      } else if (e.key === "Escape" && selKeys.size && !markerPop) {
+        setSelKeys(new Set());
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [selectedKey, selectedMarkerId, deleteKey, removeMarker]);
+  }, [selKeys, selectedMarkerId, markerPop, deleteKeys, removeMarker]);
 
   // Marker editor popover: closes on Escape or a press outside it (and
   // outside the marker chips, so dragging another marker just works).
@@ -275,7 +461,7 @@ export function Timeline() {
     e.preventDefault();
     pause();
     setUi("selectedMarker", m.id);
-    setSelectedKey(null);
+    setSelKeys(new Set());
     const content = contentRef.current;
     const chip = e.currentTarget as HTMLElement;
     const startX = e.clientX;
@@ -307,7 +493,7 @@ export function Timeline() {
       e.preventDefault();
       pause();
       setUi("selectedMarker", m.id);
-      setSelectedKey(null);
+      setSelKeys(new Set());
       openMarkerPopAt(m.id, (e.currentTarget as HTMLElement).getBoundingClientRect());
     },
     [pause, setUi, openMarkerPopAt],
@@ -317,7 +503,7 @@ export function Timeline() {
   // then open the popover on the fresh chip so a camera can be picked. Two
   // rAFs so the new chip is committed to the DOM before it is measured.
   const addMarkerHere = () => {
-    setSelectedKey(null);
+    setSelKeys(new Set());
     const id = addMarkerAt();
     if (!id) return;
     requestAnimationFrame(() =>
@@ -447,44 +633,79 @@ export function Timeline() {
           <ActionEditor onMarkerChipDown={editMarkerChip} />
         ) : (
           <>
-            <div className="track-labels">
+            <div className="track-labels" ref={labelsRef}>
               <div className="tl-ruler" />
-              <div className="tlabels-inner">
+              <div className="tlabels-inner" style={{ transform: `translateY(${-scrollPx}px)` }}>
                 <div className="track-label markers" title={t("timeline.markersLaneTitle")}>
                   <span className="tl-marker-glyph">⚑</span>
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{t("timeline.markersLane")}</span>
                 </div>
-                {rows.map((row) => (
-                  <div
-                    key={row.key}
-                    className={`track-label ${row.cameraId ? "camera" : ""}`}
-                    title={row.cameraId ? t("timeline.camRowHint") : undefined}
-                    onClick={(e) => {
-                      if (row.objectId) select(row.objectId, e.shiftKey || e.ctrlKey || e.metaKey);
-                      else if (row.cameraId) setUi("camPanelSel", row.cameraId);
-                    }}
-                  >
-                    {row.cameraId && (
-                      <LiveStar
-                        cameraId={row.cameraId}
-                        title={t(row.cameraId === doc.activeCameraId ? "inspector.setActive" : "timeline.markerLiveHint")}
-                        onMakeActive={() => setActiveCamera(row.cameraId!)}
-                      />
-                    )}
-                    {!row.cameraId && (
-                      <span
-                        style={{ width: 8, height: 8, borderRadius: 2, background: row.color, flexShrink: 0 }}
-                      />
-                    )}
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{row.label}</span>
-                    <span style={{ flex: 1 }} />
-                    <span className="kbadge">{row.keys.length}</span>
-                  </div>
-                ))}
+                {rows.map((row) =>
+                  row.collectionId ? (
+                    <div
+                      key={row.key}
+                      className={`track-label collection${row.memberIds!.some((id) => selection.includes(id)) ? " col-active" : ""}`}
+                      title={t("timeline.collectionRow")}
+                      onClick={(e) => selectMany(row.memberIds!, e.shiftKey || e.ctrlKey || e.metaKey)}
+                    >
+                      <button
+                        className="action-caret"
+                        title={t("timeline.toggleCollection")}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleCollection(row.collectionId!);
+                        }}
+                      >
+                        {collapsedCols.has(row.collectionId) ? "▸" : "▾"}
+                      </button>
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{row.label}</span>
+                      <span style={{ flex: 1 }} />
+                      <span className="kbadge">{row.memberIds!.length}</span>
+                    </div>
+                  ) : (
+                    <div
+                      key={row.key}
+                      className={`track-label ${row.cameraId ? "camera" : ""} ${row.indent ? "child" : ""}`}
+                      title={row.cameraId ? t("timeline.camRowHint") : undefined}
+                      onClick={(e) => {
+                        if (row.objectId) select(row.objectId, e.shiftKey || e.ctrlKey || e.metaKey);
+                        else if (row.cameraId) setUi("camPanelSel", row.cameraId);
+                      }}
+                    >
+                      {row.cameraId && (
+                        <LiveStar
+                          cameraId={row.cameraId}
+                          title={t(row.cameraId === doc.activeCameraId ? "inspector.setActive" : "timeline.markerLiveHint")}
+                          onMakeActive={() => setActiveCamera(row.cameraId!)}
+                        />
+                      )}
+                      {!row.cameraId && (
+                        <span
+                          style={{ width: 8, height: 8, borderRadius: 2, background: row.color, flexShrink: 0 }}
+                        />
+                      )}
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{row.label}</span>
+                      <span style={{ flex: 1 }} />
+                      <span className="kbadge">{row.keys.length}</span>
+                    </div>
+                  ),
+                )}
                 {doc.actions.every((a) => a.keys.length === 0) && (
                   <div className="empty-note">{t("timeline.noTracks")}</div>
                 )}
               </div>
+              {maxScroll > 0 && (
+                <div className="tl-vscroll" aria-hidden>
+                  <div
+                    className="tl-vscroll-thumb"
+                    style={{
+                      height: `${Math.max(12, ((areaH - RULER_H) / rowsH) * 100)}%`,
+                      top: `${(scrollPx / rowsH) * 100}%`,
+                    }}
+                  />
+                </div>
+              )}
             </div>
 
             <div className="track-area" ref={areaRef}>
@@ -499,47 +720,73 @@ export function Timeline() {
                     </div>
                   ))}
                 </div>
-                <div className="tl-row markers" onPointerDown={beginScrub}>
-                  {doc.markers.map((m) => {
-                    const isSel = selectedMarkerId === m.id;
-                    const cam = doc.cameras.find((c) => c.id === m.cameraId);
-                    return (
-                      <div
-                        key={m.id}
-                        data-marker-id={m.id}
-                        className={`tl-marker ${isSel ? "selected" : ""}`}
-                        style={{ left: `${tToX(m.t)}px` }}
-                        title={`${m.name} @ ${m.t.toFixed(2)}s → ${cam?.name ?? m.cameraId} (${t("timeline.markerHint")})`}
-                        onPointerDown={(e) => beginMarkerDrag(e, m)}
-                      >
-                        <span className="tl-marker-flag">⚑</span>
-                        <span className="tl-marker-name">{m.name}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-                {rows.map((row) => (
-                  <div
-                    key={row.key}
-                    className="tl-row"
-                    onPointerDown={beginScrub}
-                  >
-                    {row.keys.map((key, index) => {
-                      const target: KeyTarget = row.cameraId ? { cameraId: row.cameraId } : { objectId: row.objectId! };
-                      const rowKey = row.key;
-                      const isSelected = selectedKey?.rowKey === rowKey && Math.abs(selectedKey.t - key.t) < 1e-4;
+                <div className="tl-rows" ref={rowsRef} style={{ transform: `translateY(${-scrollPx}px)` }}>
+                  <div className="tl-row markers" onPointerDown={beginScrub}>
+                    {doc.markers.map((m) => {
+                      const isSel = selectedMarkerId === m.id;
+                      const cam = doc.cameras.find((c) => c.id === m.cameraId);
                       return (
                         <div
-                          key={`${key.t}-${index}`}
-                          className={`keyframe ${row.cameraId ? "camera-key" : ""} ${isSelected ? "selected-key" : ""}`}
-                          style={{ left: `${tToX(key.t)}px` }}
-                          title={t("timeline.deleteKey")}
-                          onPointerDown={(e) => beginKeyDrag(e, target, rowKey, key.t)}
-                        />
+                          key={m.id}
+                          data-marker-id={m.id}
+                          className={`tl-marker ${isSel ? "selected" : ""}`}
+                          style={{ left: `${tToX(m.t)}px` }}
+                          title={`${m.name} @ ${m.t.toFixed(2)}s → ${cam?.name ?? m.cameraId} (${t("timeline.markerHint")})`}
+                          onPointerDown={(e) => beginMarkerDrag(e, m)}
+                        >
+                          <span className="tl-marker-flag">⚑</span>
+                          <span className="tl-marker-name">{m.name}</span>
+                        </div>
                       );
                     })}
                   </div>
-                ))}
+                  {rows.map((row) =>
+                    row.collectionId ? (
+                      <div
+                        key={row.key}
+                        className="tl-row col-row"
+                        title={t("timeline.rowHint")}
+                        onPointerDown={beginBoxSelect}
+                      >
+                        {row.summary!.map((t0) => (
+                          <span key={t0} className="col-key" style={{ left: `${tToX(t0)}px` }} />
+                        ))}
+                      </div>
+                    ) : (
+                      <div
+                        key={row.key}
+                        className="tl-row"
+                        title={t("timeline.rowHint")}
+                        onPointerDown={beginBoxSelect}
+                      >
+                        {row.keys.map((key, index) => {
+                          const target = keyTargetOfRow(row.key);
+                          const isSelected = selKeys.has(keyId(row.key, key.t));
+                          return (
+                            <div
+                              key={`${key.t}-${index}`}
+                              className={`keyframe ${row.cameraId ? "camera-key" : ""} ${isSelected ? "selected-key" : ""}`}
+                              style={{ left: `${tToX(key.t)}px` }}
+                              title={t("timeline.keyHint")}
+                              onPointerDown={(e) => beginKeyDrag(e, target, row.key, key.t)}
+                            />
+                          );
+                        })}
+                      </div>
+                    ),
+                  )}
+                  {rubber && (
+                    <div
+                      className="graph-rubber"
+                      style={{
+                        left: Math.min(rubber.x0, rubber.x1),
+                        top: Math.min(rubber.y0, rubber.y1),
+                        width: Math.abs(rubber.x1 - rubber.x0),
+                        height: Math.abs(rubber.y1 - rubber.y0),
+                      }}
+                    />
+                  )}
+                </div>
                 <MarkerOverlay tToX={tToX} topOffset={22} />
                 <Playhead duration={doc.duration} tToX={tToX} />
               </div>

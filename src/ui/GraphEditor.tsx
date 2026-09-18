@@ -17,13 +17,45 @@
  *  but moving/deleting points of one property (e.g. Position X) splits the
  *  shared key so other properties keep their own keys at their own times.
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useStore, type KeyTarget } from "../state/store";
 import { useT } from "../i18n";
-import { activeCameraOf, cameraKeysOf, objectKeysOf, type CameraKey, type KeyVec3, type MarkerDesc, type SceneDocument, type TransformKey, type Vec3 } from "../core/types";
+import { activeCameraOf, cameraKeysOf, keyedObjectsByCollection, objectKeysOf, type CameraKey, type KeyVec3, type MarkerDesc, type SceneDocument, type TransformKey, type Vec3 } from "../core/types";
 import { MarkerOverlay } from "./Timeline";
 
 type AnyKey = TransformKey | CameraKey;
+
+/** Channel ids are globally unique: ``<ownerId>:<spec>|<t>`` — spec is one of
+ *  pos/rot/scl (objects), cpos/ctgt/fov (cameras) plus an axis index (fov has
+ *  none). Splitting an id needs no per-view state, so a selection can span
+ *  several objects/cameras and still resolve while another target is shown. */
+const CHAN_SPECS = {
+  pos: "position",
+  rot: "rotation",
+  scl: "scale",
+  cpos: "position",
+  ctgt: "target",
+  fov: "fov",
+} as const;
+
+function parsePointId(id: string): {
+  ownerId: string;
+  chan: "position" | "rotation" | "scale" | "target" | "fov";
+  index: number;
+  t: number;
+} | null {
+  const bar = id.lastIndexOf("|");
+  const colon = id.indexOf(":");
+  if (bar < 0 || colon <= 0) return null;
+  const spec = id.slice(colon + 1, bar);
+  const dot = spec.lastIndexOf(".");
+  const chan = CHAN_SPECS[(dot >= 0 ? spec.slice(0, dot) : spec) as keyof typeof CHAN_SPECS];
+  if (!chan) return null;
+  const index = dot >= 0 ? Number(spec.slice(dot + 1)) : 0;
+  const t = Number(id.slice(bar + 1));
+  if (!Number.isInteger(index) || !Number.isFinite(t)) return null;
+  return { ownerId: id.slice(0, colon), chan, index, t };
+}
 
 interface ChannelDef {
   id: string;
@@ -58,7 +90,9 @@ function objectChannels(objectId: string, basePos: Vec3, baseRot: Vec3, baseScl:
   for (const g of groups) {
     for (const { i, c } of CH) {
       chans.push({
-        id: `${g.prefix}.${i}`,
+        // Object ids prefix the channel id (like camera channels do) so a
+        // selection can never be ambiguous between two owners.
+        id: `${objectId}:${g.prefix}.${i}`,
         label: `${g.group} ${"XYZ"[i]}`,
         group: g.group,
         color: c,
@@ -191,10 +225,10 @@ export function GraphEditor({ onMarkerChipDown }: { onMarkerChipDown?: (e: React
   const setPlayhead = useStore((s) => s.setPlayhead);
   const pause = useStore((s) => s.pause);
   const retimeKeyChan = useStore((s) => s.retimeKeyChan);
-  const deleteKeyChans = useStore((s) => s.deleteKeyChans);
+  const deleteKeyChansGroups = useStore((s) => s.deleteKeyChansGroups);
   const setKeyValues = useStore((s) => s.setKeyValues);
   const insertKeyAt = useStore((s) => s.insertKeyAt);
-  const smoothKeys = useStore((s) => s.smoothKeys);
+  const smoothKeysGroups = useStore((s) => s.smoothKeysGroups);
   const select = useStore((s) => s.select);
 
   const selectedObj = useStore((s) => s.doc.objects.find((o) => o.id === s.selection[0]));
@@ -204,6 +238,12 @@ export function GraphEditor({ onMarkerChipDown }: { onMarkerChipDown?: (e: React
   const [camSel, setCamSel] = useState<string | null>(null);
   const effectiveKind = kind === "object" && !selectedObj ? "camera" : kind;
   const camId = camSel && doc.cameras.some((c) => c.id === camSel) ? camSel : activeCamId;
+  // The owner list follows the viewport selection: picking an object switches
+  // it to the object tree (the Cameras tab / camera nodes switch it back).
+  const selectionHead = selection[0];
+  useEffect(() => {
+    if (selectionHead) setKind("object");
+  }, [selectionHead]);
 
   const areaRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -220,6 +260,17 @@ export function GraphEditor({ onMarkerChipDown }: { onMarkerChipDown?: (e: React
   /** Value range frozen while a point drag is active, so the dragged point
    *  stays 1:1 under the cursor instead of the auto-fit range rescaling. */
   const [rangeOverride, setRangeOverride] = useState<{ min: number; max: number } | null>(null);
+  // Key-framed owners as an Outliner-style tree (collapsible collections over
+  // their member objects). Ephemeral disclosure state, like the Outliner's.
+  const [collapsedCols, setCollapsedCols] = useState<Set<string>>(new Set());
+  const treeGroups = useMemo(() => keyedObjectsByCollection(doc, selection), [doc, selection]);
+  const toggleCollection = (id: string) =>
+    setCollapsedCols((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   useEffect(() => {
     const el = areaRef.current;
@@ -261,29 +312,48 @@ export function GraphEditor({ onMarkerChipDown }: { onMarkerChipDown?: (e: React
 
   const keyId = (chanId: string, time: number) => `${chanId}|${time.toFixed(4)}`;
   const channelById = useMemo(() => new Map(channels.map((c) => [c.id, c])), [channels]);
+  /** Owner id → KeyTarget, resolved against the document. */
+  const targetOfPoint = useCallback(
+    (ownerId: string): KeyTarget =>
+      doc.objects.some((o) => o.id === ownerId) ? { objectId: ownerId } : { cameraId: ownerId },
+    [doc],
+  );
 
-  /** Selected points mapped to store-level components, for Gaussian smoothing. */
+  /** Selected points mapped to store-level components, for Gaussian smoothing
+   *  and channel deletes. The selection can span several objects/cameras, so
+   *  each point keeps its owner target. */
   const selPoints = useMemo(
     () =>
       [...selKeys].flatMap((id) => {
-        const [cid, ts] = id.split("|");
-        const c = channelById.get(cid);
-        return c ? [{ chan: c.comp.chan, index: c.comp.index, t: parseFloat(ts) }] : [];
+        const p = parsePointId(id);
+        return p ? [{ ...p, target: targetOfPoint(p.ownerId) }] : [];
       }),
-    [selKeys, channelById],
+    [selKeys, targetOfPoint],
   );
 
   // Value range over visible channels (display units), sampled across the clip.
   const visible = channels.filter((c) => !hidden.has(c.id));
 
-  /** Select every point of every visible channel (header button). */
+  /** Select every point of every visible channel of EVERY keyed owner
+   *  (objects + cameras), not just the target currently on display. */
   const selectAllPoints = () => {
     const next = new Set<string>();
-    for (const c of visible) {
-      for (const k of keys) {
-        if (c.read(k) === undefined) continue;
-        next.add(keyId(c.id, k.t));
+    const addOwner = (chs: ChannelDef[], ks: AnyKey[]) => {
+      for (const c of chs) {
+        if (hidden.has(c.id)) continue;
+        for (const k of ks) {
+          if (c.read(k) === undefined) continue;
+          next.add(keyId(c.id, k.t));
+        }
       }
+    };
+    for (const o of doc.objects) {
+      const ks = objectKeysOf(doc, o.id);
+      if (ks.length > 0) addOwner(objectChannels(o.id, o.position, o.rotation, o.scale), ks);
+    }
+    for (const c of doc.cameras) {
+      const ks = cameraKeysOf(doc, c.id);
+      if (ks.length > 0) addOwner(cameraChannels(c.id), ks);
     }
     setSelKeys(next);
   };
@@ -393,23 +463,31 @@ export function GraphEditor({ onMarkerChipDown }: { onMarkerChipDown?: (e: React
     // Freeze the y-scale for the whole drag: the display range the dv formula
     // uses stays the one on screen, so the point follows the cursor exactly.
     setRangeOverride(valueRange);
-    const entries = [...sel].map((s) => {
-      const [cid, ts] = s.split("|");
-      const c = channelById.get(cid);
-      return { chanId: cid, origT: parseFloat(ts), chan: c?.comp.chan, index: c?.comp.index ?? 0 };
+    // Every selected point carries its OWNER target — the selection can span
+    // several objects/cameras. Time moves apply to ALL of them; value shifts
+    // can only apply to the plotted view's channels (that y-scale is on
+    // screen; other owners have no displayed scale to follow).
+    const entries = [...sel].flatMap((s) => {
+      const p = parsePointId(s);
+      if (!p) return [];
+      const viewChan = channelById.get(s.slice(0, s.lastIndexOf("|")));
+      return [
+        {
+          id: s,
+          moveKey: `${p.ownerId}|${p.chan}.${p.index}|${p.t}`,
+          target: targetOfPoint(p.ownerId),
+          chan: p.chan,
+          index: p.index,
+          origT: p.t,
+          viewChan,
+        },
+      ];
     });
-    // One move per (channel axis, time): X/Y/Z are independent curves, so
-    // dragging "Position X" (or "Cam Position X") must not drag the Y/Z axes
-    // — and never other components' keys at the same time.
+    // One move per (owner, channel axis, time): X/Y/Z are independent curves,
+    // so dragging "Position X" (or "Cam Position X") must not drag the Y/Z
+    // axes — and never other components' keys at the same time.
     const compMoves = [
-      ...new Map(
-        entries
-          .filter((en) => en.chan)
-          .map((en) => [
-            `${en.chan}.${en.index}|${en.origT}`,
-            { chan: en.chan!, index: en.index, origT: en.origT },
-          ] as const),
-      ).values(),
+      ...new Map(entries.map((en) => [en.moveKey, en])).values(),
     ];
     const clampT = (v: number) => Math.min(Math.max(v, 0), doc.duration);
     const keysOf = (d: SceneDocument) =>
@@ -422,12 +500,11 @@ export function GraphEditor({ onMarkerChipDown }: { onMarkerChipDown?: (e: React
     // clamping cannot accumulate drift.
     const docStart = useStore.getState().doc;
     const startVals = entries.map((en) => {
-      const ch = channelById.get(en.chanId);
       const k = keysOf(docStart).find((kk) => Math.abs(kk.t - en.origT) < 1e-4);
-      const raw = k && ch ? ch.read(k) : undefined;
-      return ch && raw !== undefined ? raw * ch.scale : null;
+      const raw = k && en.viewChan ? en.viewChan.read(k) : undefined;
+      return en.viewChan && raw !== undefined ? raw * en.viewChan.scale : null;
     });
-    const curT = new Map(compMoves.map((m) => [`${m.chan}.${m.index}|${m.origT}`, m.origT]));
+    const curT = new Map(compMoves.map((m) => [m.moveKey, m.origT]));
     let curDt = 0;
     let curDv = 0;
     const move = (ev: PointerEvent) => {
@@ -435,12 +512,11 @@ export function GraphEditor({ onMarkerChipDown }: { onMarkerChipDown?: (e: React
       const dv = (-(ev.clientY - startY) / Math.max(plotH - 12, 1)) * (valueRange.max - valueRange.min);
       if (Math.abs(dt - curDt) > 1e-4) {
         for (const m of compMoves) {
-          const mk = `${m.chan}.${m.index}|${m.origT}`;
-          const from = curT.get(mk)!;
+          const from = curT.get(m.moveKey)!;
           const to = clampT(m.origT + dt);
           if (Math.abs(to - from) > 1e-6) {
-            retimeKeyChan(target, m.chan, m.index, from, to);
-            curT.set(mk, to);
+            retimeKeyChan(m.target, m.chan, m.index, from, to);
+            curT.set(m.moveKey, to);
           }
         }
         curDt = dt;
@@ -449,7 +525,7 @@ export function GraphEditor({ onMarkerChipDown }: { onMarkerChipDown?: (e: React
         setSelKeys(
           new Set(
             entries.map((en) =>
-              keyId(en.chanId, (en.chan && curT.get(`${en.chan}.${en.index}|${en.origT}`)) ?? en.origT),
+              keyId(en.id.slice(0, en.id.lastIndexOf("|")), curT.get(en.moveKey) ?? en.origT),
             ),
           ),
         );
@@ -458,12 +534,11 @@ export function GraphEditor({ onMarkerChipDown }: { onMarkerChipDown?: (e: React
         for (let i = 0; i < entries.length; i++) {
           const en = entries[i];
           const v0 = startVals[i];
-          const ch = channelById.get(en.chanId);
-          if (!ch || v0 === null) continue;
+          if (!en.viewChan || v0 === null) continue;
           const newT = clampT(en.origT + curDt);
           // Fresh doc per entry: sibling-channel patches on one shared key
           // must not clobber each other with stale components.
-          setKeyValues(target, newT, ch.makePatch(useStore.getState().doc, target, newT, v0 + dv));
+          setKeyValues(en.target, newT, en.viewChan.makePatch(useStore.getState().doc, en.target, newT, v0 + dv));
         }
         curDv = dv;
       }
@@ -476,7 +551,7 @@ export function GraphEditor({ onMarkerChipDown }: { onMarkerChipDown?: (e: React
       setSelKeys(
         new Set(
           entries.map((en) =>
-            keyId(en.chanId, (en.chan && curT.get(`${en.chan}.${en.index}|${en.origT}`)) ?? en.origT),
+            keyId(en.id.slice(0, en.id.lastIndexOf("|")), curT.get(en.moveKey) ?? en.origT),
           ),
         ),
       );
@@ -551,15 +626,22 @@ export function GraphEditor({ onMarkerChipDown }: { onMarkerChipDown?: (e: React
       if ((e.key === "Delete" || e.key === "Backspace") && selPoints.length) {
         e.preventDefault();
         e.stopPropagation();
-        const specs = new Map<string, { chan: (typeof selPoints)[number]["chan"]; index: number; t: number }>();
-        for (const p of selPoints) specs.set(`${p.chan}.${p.index}|${p.t.toFixed(4)}`, { chan: p.chan, index: p.index, t: p.t });
-        deleteKeyChans(target, [...specs.values()]);
+        // One mutation per user action: the selection can span several
+        // owners, so delete all of them as a single undo step.
+        const groups = new Map<string, { target: KeyTarget; specs: Map<string, { chan: (typeof selPoints)[number]["chan"]; index: number; t: number }> }>();
+        for (const p of selPoints) {
+          let g = groups.get(p.ownerId);
+          if (!g) groups.set(p.ownerId, { target: p.target, specs: new Map() });
+          g = groups.get(p.ownerId)!;
+          g.specs.set(`${p.chan}.${p.index}|${p.t.toFixed(4)}`, { chan: p.chan, index: p.index, t: p.t });
+        }
+        deleteKeyChansGroups([...groups.values()].map((g) => ({ target: g.target, specs: [...g.specs.values()] })));
         setSelKeys(new Set());
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [selKeys, selPoints, deleteKeyChans, target]);
+  }, [selKeys, selPoints, deleteKeyChansGroups]);
 
   const step = tickStepFor(zoom);
   const tickCount = Math.floor(doc.duration / step + 1e-6);
@@ -587,47 +669,99 @@ export function GraphEditor({ onMarkerChipDown }: { onMarkerChipDown?: (e: React
   return (
     <>
       <div className="graph-labels">
-        <div className="tl-ruler" />
-        <div className="graph-target">
-          <button
-            className={`btn small ${effectiveKind === "object" ? "active" : ""}`}
-            disabled={!selectedObj}
-            onClick={() => setKind("object")}
-            title={t("graph.objectTarget")}
-          >
-            {selectedObj ? selectedObj.name : t("graph.noObject")}
-          </button>
-          <select
-            className={`graph-camsel ${effectiveKind === "camera" ? "active" : ""}`}
-            value={camId}
-            title={t("graph.cameraTarget")}
-            onChange={(e) => {
-              setKind("camera");
-              setCamSel(e.target.value);
-              setSelKeys(new Set());
-            }}
-          >
-            {doc.cameras.map((c) => (
-              <option key={c.id} value={c.id}>
-                🎥 {c.name}
-                {c.id === doc.activeCameraId ? " ★" : ""}
-              </option>
-            ))}
-          </select>
-        </div>
         <div className="graph-actions">
-          <button className="btn small" onClick={selectAllPoints} title={t("graph.selectAll")}>
+          <button className="btn small" onClick={selectAllPoints} title={t("graph.selectAllHint")}>
             {t("graph.selectAll")}
           </button>
           <button
             className="btn small"
             onClick={() => setSelKeys(new Set())}
             disabled={!selKeys.size}
-            title={t("graph.deselectAll")}
+            title={t("graph.deselectAllHint")}
           >
             {t("graph.deselectAll")}
           </button>
         </div>
+        <div className="graph-target">
+          <button
+            className={`btn small ${effectiveKind === "object" ? "active" : ""}`}
+            disabled={!selectedObj}
+            onClick={() => setKind("object")}
+            title={t("graph.objectsTab")}
+          >
+            {t("graph.objectsTab")}
+          </button>
+          <button
+            className={`btn small ${effectiveKind === "camera" ? "active" : ""}`}
+            onClick={() => setKind("camera")}
+            title={t("graph.camerasTab")}
+          >
+            {t("graph.camerasTab")}
+          </button>
+        </div>
+        {effectiveKind === "camera" ? (
+          doc.cameras.length > 0 && (
+            <div className="graph-tree">
+              {doc.cameras.map((c) => (
+                <div
+                  key={c.id}
+                  className={`graph-node ${camId === c.id ? "active" : ""}`}
+                  title={t("graph.cameraNodeHint")}
+                  onClick={() => {
+                    setCamSel(c.id);
+                    setKind("camera");
+                  }}
+                >
+                  <span className="name">🎥 {c.name}</span>
+                  <span style={{ flex: 1 }} />
+                  {c.id === doc.activeCameraId && <span className="star">★</span>}
+                  <span className="cnt">{cameraKeysOf(doc, c.id).length}</span>
+                </div>
+              ))}
+            </div>
+          )
+        ) : (
+          treeGroups.length > 0 && (
+            <div className="graph-tree">
+              {treeGroups.map(({ collection, members }) => (
+                <Fragment key={collection?.id ?? "root"}>
+                  {collection && (
+                    <div
+                      className="graph-col"
+                      title={t("graph.collectionNode")}
+                      onClick={() => toggleCollection(collection.id)}
+                    >
+                      <span className="tri">{collapsedCols.has(collection.id) ? "▸" : "▾"}</span>
+                      <span className="name">{collection.name}</span>
+                      <span style={{ flex: 1 }} />
+                      <span className="cnt">{members.length}</span>
+                    </div>
+                  )}
+                  {(collection ? !collapsedCols.has(collection.id) : true) &&
+                    members.map((o) => {
+                      const isActive = effectiveKind === "object" && selectedObj?.id === o.id;
+                      return (
+                        <div
+                          key={o.id}
+                          className={`graph-node ${collection ? "child" : ""} ${isActive ? "active" : ""}`}
+                          title={t("graph.nodeHint")}
+                          onClick={() => {
+                            select(o.id, false);
+                            setKind("object");
+                          }}
+                        >
+                          <span className="dot" style={{ background: o.color }} />
+                          <span className="name">{o.name}</span>
+                          <span style={{ flex: 1 }} />
+                          {isActive && <span className="cnt">◑</span>}
+                        </div>
+                      );
+                    })}
+                </Fragment>
+              ))}
+            </div>
+          )
+        )}
         {channels.map((c) => (
           <div key={c.id} className="graph-chan" onClick={() => select(selectedObj?.id ?? null, false)}>
             <span className="dot" style={{ background: c.color }} />
@@ -666,7 +800,17 @@ export function GraphEditor({ onMarkerChipDown }: { onMarkerChipDown?: (e: React
             className="btn small"
             disabled={!selPoints.length}
             title={t("graph.smooth")}
-            onClick={() => smoothKeys(target, selPoints, sigma)}
+            onClick={() => {
+              // One mutation per user action: smooth all owners the selection
+              // spans as a single undo step.
+              const groups = new Map<string, { target: KeyTarget; points: typeof selPoints }>();
+              for (const p of selPoints) {
+                let g = groups.get(p.ownerId);
+                if (!g) groups.set(p.ownerId, { target: p.target, points: [] });
+                groups.get(p.ownerId)!.points.push(p);
+              }
+              smoothKeysGroups([...groups.values()], sigma);
+            }}
           >
             ≈
           </button>

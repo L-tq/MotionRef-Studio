@@ -295,6 +295,31 @@ export function defaultCollectionName(doc: SceneDocument): string {
   return `Collection ${n}`;
 }
 
+/** Key-framed objects grouped by their Outliner collection, for the editors'
+ *  label-column hierarchy. An object qualifies when it is selected or its
+ *  ACTIVE action has keys (the same rule the tracks timeline uses for rows).
+ *  Collections keep document order and drop out when none of their members
+ *  qualify; the final group (`collection: null`) holds uncollected objects
+ *  and is likewise omitted when empty. */
+export function keyedObjectsByCollection(
+  doc: SceneDocument,
+  selection: readonly string[] = [],
+): Array<{ collection: CollectionDesc | null; members: ObjectDesc[] }> {
+  const eligible = doc.objects.filter((o) => {
+    if (selection.includes(o.id)) return true;
+    const act = activeActionOfOwner(doc, { objectId: o.id });
+    return !!act && act.keys.length > 0;
+  });
+  const groups: Array<{ collection: CollectionDesc | null; members: ObjectDesc[] }> = [];
+  for (const col of doc.collections) {
+    const members = eligible.filter((o) => o.collectionId === col.id);
+    if (members.length > 0) groups.push({ collection: col, members });
+  }
+  const root = eligible.filter((o) => !o.collectionId || !doc.collections.some((c) => c.id === o.collectionId));
+  if (root.length > 0) groups.push({ collection: null, members: root });
+  return groups;
+}
+
 /** Accept documents saved before `aspect` existed. */
 export function docAspect(doc: SceneDocument): number {
   return typeof doc.aspect === "number" && doc.aspect > 0 ? doc.aspect : 16 / 9;
