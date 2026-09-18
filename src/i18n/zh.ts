@@ -130,7 +130,7 @@ export const zh: Record<string, string> = {
   "timeline.collectionRow": "集合 — 点击选中其成员 · 折叠箭头可收起分组",
   "timeline.toggleCollection": "折叠 / 展开集合",
   "timeline.keyHint": "拖动移动 · Ctrl+点击多选 · Delete 删除所选",
-  "timeline.rowHint": "点击移动播放头 · 拖动框选关键帧 · Ctrl+拖动追加选择 · 在名称栏滚轮可上下滚动",
+  "timeline.rowHint": "拖动框选关键帧 · Ctrl+拖动追加选择 · 点击上方时间标尺移动播放头 · 在名称栏滚轮可上下滚动",
   "timeline.onFrame": "{n} 个 onFrame 脚本",
   "timeline.zoom": "时间轴缩放",
   "timeline.zoomIn": "放大 (Ctrl + 滚轮)",

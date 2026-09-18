@@ -339,8 +339,9 @@ export function Timeline() {
 
   /** Rubber-band multi-select on empty row space (Blender box select, same
    *  interaction as the graph editor). Ctrl/Shift adds to the selection. A
-   *  tiny box counts as a plain click: scrub the playhead there and — unless
-   *  a modifier is held — clear the selection (hybrid row behavior). */
+   *  tiny box counts as a plain click: clear the key selection (unless a
+   *  modifier is held) — moving the playhead stays ruler-only, so clicks on
+   *  the rows never fight the box-select gesture. */
   const beginBoxSelect = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
     pause();
@@ -368,11 +369,7 @@ export function Timeline() {
       const maxX = Math.max(x0, x1);
       const minY = Math.min(y0, y1);
       const maxY = Math.max(y0, y1);
-      if (maxX - minX < 3 && maxY - minY < 3) {
-        // Plain click on empty row space: move the playhead (ruler behavior).
-        if (!additive) setPlayhead(Math.min(Math.max(xToT(x0), 0), doc.duration));
-        return;
-      }
+      if (maxX - minX < 3 && maxY - minY < 3) return; // plain click: selection already cleared above
       const next = additive ? new Set(selKeys) : new Set<string>();
       rows.forEach((row, ri) => {
         const cy = ROW_H * (ri + 1) + ROW_H / 2; // markers lane is the first row

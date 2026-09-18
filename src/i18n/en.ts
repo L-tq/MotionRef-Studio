@@ -130,7 +130,7 @@ export const en: Record<string, string> = {
   "timeline.collectionRow": "Collection — click selects its members · caret collapses the group",
   "timeline.toggleCollection": "Collapse / expand collection",
   "timeline.keyHint": "Drag to move · Ctrl+click to multi-select · Delete removes the selection",
-  "timeline.rowHint": "Click: move playhead · drag: box-select keys · Ctrl+drag adds to the selection · wheel on the names scrolls rows",
+  "timeline.rowHint": "Drag: box-select keys · Ctrl+drag adds to the selection · click the ruler above to move the playhead · wheel on the names scrolls rows",
   "timeline.onFrame": "{n} onFrame hook(s)",
   "timeline.zoom": "Timeline zoom",
   "timeline.zoomIn": "Zoom in (Ctrl + wheel)",

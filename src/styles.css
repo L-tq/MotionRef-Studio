@@ -759,6 +759,12 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .tl-ruler {
   height: 22px;
   position: relative;
+  /* Scrolled rows/labels translate up underneath: keep the ruler (and the
+   * corner box in the names column) painted on top so it stays clickable and
+   * keyframes/markers slide behind it instead of overlapping the ticks.
+   * Above .tl-marker (4); .playhead is z-index 5 but later in the DOM, so it
+   * still draws over the ruler. */
+  z-index: 5;
   border-bottom: 1px solid var(--border);
   cursor: ew-resize;
   user-select: none;
