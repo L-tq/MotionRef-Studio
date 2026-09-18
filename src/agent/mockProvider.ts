@@ -52,6 +52,12 @@ export async function runMockTurn(
   execute: (name: string, argsJson: string, ctx: ToolContext) => Promise<ToolResult>,
   rt: TaskRuntime,
 ): Promise<void> {
+  // Honor Stop: between every chunk and step the turn checks the abort signal
+  // so a mock turn ends exactly like a real-provider one (AbortError → the
+  // "stopped by user" notice), instead of streaming on regardless.
+  const checkAborted = () => {
+    if (rt.abort?.signal.aborted) throw new DOMException("aborted", "AbortError");
+  };
   const sawImages = input.images.length > 0;
 
   // Stream a little opening text for realism.
@@ -62,18 +68,23 @@ export async function runMockTurn(
     : `Running the offline mock pipeline: I'll build a demo scene with a bouncing ball, an orbiting moon and a moving camera.`;
   let streamed = "";
   for (const chunk of opener.match(/.{1,24}/gs) ?? []) {
+    checkAborted();
     streamed += chunk;
     turnTaskPatch(taskId, eventId, { text: streamed } as never);
     await sleep(24);
   }
 
+  checkAborted();
   await execute("execute_code", JSON.stringify({ code: DEMO_CODE }), ctx);
+  checkAborted();
   const snap1 = await execute("snapshot", JSON.stringify({ time: 0 }), ctx);
   if (snap1.snapshot) appendSnapshotFeedback(rt, snap1.snapshot);
   await sleep(150);
+  checkAborted();
   const snap2 = await execute("snapshot", JSON.stringify({ time: 3 }), ctx);
   if (snap2.snapshot) appendSnapshotFeedback(rt, snap2.snapshot);
 
+  checkAborted();
   turnTaskPush(taskId, {
     id: `${eventId}f`,
     type: "assistant",
