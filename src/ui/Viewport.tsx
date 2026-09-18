@@ -1,4 +1,17 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  Camera,
+  Check,
+  Footprints,
+  Grid3x3,
+  MousePointer2,
+  Move,
+  RotateCcw,
+  RotateCw,
+  Scaling,
+  Scan,
+  Video,
+} from "lucide-react";
 import { Engine, snapshotDataUrl, type FrameSource, type GizmoMode } from "../core/engine";
 import type { PivotMode } from "../core/types";
 import { downloadBlob } from "../core/videoExport";
@@ -8,11 +21,11 @@ import { useStore } from "../state/store";
 import { useT } from "../i18n";
 import { NavGizmo } from "./NavGizmo";
 
-const GIZMO_BUTTONS: Array<{ mode: GizmoMode; icon: string; labelKey: string }> = [
-  { mode: "select", icon: "▭", labelKey: "viewport.select" },
-  { mode: "translate", icon: "✥", labelKey: "viewport.translate" },
-  { mode: "rotate", icon: "⟳", labelKey: "viewport.rotate" },
-  { mode: "scale", icon: "⤢", labelKey: "viewport.scale" },
+const GIZMO_BUTTONS: Array<{ mode: GizmoMode; icon: ReactNode; labelKey: string }> = [
+  { mode: "select", icon: <MousePointer2 size={15} />, labelKey: "viewport.select" },
+  { mode: "translate", icon: <Move size={15} />, labelKey: "viewport.translate" },
+  { mode: "rotate", icon: <RotateCw size={15} />, labelKey: "viewport.rotate" },
+  { mode: "scale", icon: <Scaling size={15} />, labelKey: "viewport.scale" },
 ];
 
 /** Blender pivot-point modes, offered by right-clicking the rotate button. */
@@ -239,31 +252,31 @@ export function Viewport() {
           title={t("viewport.grid")}
           onClick={() => setUi("showGrid", !showGrid)}
         >
-          ▦
+          <Grid3x3 size={15} />
         </button>
         <button
           className={`icon-btn ${cameraPreview ? "active" : ""}`}
           title={t("viewport.cameraPreview")}
           onClick={() => setUi("cameraPreview", !cameraPreview)}
         >
-          🎥
+          <Video size={15} />
         </button>
         <div className="divider" />
         <button className="icon-btn" title={t("viewport.frame")} onClick={() => engineRef.current?.frameSelection()}>
-          ⛶
+          <Scan size={15} />
         </button>
         <button
           className={`icon-btn ${walk.active ? "active" : ""}`}
           title={t("viewport.walk")}
           onClick={toggleWalk}
         >
-          🚶
+          <Footprints size={15} />
         </button>
         <button className="icon-btn" title={t("viewport.resetView")} onClick={() => engineRef.current?.resetView()}>
-          ⟲
+          <RotateCcw size={15} />
         </button>
         <button className="icon-btn" title={t("viewport.snapshot")} onClick={snapshotNow}>
-          📷
+          <Camera size={15} />
         </button>
       </div>
       {pivotMenuAt && (
@@ -279,7 +292,7 @@ export function Viewport() {
                 setPivotMenuAt(null);
               }}
             >
-              <span className="pivot-check">{pivotMode === m.mode ? "✓" : ""}</span>
+              <span className="pivot-check">{pivotMode === m.mode && <Check size={10} />}</span>
               {t(m.labelKey)}
             </button>
           ))}

@@ -41,7 +41,7 @@ export const en: Record<string, string> = {
   "projects.load": "Load",
   "projects.confirmNew": "Start a new empty project? Unsaved changes will be lost.",
   "projects.confirmDelete": "Delete project “{name}”?",
-  "projects.storageNote": "💾 Save keeps the project in this browser (localStorage + IndexedDB) — it stays on this device. To back up or move a project to another device, including its chat history, use ⬇/⬆ Export/Import Project in the toolbar.",
+  "projects.storageNote": "Save keeps the project in this browser (localStorage + IndexedDB) — it stays on this device. To back up or move a project to another device, including its chat history, use Export/Import Project in the Projects menu.",
   "projects.workspaceNote": "Projects are .mrsproj.json files in the studio server's workspace — external agents can see and version them alongside their code.",
 
   // Panels
@@ -124,7 +124,7 @@ export const en: Record<string, string> = {
   "timeline.markerClickHint": "click to edit",
   "timeline.markerLiveHint": "Shows live (a marker cuts to this camera) · click to make it the active camera",
   "timeline.camera": "Camera",
-  "timeline.camRowHint": "Click to edit this camera · ★ marks the rendering camera (manual active + marker cuts)",
+  "timeline.camRowHint": "Click to edit this camera · the star marks the rendering camera (manual active + marker cuts)",
   "timeline.noTracks": "No keyframes yet — select an object and press K, or press C to keyframe the camera.",
   "timeline.keys": "{n} keys",
   "timeline.collectionRow": "Collection — click selects its members · caret collapses the group",
@@ -260,7 +260,7 @@ export const en: Record<string, string> = {
   // Graph editor
   "graph.objectsTab": "Objects",
   "graph.camerasTab": "Cameras",
-  "graph.cameraNodeHint": "Click to show this camera's curves · ★ = rendering camera",
+  "graph.cameraNodeHint": "Click to show this camera's curves · the star = rendering camera",
   "graph.collectionNode": "Collection — click to collapse / expand",
   "graph.nodeHint": "Click to show this object's curves",
   "graph.toggleChannel": "Show / hide channel",
@@ -357,9 +357,9 @@ export const en: Record<string, string> = {
   // Misc
   "error.invalidJson": "Invalid scene JSON: {msg}",
   "error.invalidProjectBundle": "Invalid project file: {msg}",
-  "error.wrongImporterScene": "This is a scene-only file (no chat history). Use ⬆ Import JSON in the toolbar, not the Projects menu.",
-  "error.wrongImporterProject": "This is a full project file (scene + chat). Use ⬆ Import in the Projects menu (🗂 button), not Import JSON in the toolbar.",
-  "error.notAProjectBundle": "This file is not a project file. Export a project with ⬇ Export in the Projects menu first.",
+  "error.wrongImporterScene": "This is a scene-only file (no chat history). Use Import JSON in the toolbar, not the Projects menu.",
+  "error.wrongImporterProject": "This is a full project file (scene + chat). Use Import in the Projects menu, not Import JSON in the toolbar.",
+  "error.notAProjectBundle": "This file is not a project file. Export a project with Export in the Projects menu first.",
   "error.storageFull": "localStorage is full — export the scene JSON instead.",
   "error.sceneLocked": "Scene locked — another agent or tab is editing. View only until it finishes.",
   "error.studio": "Studio server: {msg}",

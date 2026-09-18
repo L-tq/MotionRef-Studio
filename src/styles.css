@@ -139,6 +139,8 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 .btn.danger:hover { border-color: var(--danger); background: rgba(255, 92, 124, 0.08); }
 .btn.active { background: rgba(124, 92, 255, 0.18); border-color: var(--accent); color: #c9bbff; }
 .btn.small { padding: 3px 8px; font-size: 12px; }
+/* Lucide icons inherit currentColor; keep them from squashing in tight rows. */
+.btn svg, .icon-btn svg, .btn.small svg { flex-shrink: 0; }
 
 .icon-btn {
   display: inline-flex;
@@ -218,7 +220,7 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 }
 .pivot-item:hover { background: var(--bg-4); }
 .pivot-item.active { color: #c9bbff; background: rgba(124, 92, 255, 0.14); }
-.pivot-check { width: 13px; flex: none; }
+.pivot-check { width: 13px; flex: none; display: inline-flex; align-items: center; justify-content: center; }
 .pivot-menu-hint {
   color: var(--text-3);
   font-size: 10.5px;
@@ -327,6 +329,9 @@ input[type="checkbox"] { accent-color: var(--accent); }
   font-size: 10px;
   cursor: pointer;
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .crow .tri:hover { color: var(--text); }
 .crow .col-icon { width: 14px; height: 14px; flex-shrink: 0; color: var(--text-2); }
@@ -373,7 +378,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
   width: 100%; padding: 1px 4px; font-size: 12px; background: var(--bg-4);
   border: 1px solid var(--accent); border-radius: 3px;
 }
-.hrow .badge { font-size: 10px; color: var(--accent-2); }
+.hrow .badge { font-size: 10px; color: var(--accent-2); background: none; min-width: 0; height: auto; padding: 0; margin-left: 0; line-height: 1; display: inline-flex; align-items: center; }
 .hrow .icon-btn { width: 22px; height: 22px; opacity: 0; }
 .hrow:hover .icon-btn { opacity: 1; }
 .hrow .icon-btn.hidden-eye { opacity: 0.4; }
@@ -493,7 +498,9 @@ input[type="checkbox"] { accent-color: var(--accent); }
 }
 .timeline-bar label { color: var(--text-3); font-size: 11px; display: flex; align-items: center; gap: 4px; }
 /* Auto-key record dot: dim when off, red when recording (Blender-style). */
-.rec-dot { font-size: 13px; color: #6b3640; padding: 2px 7px; }
+/* Auto-key recording dot, drawn in CSS so it tracks currentColor exactly. */
+.rec-dot { padding: 2px 7px; display: inline-flex; align-items: center; color: #6b3640; }
+.rec-dot::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 .rec-dot.on {
   color: var(--danger);
   border-color: var(--danger);
@@ -557,6 +564,8 @@ input[type="checkbox"] { accent-color: var(--accent); }
   color: var(--text-3);
   cursor: pointer;
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
 }
 .tl-cam-star.on { color: #ffc24d; }
 .graph-chan {
@@ -596,12 +605,12 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .graph-node.child { padding-left: 28px; }
 .graph-col:hover, .graph-node:hover { background: var(--bg-3); }
 .graph-node.active, .graph-node.active:hover { color: var(--warn); }
-.graph-col .tri { font-size: 10px; color: var(--text-3); flex-shrink: 0; width: 10px; }
+.graph-col .tri { font-size: 10px; color: var(--text-3); flex-shrink: 0; width: 10px; display: inline-flex; align-items: center; justify-content: center; }
 .graph-col .name, .graph-node .name { overflow: hidden; text-overflow: ellipsis; }
+.graph-node .name { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+.graph-node .star { color: #ffc24d; flex-shrink: 0; display: inline-flex; align-items: center; }
 .graph-node .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 .graph-col .cnt, .graph-node .cnt { font-size: 10px; color: var(--text-3); flex-shrink: 0; }
-/* ★ on the render-active camera in the camera list. */
-.graph-node .star { font-size: 10px; color: #ffc24d; flex-shrink: 0; }
 /* Select all / deselect all toolbar sits IN the time-axis strip at the very
    top of the label column (same 22px row height as the plot ruler) and stays
    pinned while the owner tree + channel list scroll. */
@@ -829,6 +838,9 @@ input[type="checkbox"] { accent-color: var(--accent); }
   color: var(--text-3);
   cursor: pointer;
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .action-caret:hover { color: var(--text); }
 .action-head input {
@@ -841,7 +853,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
   border-radius: 3px;
   color: var(--text);
 }
-.action-star { color: #ffc24d; font-size: 11px; flex-shrink: 0; }
+.action-star { color: #ffc24d; flex-shrink: 0; display: inline-flex; align-items: center; }
 .keyframe.dimmed-key { opacity: 0.45; }
 .keyframe.dimmed-key:hover { opacity: 1; }
 
@@ -863,7 +875,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 /* ---------- camera-cut markers (Blender-style) ---------- */
 .track-label.markers { color: var(--warn); cursor: default; }
 .track-label.markers:hover { background: none; }
-.track-label.markers .tl-marker-glyph { font-size: 10px; }
+.track-label.markers .tl-marker-glyph { display: inline-flex; align-items: center; }
 .tl-row.markers { background: rgba(255, 176, 32, 0.035); }
 .tl-marker {
   position: absolute;
@@ -885,7 +897,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
   max-width: 96px;
   z-index: 4;
 }
-.tl-marker .tl-marker-flag { font-size: 9px; flex-shrink: 0; }
+.tl-marker .tl-marker-flag { flex-shrink: 0; display: inline-flex; align-items: center; }
 .tl-marker .tl-marker-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tl-marker:hover { background: var(--bg-3); color: #ffd27a; }
 .tl-marker.selected { background: var(--warn); color: #241a00; border-color: #ffd27a; }
@@ -911,6 +923,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .marker-pop-delete:hover { border-color: var(--danger); background: rgba(255, 92, 124, 0.08); }
 .banner-live-cam { font-weight: 600; margin-left: 4px; }
 .live-badge { color: var(--warn); font-size: 11px; display: inline-flex; align-items: center; gap: 3px; }
+.live-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
 
 .playhead {
   position: absolute;
@@ -970,6 +983,10 @@ input[type="checkbox"] { accent-color: var(--accent); }
 }
 .right-tabs button {
   flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   padding: 9px;
   background: transparent;
   border: none;
@@ -982,7 +999,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .right-tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
 .right-tabs button .running-dot {
   display: inline-block; width: 7px; height: 7px; border-radius: 50%;
-  background: var(--accent-2); margin-left: 6px;
+  background: var(--accent-2);
   animation: pulse 1.2s infinite;
 }
 
@@ -1147,6 +1164,9 @@ input[type="checkbox"] { accent-color: var(--accent); }
   padding: 1px 8px;
   cursor: pointer;
   align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 .img-toggle:hover { color: var(--text); border-color: var(--accent); }
 
@@ -1170,16 +1190,20 @@ input[type="checkbox"] { accent-color: var(--accent); }
   user-select: none;
 }
 .tool-card > summary::-webkit-details-marker { display: none; }
-/* Disclosure affordance (the native marker is hidden above). */
+/* Disclosure affordance (the native marker is hidden above): a border-drawn
+   chevron matching the lucide icon stroke, right when closed / down when open. */
 .tool-card > summary::after {
-  content: "▸";
+  content: "";
   margin-left: auto;
   padding-left: 8px;
-  color: var(--text-3);
-  font-size: 10px;
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid var(--text-3);
+  border-bottom: 1.5px solid var(--text-3);
+  transform: rotate(-45deg);
   transition: transform 0.12s;
 }
-.tool-card[open] > summary::after { content: "▾"; }
+.tool-card[open] > summary::after { transform: rotate(45deg); }
 .tool-card > summary .status { font-size: 10px; padding: 1px 6px; border-radius: 999px; }
 .tool-card .status.ok { background: rgba(61, 220, 151, 0.15); color: var(--accent-2); }
 .tool-card .status.error { background: rgba(255, 92, 124, 0.15); color: var(--danger); }
@@ -1205,9 +1229,9 @@ input[type="checkbox"] { accent-color: var(--accent); }
   cursor: zoom-in;
 }
 .snapshot-msg img.thumb { height: 72px; width: auto; align-self: flex-start; }
-.snapshot-msg .cap { font-size: 11px; color: var(--text-3); font-family: var(--mono); cursor: pointer; user-select: none; }
+.snapshot-msg .cap { font-size: 11px; color: var(--text-3); font-family: var(--mono); cursor: pointer; user-select: none; display: inline-flex; align-items: center; gap: 4px; }
 .snapshot-msg .cap:hover { color: var(--text-2); }
-.snapshot-msg .cap .toggle { display: inline-block; width: 11px; }
+.snapshot-msg .cap .toggle { display: inline-flex; align-items: center; width: 11px; }
 
 /* --- @mention popup (anchored at the composer caret) --- */
 .mention-pop {
@@ -1262,6 +1286,9 @@ input[type="checkbox"] { accent-color: var(--accent); }
   flex: 0 0 auto;
   font-size: 11px;
   color: var(--text-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .mention-label {
   flex: 1 1 auto;
@@ -1328,7 +1355,11 @@ button.mention-chip:hover { background: rgba(124, 92, 255, 0.3); }
   font-size: 12px;
   line-height: 1.5;
   word-break: break-word;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
 }
+.msg.error-banner svg { flex-shrink: 0; margin-top: 2px; }
 .msg.notice {
   color: var(--text-3);
   font-size: 11.5px;
@@ -1480,6 +1511,7 @@ details.docs { border: 1px solid var(--border); border-radius: var(--radius); ov
 details.docs summary {
   padding: 7px 10px; cursor: pointer; color: var(--text-2); font-size: 11.5px; user-select: none;
   background: var(--bg-3); list-style: none;
+  display: flex; align-items: center; gap: 6px;
 }
 details.docs summary::-webkit-details-marker { display: none; }
 details.docs pre {

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { Box, Video } from "lucide-react";
 import { useT } from "../i18n";
 import type { MentionItem } from "../agent/mentions";
 
@@ -77,7 +78,7 @@ export function MentionPopup({
                 {item.dataUrl ? (
                   <img className="mention-thumb" src={item.dataUrl} alt="" />
                 ) : (
-                  <span className="mention-glyph">{item.kind === "camera" ? "📷" : "◆"}</span>
+                  <span className="mention-glyph">{item.kind === "camera" ? <Video size={11} /> : <Box size={11} />}</span>
                 )}
                 <span className="mention-label">{item.label}</span>
                 {item.sublabel && <span className="mention-sub">{item.sublabel}</span>}

@@ -18,6 +18,7 @@
  *  shared key so other properties keep their own keys at their own times.
  */
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, ChevronRight, Star, Video } from "lucide-react";
 import { useStore, type KeyTarget } from "../state/store";
 import { useT } from "../i18n";
 import { activeCameraOf, cameraKeysOf, keyedObjectsByCollection, objectKeysOf, type CameraKey, type KeyVec3, type MarkerDesc, type SceneDocument, type TransformKey, type Vec3 } from "../core/types";
@@ -712,9 +713,16 @@ export function GraphEditor({ onMarkerChipDown }: { onMarkerChipDown?: (e: React
                     setKind("camera");
                   }}
                 >
-                  <span className="name">🎥 {c.name}</span>
+                  <span className="name">
+                    <Video size={11} />
+                    {c.name}
+                  </span>
                   <span style={{ flex: 1 }} />
-                  {c.id === doc.activeCameraId && <span className="star">★</span>}
+                  {c.id === doc.activeCameraId && (
+                    <span className="star">
+                      <Star size={10} fill="currentColor" />
+                    </span>
+                  )}
                   <span className="cnt">{cameraKeysOf(doc, c.id).length}</span>
                 </div>
               ))}
@@ -731,7 +739,7 @@ export function GraphEditor({ onMarkerChipDown }: { onMarkerChipDown?: (e: React
                       title={t("graph.collectionNode")}
                       onClick={() => toggleCollection(collection.id)}
                     >
-                      <span className="tri">{collapsedCols.has(collection.id) ? "▸" : "▾"}</span>
+                      <span className="tri">{collapsedCols.has(collection.id) ? <ChevronRight size={10} /> : <ChevronDown size={10} />}</span>
                       <span className="name">{collection.name}</span>
                       <span style={{ flex: 1 }} />
                       <span className="cnt">{members.length}</span>

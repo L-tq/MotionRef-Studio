@@ -1,4 +1,5 @@
 import { useRef, useState, type DragEvent, type ReactElement } from "react";
+import { ChevronDown, ChevronRight, Copy, Diamond, Eye, EyeOff, Plus, X } from "lucide-react";
 import { GEOMETRY_CATALOG, type GeometryType, type ObjectDesc } from "../core/types";
 import { useStore } from "../state/store";
 import { getLocale, useT } from "../i18n";
@@ -171,7 +172,9 @@ export function LeftPanel() {
         </span>
       )}
       {doc.actions.some((a) => a.kind === "object" && a.objectId === obj.id && a.keys.length > 0) ? (
-        <span className="badge" title={t("outliner.keyed")}>◆</span>
+        <span className="badge" title={t("outliner.keyed")}>
+          <Diamond size={8} fill="currentColor" />
+        </span>
       ) : null}
       <button
         className={`icon-btn ${obj.visible ? "" : "hidden-eye"}`}
@@ -184,7 +187,7 @@ export function LeftPanel() {
           });
         }}
       >
-        {obj.visible ? "👁" : "🚫"}
+        {obj.visible ? <Eye size={12} /> : <EyeOff size={12} />}
       </button>
       <button
         className="icon-btn"
@@ -196,7 +199,7 @@ export function LeftPanel() {
           duplicateObjects(selected.has(obj.id) && selection.length > 1 ? [...selection] : [obj.id]);
         }}
       >
-        ⧉
+        <Copy size={12} />
       </button>
       <button
         className="icon-btn danger"
@@ -206,7 +209,7 @@ export function LeftPanel() {
           deleteObjects([obj.id]);
         }}
       >
-        ✕
+        <X size={12} />
       </button>
     </div>
   );
@@ -249,7 +252,7 @@ export function LeftPanel() {
         <span className="spacer" />
         <span>{t("panel.objects", { n: doc.objects.length })}</span>
         <button className="icon-btn new-collection" title={t("outliner.newCollection")} onClick={addCollection}>
-          ＋
+          <Plus size={12} />
         </button>
       </div>
       <div
@@ -291,7 +294,7 @@ export function LeftPanel() {
                   setRootOpen((v) => !v);
                 }}
               >
-                {rootOpen ? "▾" : "▸"}
+                {rootOpen ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
               </button>
               <span className="col-icon">{FOLDER_ICON}</span>
               <span className="name">{t("outliner.sceneCollection")}</span>
@@ -328,7 +331,7 @@ export function LeftPanel() {
                             });
                           }}
                         >
-                          {open ? "▾" : "▸"}
+                          {open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
                         </button>
                         <span className="col-icon">{FOLDER_ICON}</span>
                         {renamingCol === col.id ? (
@@ -367,7 +370,7 @@ export function LeftPanel() {
                             setCollectionVisible(col.id, !anyVisible);
                           }}
                         >
-                          {anyVisible ? "👁" : "🚫"}
+                          {anyVisible ? <Eye size={12} /> : <EyeOff size={12} />}
                         </button>
                         <button
                           className="icon-btn danger"
@@ -377,7 +380,7 @@ export function LeftPanel() {
                             deleteCollection(col.id);
                           }}
                         >
-                          ✕
+                          <X size={12} />
                         </button>
                       </div>
                       {open && members.map((o) => renderObjectRow(o, true))}

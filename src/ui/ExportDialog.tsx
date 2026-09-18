@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { Clapperboard } from "lucide-react";
 import { useStore } from "../state/store";
 import { useT } from "../i18n";
 import { downloadBlob, exportVideo, pickVideoMime, validateDocForExport } from "../core/videoExport";
@@ -74,7 +75,8 @@ export function ExportDialog() {
     <div className="modal-overlay">
       <div className="modal">
         <div className="modal-header">
-          🎬 {t("export.title")}
+          <Clapperboard size={14} />
+          {t("export.title")}
           <span className="spacer" />
         </div>
         <div className="modal-body">

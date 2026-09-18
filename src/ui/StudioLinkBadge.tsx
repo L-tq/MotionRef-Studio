@@ -5,9 +5,15 @@
  *  or another tab) holds the lock, a slim banner marks this tab view-only —
  *  every doc mutation is blocked (the store refuses it) with a toast. */
 import { useState, type CSSProperties } from "react";
+import { Bot, BrainCircuit, Lock, Unlock, User, Link2 } from "lucide-react";
 import { useStore } from "../state/store";
 import { useT } from "../i18n";
 import { forceUnlock } from "../state/studioLink";
+
+/** Who is typing: external MCP agent, the tab's built-in agent, or a human. */
+function HolderIcon({ kind, size = 12 }: { kind: string; size?: number }) {
+  return kind === "mcp" ? <Bot size={size} /> : kind === "agent" ? <BrainCircuit size={size} /> : <User size={size} />;
+}
 
 export function StudioLinkBadge() {
   const t = useT();
@@ -25,12 +31,9 @@ export function StudioLinkBadge() {
   const holderName = (h: { kind: string; label: string }) =>
     h.label || (h.kind === "user" ? "Web UI" : h.kind === "mcp" ? "External agent" : "Agent");
 
-  /** Who is typing: external MCP agent, the tab's built-in agent, or a human. */
-  const holderIcon = (kind: string) => (kind === "mcp" ? "🤖" : kind === "agent" ? "🧠" : "👤");
-
   const titleLines = [t("studio.title")];
   if (studio.mcpLabels.length > 0) titleLines.push(`${t("studio.externalAgents")}: ${studio.mcpLabels.join(", ")}`);
-  if (holder) titleLines.push(`${holderIcon(holder.kind)} ${holderName(holder)}`);
+  if (holder) titleLines.push(holderName(holder));
 
   return (
     <div className="studio-badge-wrap" style={{ position: "relative" }}>
@@ -39,8 +42,15 @@ export function StudioLinkBadge() {
         title={titleLines.join("\n")}
         onClick={() => setOpen((v) => !v)}
       >
-        <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 4, background: color, marginRight: 6 }} />
-        {studio.mcpClients > 0 ? `🤖 ${studio.mcpClients}` : "🔗"}
+        <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 4, background: color }} />
+        {studio.mcpClients > 0 ? (
+          <>
+            <Bot size={13} />
+            {studio.mcpClients}
+          </>
+        ) : (
+          <Link2 size={13} />
+        )}
       </button>
       {open && (
         <div className="popover" style={popoverStyle}>
@@ -55,19 +65,23 @@ export function StudioLinkBadge() {
             <div style={{ marginTop: 4 }}>
               <div style={{ color: "var(--text-3)", fontSize: 11 }}>{t("studio.externalAgents")}</div>
               {studio.mcpLabels.map((label, i) => (
-                <div key={`${label}-${i}`}>🤖 {label}</div>
+                <div key={`${label}-${i}`} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <Bot size={12} />
+                  {label}
+                </div>
               ))}
             </div>
           )}
           {holder && (
-            <div style={{ marginTop: 4 }}>
-              {holderIcon(holder.kind)}{" "}
+            <div style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
+              <HolderIcon kind={holder.kind} />
               {mine ? t("studio.youAreEditing", { name: holderName(holder) }) : t("studio.lockedBy", { name: holderName(holder) })}
             </div>
           )}
           {holder && !mine && (
             <button className="btn small" style={{ marginTop: 8 }} onClick={() => forceUnlock()}>
-              🔓 {t("studio.forceUnlock")}
+              <Unlock size={12} />
+              {t("studio.forceUnlock")}
             </button>
           )}
           <div style={{ marginTop: 8, color: "var(--text-3)", fontSize: 11, wordBreak: "break-all" }}>
@@ -101,7 +115,10 @@ export function ViewOnlyBanner() {
         fontSize: 12,
       }}
     >
-      <span>🔒 {t("studio.viewOnly", { name })}</span>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+        <Lock size={12} />
+        {t("studio.viewOnly", { name })}
+      </span>
       <span className="spacer" />
       <button className="btn small" onClick={() => forceUnlock()}>
         {t("studio.forceUnlock")}

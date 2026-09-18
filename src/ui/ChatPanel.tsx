@@ -1,4 +1,30 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  ArrowDown,
+  BookOpen,
+  Bot,
+  Box,
+  Brain,
+  Camera,
+  ChevronDown,
+  ChevronRight,
+  Image as ImageIcon,
+  List,
+  Maximize2,
+  Minimize2,
+  Paperclip,
+  Pencil,
+  Play,
+  Plus,
+  SendHorizontal,
+  Settings,
+  Square,
+  Terminal,
+  TriangleAlert,
+  Video,
+  Wrench,
+  X,
+} from "lucide-react";
 import { isViewOnly, useStore, type ChatFloatState } from "../state/store";
 import { getLocale, useT } from "../i18n";
 import { isConfigured } from "../agent/types";
@@ -144,11 +170,11 @@ function caretViewportPos(
   };
 }
 
-const MENTION_ICONS: Record<MentionKind, string> = {
-  object: "◆",
-  camera: "📷",
-  snapshot: "📸",
-  image: "🖼",
+const MENTION_ICONS: Record<MentionKind, ReactNode> = {
+  object: <Box size={11} />,
+  camera: <Video size={11} />,
+  snapshot: <Camera size={11} />,
+  image: <ImageIcon size={11} />,
 };
 
 // --- component -------------------------------------------------------------------
@@ -184,14 +210,16 @@ export function ChatPanel({
           className={rightTab === "chat" ? "active" : ""}
           onClick={() => setUi("rightTab", "chat")}
         >
-          🤖 {t("chat.title")}
+          <Bot size={13} />
+          {t("chat.title")}
           {anyRunning && <span className="running-dot" />}
         </button>
         <button
           className={rightTab === "script" ? "active" : ""}
           onClick={() => setUi("rightTab", "script")}
         >
-          ⌨ {t("chat.script")}
+          <Terminal size={13} />
+          {t("chat.script")}
         </button>
         <button
           title={t("task.title")}
@@ -199,14 +227,14 @@ export function ChatPanel({
           onClick={() => setTasksOpen(!tasksOpen)}
           style={{ flex: "0 0 auto", padding: "0 12px" }}
         >
-          ☰
+          <List size={14} />
         </button>
         <button
           title={floating ? t("chat.dock") : t("chat.undock")}
           onClick={() => (floating ? dockChat() : undockChat())}
           style={{ flex: "0 0 auto", padding: "0 12px" }}
         >
-          {floating ? "⇲" : "⤢"}
+          {floating ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
         </button>
       </div>
       {tasksOpen && <TasksPopover onClose={() => setTasksOpen(false)} />}
@@ -275,10 +303,11 @@ function TasksPopover({ onClose }: { onClose: () => void }) {
         {projectName && <span className="task-project">{projectName}</span>}
         <span className="spacer" />
         <button className="btn small" title={t("task.new")} onClick={onNew}>
-          ＋ {t("task.new")}
+          <Plus size={12} />
+          {t("task.new")}
         </button>
         <button className="btn small" title={t("common.close")} onClick={onClose}>
-          ✕
+          <X size={12} />
         </button>
       </div>
       <div className="session-pop-list">
@@ -317,14 +346,14 @@ function TasksPopover({ onClose }: { onClose: () => void }) {
                   title={t("common.rename")}
                   onClick={() => onRenameStart(meta.id, meta.name)}
                 >
-                  ✎
+                  <Pencil size={12} />
                 </button>
                 <button
                   className="btn small danger"
                   title={t("common.delete")}
                   onClick={() => void onDelete(meta.id, meta.name)}
                 >
-                  ✕
+                  <X size={12} />
                 </button>
               </span>
             )}
@@ -727,7 +756,8 @@ function ChatTab() {
                 scrollToBottom();
               }}
             >
-              ↓ {t("chat.jumpToLatest")}
+              <ArrowDown size={12} />
+              {t("chat.jumpToLatest")}
             </button>
           </div>
         )}
@@ -737,7 +767,8 @@ function ChatTab() {
         <div className="chat-disabled">
           <span>{t("chat.notConfigured")}</span>
           <button className="btn primary" onClick={() => useStore.setState({ settingsOpen: true })}>
-            ⚙ {t("chat.openSettings")}
+            <Settings size={13} />
+            {t("chat.openSettings")}
           </button>
         </div>
       ) : (
@@ -765,7 +796,7 @@ function ChatTab() {
                     title={t("chat.removeImage")}
                     onClick={() => setImages(images.filter((_, j) => j !== i))}
                   >
-                    ✕
+                    <X size={10} />
                   </button>
                 </div>
               ))}
@@ -853,10 +884,13 @@ function ChatTab() {
           )}
           <div className="actions">
             <button className="btn small" title={t("chat.attach")} onClick={() => fileRef.current?.click()}>
-              📎
+              <Paperclip size={13} />
             </button>
             <button className="btn small" title={t("chat.attachView")} onClick={attachCurrentView}>
-              📷+
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 1 }}>
+                <Camera size={13} />
+                <Plus size={9} />
+              </span>
             </button>
             <input
               ref={fileRef}
@@ -874,11 +908,13 @@ function ChatTab() {
             {settings.provider === "mock" && <span className="chip">{t("chat.mockBadge")}</span>}
             {agentState === "running" ? (
               <button className="btn danger small" onClick={() => stopAgentTurn()}>
-                ⏹ {t("chat.stop")}
+                <Square size={12} />
+                {t("chat.stop")}
               </button>
             ) : (
               <button className="btn primary small" onClick={send} disabled={!text.trim() && images.length === 0}>
-                {t("chat.send")} ➤
+                {t("chat.send")}
+                <SendHorizontal size={12} />
               </button>
             )}
           </div>
@@ -916,13 +952,15 @@ function MentionChip({ mention }: { mention: UserMention }) {
           if (target) useStore.setState({ selection: [target.id] });
         }}
       >
-        {MENTION_ICONS[mention.kind]} {label}
+        {MENTION_ICONS[mention.kind]}
+        <span>{label}</span>
       </button>
     );
   }
   return (
     <span className="mention-chip">
-      {MENTION_ICONS[mention.kind]} {label}
+      {MENTION_ICONS[mention.kind]}
+      <span>{label}</span>
     </span>
   );
 }
@@ -998,7 +1036,8 @@ const SessionEventView = memo(function SessionEventView({
               onSummaryClick?.(e.currentTarget);
             }}
           >
-            💭 {t("chat.thinking")}
+            <Brain size={12} />
+            {t("chat.thinking")}
           </summary>
           <pre>{event.text}</pre>
         </details>
@@ -1020,7 +1059,8 @@ const SessionEventView = memo(function SessionEventView({
               onSummaryClick?.(e.currentTarget);
             }}
           >
-            🛠 {event.name}
+            <Wrench size={12} />
+            {event.name}
             <span className={`status ${event.status}`}>
               {event.status === "running" ? t("chat.toolRunning") : `${event.status}${event.durationMs ? ` ${event.durationMs}ms` : ""}`}
             </span>
@@ -1031,7 +1071,11 @@ const SessionEventView = memo(function SessionEventView({
     case "snapshot":
       return <SnapshotImage event={event} />;
     case "error":
-      return <div className="msg error-banner">⚠ {t("chat.error")}: {event.message}</div>;
+      return (
+        <div className="msg error-banner">
+          <TriangleAlert size={12} /> {t("chat.error")}: {event.message}
+        </div>
+      );
     case "notice":
       return <div className="msg notice">{event.text}</div>;
     default:
@@ -1077,7 +1121,8 @@ function UserImages({ images }: { images: string[] }) {
         ))}
       </div>
       <button type="button" className="img-toggle" onClick={() => setExpanded(null)}>
-        ▸ {t("chat.collapseImage")}
+        <ChevronRight size={10} />
+        {t("chat.collapseImage")}
       </button>
     </div>
   );
@@ -1096,7 +1141,11 @@ function SnapshotImage({ event }: { event: Extract<SessionEvent, { type: "snapsh
         title={expanded ? t("chat.collapseImage") : t("chat.expandImage")}
         onClick={() => setExpanded(!expanded)}
       >
-        <span className="toggle">{expanded ? "▾" : "▸"}</span> 🖼 {t("chat.snapshotAt", { t: event.t.toFixed(2) })} — {event.width}×{event.height}
+        <span className="toggle">{expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}</span>
+        <ImageIcon size={11} />
+        <span>
+          {t("chat.snapshotAt", { t: event.t.toFixed(2) })} — {event.width}×{event.height}
+        </span>
       </span>
       <img
         src={event.dataUrl}
@@ -1204,7 +1253,8 @@ function ScriptTab() {
         />
         <div style={{ display: "flex", gap: 6 }}>
           <button className="btn primary small" onClick={() => void run()} disabled={running}>
-            ▶ {t("script.run")} (Ctrl+Enter)
+            <Play size={12} />
+            {t("script.run")} (Ctrl+Enter)
           </button>
           <button className="btn small" onClick={() => setCode("")}>
             {t("script.clear")}
@@ -1218,7 +1268,10 @@ function ScriptTab() {
         {output ? (output.startsWith("✗") ? <span className="err">{output}</span> : output) : ""}
       </div>
       <details className="docs" style={{ margin: 10, marginTop: 0 }}>
-        <summary>📖 {t("script.docsTitle")}</summary>
+        <summary>
+          <BookOpen size={12} />
+          {t("script.docsTitle")}
+        </summary>
         <pre>{DOCS[getLocale()]}</pre>
       </details>
     </div>

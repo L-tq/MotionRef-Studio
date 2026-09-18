@@ -41,7 +41,7 @@ export const zh: Record<string, string> = {
   "projects.load": "加载",
   "projects.confirmNew": "确定新建空项目？未保存的修改将丢失。",
   "projects.confirmDelete": "删除项目“{name}”？",
-  "projects.storageNote": "💾 保存将项目保存在此浏览器中（localStorage + IndexedDB）——仅限本设备。如需备份或将项目（连同聊天记录）转移到其他设备，请使用工具栏的 ⬇/⬆ 导出/导入项目。",
+  "projects.storageNote": "保存将项目保存在此浏览器中（localStorage + IndexedDB）——仅限本设备。如需备份或将项目（连同聊天记录）转移到其他设备，请使用项目菜单中的导出/导入项目。",
   "projects.workspaceNote": "项目是工作室服务器工作区中的 .mrsproj.json 文件——外部智能体可以像查看代码一样查看并版本化管理它们。",
 
   // Panels
@@ -124,7 +124,7 @@ export const zh: Record<string, string> = {
   "timeline.markerClickHint": "点击编辑",
   "timeline.markerLiveHint": "正在渲染（某标记切到此相机）· 点击设为活动相机",
   "timeline.camera": "相机",
-  "timeline.camRowHint": "点击编辑该相机 · ★ 表示正在渲染（活动相机 + 标记切换）",
+  "timeline.camRowHint": "点击编辑该相机 · 星标表示正在渲染（活动相机 + 标记切换）",
   "timeline.noTracks": "还没有关键帧 — 选中对象后按 K，或按 C 为相机打关键帧。",
   "timeline.keys": "{n} 个关键帧",
   "timeline.collectionRow": "集合 — 点击选中其成员 · 折叠箭头可收起分组",
@@ -260,7 +260,7 @@ export const zh: Record<string, string> = {
   // 图表编辑器
   "graph.objectsTab": "对象",
   "graph.camerasTab": "相机",
-  "graph.cameraNodeHint": "点击查看该相机的曲线 · ★ = 渲染相机",
+  "graph.cameraNodeHint": "点击查看该相机的曲线 · 星标 = 渲染相机",
   "graph.collectionNode": "集合 — 点击折叠 / 展开",
   "graph.nodeHint": "点击查看该对象的曲线",
   "graph.toggleChannel": "显示 / 隐藏通道",
@@ -357,9 +357,9 @@ export const zh: Record<string, string> = {
   // Misc
   "error.invalidJson": "场景 JSON 无效：{msg}",
   "error.invalidProjectBundle": "项目文件无效：{msg}",
-  "error.wrongImporterScene": "这是仅场景文件（不含聊天记录）。请使用工具栏的 ⬆ 导入 JSON，而不是项目菜单。",
-  "error.wrongImporterProject": "这是完整项目文件（场景 + 聊天）。请使用 🗂 项目菜单中的 ⬆ 导入，而不是工具栏的导入 JSON。",
-  "error.notAProjectBundle": "此文件不是项目文件。请先用 🗂 项目菜单中的 ⬇ 导出项目生成项目文件。",
+  "error.wrongImporterScene": "这是仅场景文件（不含聊天记录）。请使用工具栏的导入 JSON，而不是项目菜单。",
+  "error.wrongImporterProject": "这是完整项目文件（场景 + 聊天）。请使用项目菜单中的导入，而不是工具栏的导入 JSON。",
+  "error.notAProjectBundle": "此文件不是项目文件。请先用项目菜单中的导出项目生成项目文件。",
   "error.storageFull": "localStorage 空间不足——请改为导出场景 JSON。",
   "error.sceneLocked": "场景已锁定——其他智能体或标签页正在编辑，完成前为只读模式。",
   "error.studio": "工作室服务器：{msg}",

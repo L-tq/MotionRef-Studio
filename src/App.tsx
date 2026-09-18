@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { Bot } from "lucide-react";
 import { TopBar } from "./ui/TopBar";
 import { LeftPanel } from "./ui/LeftPanel";
 import { Viewport } from "./ui/Viewport";
@@ -166,7 +167,8 @@ export default function App() {
                     <Inspector />
                   </div>
                   <button className="chat-dock-strip" title={t("chat.dock")} onClick={dockChat}>
-                    🤖 {t("chat.floatingStrip")}
+                    <Bot size={13} />
+                    {t("chat.floatingStrip")}
                   </button>
                 </>
               ) : (

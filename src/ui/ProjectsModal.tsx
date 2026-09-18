@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ArrowLeft, Download, FilePlus, Folder, FolderOpen, Save, Upload, X } from "lucide-react";
 import { useStore } from "../state/store";
 import { downloadBlob } from "../core/videoExport";
 import { useT } from "../i18n";
@@ -39,8 +40,9 @@ function NewProjectForm({ mode, onDone }: { mode: "new" | "saveAs"; onDone: () =
 
   return (
     <div style={{ border: "1px solid var(--border-2)", borderRadius: 8, padding: 12, marginTop: 10 }}>
-      <div style={{ fontWeight: 600, marginBottom: 8 }}>
-        {mode === "saveAs" ? `💾 ${t("studio.saveProjectAs")}` : `✦ ${t("studio.newProject")}`}
+      <div style={{ fontWeight: 600, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+        {mode === "saveAs" ? <Save size={13} /> : <FilePlus size={13} />}
+        {mode === "saveAs" ? t("studio.saveProjectAs") : t("studio.newProject")}
       </div>
       <label style={{ display: "block", marginBottom: 8 }}>
         <div style={{ fontSize: 12, marginBottom: 4 }}>{t("studio.projectName")}</div>
@@ -48,12 +50,14 @@ function NewProjectForm({ mode, onDone }: { mode: "new" | "saveAs"; onDone: () =
       </label>
       <div style={{ fontSize: 12, marginBottom: 4 }}>{t("studio.saveDir")}</div>
       <div className="dir-picker" style={{ maxHeight: 180, overflow: "auto", border: "1px solid var(--border-2)", borderRadius: 6, marginBottom: 8 }}>
-        <div style={{ padding: "6px 10px", fontFamily: "var(--mono, monospace)", fontSize: 11, color: "var(--text-2)", wordBreak: "break-all" }}>
-          📁 {dir}
+        <div style={{ padding: "6px 10px", fontFamily: "var(--mono, monospace)", fontSize: 11, color: "var(--text-2)", wordBreak: "break-all", display: "flex", alignItems: "center", gap: 5 }}>
+          <Folder size={12} style={{ flexShrink: 0 }} />
+          {dir}
         </div>
         {parent && (
           <button className="btn small" style={{ margin: "0 6px 6px" }} onClick={() => void load(parent)} disabled={busy}>
-            ⬅ {t("studio.parentDir")}
+            <ArrowLeft size={12} />
+            {t("studio.parentDir")}
           </button>
         )}
         {dirs.map((d) => (
@@ -64,7 +68,10 @@ function NewProjectForm({ mode, onDone }: { mode: "new" | "saveAs"; onDone: () =
             onClick={() => void load(d.path)}
             disabled={busy}
           >
-            📂 {d.name}
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+              <FolderOpen size={12} />
+              {d.name}
+            </span>
           </button>
         ))}
         {busy && <div style={{ padding: 6, fontSize: 12, color: "var(--text-3)" }}>…</div>}
@@ -162,11 +169,13 @@ export function ProjectsModal() {
     <div className="modal-overlay" onPointerDown={(e) => e.target === e.currentTarget && setUi("projectsOpen", false)}>
       <div className="modal">
         <div className="modal-header">
-          🗂 {t("projects.title")}
+          <FolderOpen size={14} />
+          {t("projects.title")}
           <span className="spacer" />
           {serverMode ? (
             <button className="btn small primary" title={t("studio.newProject")} onClick={() => setFormMode((m) => (m === "new" ? null : "new"))}>
-              ✦ {t("common.new")}
+              <FilePlus size={12} />
+              {t("common.new")}
             </button>
           ) : (
             <>
@@ -175,10 +184,12 @@ export function ProjectsModal() {
                 title={t("topbar.importProject")}
                 onClick={() => projectFileRef.current?.click()}
               >
-                ⬆ {t("common.import")}
+                <Upload size={12} />
+                {t("common.import")}
               </button>
               <button className="btn small" title={t("topbar.exportProject")} onClick={() => void exportProject()}>
-                ⬇ {t("common.export")}
+                <Download size={12} />
+                {t("common.export")}
               </button>
             </>
           )}
@@ -210,7 +221,7 @@ export function ProjectsModal() {
                       if (window.confirm(t("projects.confirmDelete", { name: p.name }))) deleteProject(p.id);
                     }}
                   >
-                    ✕
+                    <X size={12} />
                   </button>
                 </div>
               ))}

@@ -1,4 +1,5 @@
 import { useRef } from "react";
+import { Bell, Clapperboard, Download, FilePlus, FolderOpen, Save, Settings, Sparkles, Upload } from "lucide-react";
 import { useStore } from "../state/store";
 import { setLocale, useLocale, useT } from "../i18n";
 import { validateSceneDocument, detectBundleFormat, PROJECT_FORMAT } from "../core/validate";
@@ -90,23 +91,29 @@ export function TopBar() {
         }
       />
       <button className="btn small" title={t("topbar.new")} onClick={newProject}>
-        ✦ {t("common.new")}
+        <FilePlus size={13} />
+        {t("common.new")}
       </button>
       <button className="btn small" title={t("topbar.save")} onClick={() => useStore.getState().saveProject()}>
-        💾 {t("common.save")}
+        <Save size={13} />
+        {t("common.save")}
       </button>
       <button className="btn small" title={t("topbar.projects")} onClick={() => setUi("projectsOpen", true)}>
-        🗂 {t("topbar.projects")}
+        <FolderOpen size={13} />
+        {t("topbar.projects")}
       </button>
       <button className="btn small" title={t("topbar.demo")} onClick={loadDemo}>
-        ✨ {t("topbar.demo")}
+        <Sparkles size={13} />
+        {t("topbar.demo")}
       </button>
       <div style={{ width: 1, height: 20, background: "var(--border-2)" }} />
       <button className="btn small" title={t("topbar.importJson")} onClick={() => fileRef.current?.click()}>
-        ⬆ {t("common.import")}
+        <Upload size={13} />
+        {t("common.import")}
       </button>
       <button className="btn small" title={t("topbar.exportJson")} onClick={exportJson}>
-        ⬇ {t("common.export")}
+        <Download size={13} />
+        {t("common.export")}
       </button>
       <input
         ref={fileRef}
@@ -126,17 +133,20 @@ export function TopBar() {
         title={t("messages.title")}
         onClick={() => useStore.setState({ messagesOpen: !messagesOpen, unreadMessages: 0 })}
       >
-        🔔{unreadMessages > 0 && <span className="badge">{unreadMessages > 99 ? "99+" : unreadMessages}</span>}
+        <Bell size={13} />
+        {unreadMessages > 0 && <span className="badge">{unreadMessages > 99 ? "99+" : unreadMessages}</span>}
       </button>
       <button className="btn primary small" onClick={() => setUi("exportOpen", true)}>
-        🎬 {t("topbar.exportVideo")}
+        <Clapperboard size={13} />
+        {t("topbar.exportVideo")}
       </button>
       <button
         className="btn small"
         onClick={() => useStore.setState({ settingsOpen: true })}
         title={t("topbar.settings")}
       >
-        ⚙ {t("topbar.settings")}
+        <Settings size={13} />
+        {t("topbar.settings")}
       </button>
       <button
         className="btn small"

@@ -1,4 +1,20 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Diamond,
+  Flag,
+  Maximize2,
+  Minus,
+  Pause,
+  Play,
+  Plus,
+  Rows3,
+  Spline,
+  Square,
+  Star,
+  Video,
+} from "lucide-react";
 import { useStore, type KeyTarget } from "../state/store";
 import { useT } from "../i18n";
 import { actionsOfOwner, activeActionOfOwner, activeCameraIdAt, keyedObjectsByCollection, type MarkerDesc, type SceneDocument } from "../core/types";
@@ -35,7 +51,9 @@ function buildRows(doc: SceneDocument, selection: string[], collapsed: Set<strin
     const multi = actionsOfOwner(doc, { cameraId: c.id }).length > 1;
     return {
       key: `cam:${c.id}`,
-      label: `🎥 ${c.name}${multi && act ? ` · ${act.name}` : ""}`,
+      // No camera glyph needed — the label column renders the live star for
+      // every camera row already.
+      label: `${c.name}${multi && act ? ` · ${act.name}` : ""}`,
       cameraId: c.id,
       keys: act ? act.keys : [],
     };
@@ -526,10 +544,10 @@ export function Timeline() {
           title={playing ? t("timeline.pause") : t("timeline.play")}
           onClick={() => (playing ? pause() : play())}
         >
-          {playing ? "⏸" : "▶"}
+          {playing ? <Pause size={13} /> : <Play size={13} />}
         </button>
         <button className="btn small" title={t("timeline.stop")} onClick={stop}>
-          ⏹
+          <Square size={13} />
         </button>
         <TimeDisplay />
         <label>
@@ -563,9 +581,7 @@ export function Timeline() {
           title={t("timeline.autoKey")}
           aria-pressed={autoKey}
           onClick={() => setUi("autoKey", !autoKey)}
-        >
-          ●
-        </button>
+        />
         <select
           className="ak-mode"
           value={autoKeyMode}
@@ -578,13 +594,19 @@ export function Timeline() {
           <option value="replace">{t("timeline.akReplace")}</option>
         </select>
         <button className="btn small" onClick={() => setKeyAtPlayhead()} disabled={selection.length === 0}>
-          ◆ {t("timeline.setKey")}
+          <Diamond size={11} />
+          {t("timeline.setKey")}
         </button>
         <button className="btn small" onClick={() => setCameraKeyAtPlayhead()}>
-          🎥◆ {t("timeline.setCameraKey")}
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
+            <Video size={11} />
+            <Diamond size={11} />
+          </span>
+          {t("timeline.setCameraKey")}
         </button>
         <button className="btn small" title={t("timeline.addMarker")} onClick={addMarkerHere}>
-          ⚑ {t("timeline.addMarkerShort")}
+          <Flag size={11} />
+          {t("timeline.addMarkerShort")}
         </button>
         <span className="spacer" />
         <span className="tl-mode" role="group" aria-label={t("timeline.mode")}>
@@ -593,32 +615,33 @@ export function Timeline() {
             title={t("timeline.modeTracks")}
             onClick={() => setLayout({ timelineMode: "tracks" })}
           >
-            ▤
+            <Rows3 size={12} />
           </button>
           <button
             className={`btn small ${mode === "graph" ? "active" : ""}`}
             title={t("timeline.modeGraph")}
             onClick={() => setLayout({ timelineMode: "graph" })}
           >
-            ∿
+            <Spline size={12} />
           </button>
           <button
             className={`btn small ${mode === "actions" ? "active" : ""}`}
             title={t("timeline.modeActions")}
             onClick={() => setLayout({ timelineMode: "actions" })}
           >
-            ◇
+            <Diamond size={12} />
           </button>
         </span>
         <span className="tl-zoom" role="group" aria-label={t("timeline.zoom")}>
           <button className="btn small" title={t("timeline.zoomOut")} onClick={() => zoomBy(1 / 1.5)}>
-            －
+            <Minus size={12} />
           </button>
           <button className="btn small" title={t("timeline.zoomIn")} onClick={() => zoomBy(1.5)}>
-            ＋
+            <Plus size={12} />
           </button>
           <button className="btn small" title={t("timeline.zoomFit")} onClick={zoomFit}>
-            ⤢ {t("timeline.zoomFitShort")}
+            <Maximize2 size={11} />
+            {t("timeline.zoomFitShort")}
           </button>
         </span>
       </div>
@@ -634,7 +657,9 @@ export function Timeline() {
               <div className="tl-ruler" />
               <div className="tlabels-inner" style={{ transform: `translateY(${-scrollPx}px)` }}>
                 <div className="track-label markers" title={t("timeline.markersLaneTitle")}>
-                  <span className="tl-marker-glyph">⚑</span>
+                  <span className="tl-marker-glyph">
+                    <Flag size={9} fill="currentColor" />
+                  </span>
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{t("timeline.markersLane")}</span>
                 </div>
                 {rows.map((row) =>
@@ -654,7 +679,7 @@ export function Timeline() {
                           toggleCollection(row.collectionId!);
                         }}
                       >
-                        {collapsedCols.has(row.collectionId) ? "▸" : "▾"}
+                        {collapsedCols.has(row.collectionId) ? <ChevronRight size={10} /> : <ChevronDown size={10} />}
                       </button>
                       <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{row.label}</span>
                       <span style={{ flex: 1 }} />
@@ -731,7 +756,9 @@ export function Timeline() {
                           title={`${m.name} @ ${m.t.toFixed(2)}s → ${cam?.name ?? m.cameraId} (${t("timeline.markerHint")})`}
                           onPointerDown={(e) => beginMarkerDrag(e, m)}
                         >
-                          <span className="tl-marker-flag">⚑</span>
+                          <span className="tl-marker-flag">
+                            <Flag size={8} fill="currentColor" />
+                          </span>
                           <span className="tl-marker-name">{m.name}</span>
                         </div>
                       );
@@ -860,7 +887,7 @@ function LiveStar({ cameraId, title, onMakeActive }: { cameraId: string; title: 
         onMakeActive();
       }}
     >
-      {live ? "★" : "☆"}
+      {live ? <Star size={10} fill="currentColor" /> : <Star size={10} />}
     </button>
   );
 }
@@ -897,7 +924,9 @@ export function MarkerOverlay({
                 title={`${m.name} @ ${m.t.toFixed(2)}s → ${cam?.name ?? m.cameraId} · ${t("timeline.markerClickHint")}`}
                 onPointerDown={(e) => onChipDown(e, m)}
               >
-                <span className="tl-marker-flag">⚑</span>
+                <span className="tl-marker-flag">
+                  <Flag size={8} fill="currentColor" />
+                </span>
                 <span className="tl-marker-name">{m.name}</span>
               </div>
             )}

@@ -9,6 +9,7 @@
  *  editing lives in the graph editor.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ChevronDown, ChevronRight, Copy, Plus, Star, Trash2 } from "lucide-react";
 import { useStore, type KeyTarget } from "../state/store";
 import { useT } from "../i18n";
 import {
@@ -333,8 +334,7 @@ export function ActionEditor({ onMarkerChipDown }: { onMarkerChipDown?: (e: Reac
           ))}
           {doc.cameras.map((c) => (
             <option key={c.id} value={`cam:${c.id}`}>
-              🎥 {c.name}
-              {c.id === doc.activeCameraId ? " ★" : ""}
+              {`⌖ ${c.name}${c.id === doc.activeCameraId ? ` · ${t("inspector.activeBadge")}` : ""}`}
             </option>
           ))}
         </select>
@@ -349,18 +349,17 @@ export function ActionEditor({ onMarkerChipDown }: { onMarkerChipDown?: (e: Reac
           {acts.map((a) => (
             <option key={a.id} value={a.id}>
               {a.name}
-              {a.id === activeAct?.id ? " ★" : ""}
             </option>
           ))}
         </select>
         <button className="btn small" title={t("action.new")} onClick={() => createAction(owner)}>
-          ＋
+          <Plus size={12} />
         </button>
         <button className="btn small" title={t("action.duplicate")} disabled={!activeAct} onClick={() => activeAct && duplicateAction(activeAct.id)}>
-          ⧉
+          <Copy size={12} />
         </button>
         <button className="btn small danger" title={t("action.delete")} disabled={!activeAct} onClick={() => activeAct && deleteAction(activeAct.id)}>
-          🗑
+          <Trash2 size={12} />
         </button>
       </div>
 
@@ -386,7 +385,7 @@ export function ActionEditor({ onMarkerChipDown }: { onMarkerChipDown?: (e: Reac
                       toggleExpand(row.actionId, row.isOpen);
                     }}
                   >
-                    {row.isOpen ? "▾" : "▸"}
+                    {row.isOpen ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
                   </button>
                   {renaming?.id === row.actionId ? (
                     <input
@@ -411,7 +410,11 @@ export function ActionEditor({ onMarkerChipDown }: { onMarkerChipDown?: (e: Reac
                       {row.actionName}
                     </span>
                   )}
-                  {row.isActiveAction && <span className="action-star">★</span>}
+                  {row.isActiveAction && (
+                    <span className="action-star">
+                      <Star size={10} fill="currentColor" />
+                    </span>
+                  )}
                   <span style={{ flex: 1 }} />
                   <span className="kbadge">{row.keyCount}</span>
                 </div>

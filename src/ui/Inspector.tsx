@@ -3,6 +3,7 @@ import { ASPECT_PRESETS, aspectLabel, clampAspect, focalToFov, fovToFocal, FOCAL
 import { cameraFarClip, clampFarClip, docAspect, actionsOfOwner, activeActionOfOwner, activeCameraIdAt, specOf, type CameraDesc, type ObjectDesc, type Vec3 } from "../core/types";
 import { useStore } from "../state/store";
 import { getLocale, useT } from "../i18n";
+import { Diamond, MoveHorizontal, Pencil, Plus, Star, Trash2, X } from "lucide-react";
 import { useState } from "react";
 
 function Num({ value, onChange, step = 0.1, min, max }: { value: number; onChange: (v: number) => void; step?: number; min?: number; max?: number }) {
@@ -160,7 +161,8 @@ function ObjectInspector({ obj, ids }: { obj: ObjectDesc; ids: string[] }) {
 
       <div className="insp-row" style={{ gap: 6 }}>
         <button className="btn small" onClick={() => ids.forEach((id) => setKeyAtPlayhead(id))}>
-          ◆ {t("inspector.keyAtPlayhead")}
+          <Diamond size={11} />
+          {t("inspector.keyAtPlayhead")}
         </button>
         {hasKeys ? (
           <button className="btn small danger" onClick={() => clearTrack(obj.id)}>
@@ -189,7 +191,7 @@ function ObjectInspector({ obj, ids }: { obj: ObjectDesc; ids: string[] }) {
           ))}
         </select>
         <button className="btn small" title={t("action.new")} onClick={() => createAction({ objectId: obj.id })}>
-          ＋
+          <Plus size={12} />
         </button>
         <button
           className="btn small danger"
@@ -197,7 +199,7 @@ function ObjectInspector({ obj, ids }: { obj: ObjectDesc; ids: string[] }) {
           disabled={!action}
           onClick={() => action && deleteAction(action.id)}
         >
-          🗑
+          <Trash2 size={12} />
         </button>
       </div>
     </div>
@@ -276,13 +278,12 @@ function CameraInspector() {
         >
           {doc.cameras.map((c) => (
             <option key={c.id} value={c.id}>
-              {c.name}
-              {c.id === doc.activeCameraId ? " ★" : ""}
+              {`${c.name}${c.id === doc.activeCameraId ? ` · ${t("inspector.activeBadge")}` : ""}`}
             </option>
           ))}
         </select>
         <button className="btn small" title={t("inspector.addCamera")} onClick={addCamera}>
-          ＋
+          <Plus size={12} />
         </button>
       </div>
       <div className="insp-row" style={{ gap: 4, flexWrap: "wrap" }}>
@@ -291,11 +292,13 @@ function CameraInspector() {
           title={t("inspector.setActive")}
           onClick={() => setActiveCamera(camDesc.id)}
         >
-          ★ {isLive ? t("inspector.activeBadge") : t("inspector.setActiveShort")}
+          <Star size={11} fill={isLive ? "currentColor" : "none"} />
+          {isLive ? t("inspector.activeBadge") : t("inspector.setActiveShort")}
         </button>
         {isRendering && (
           <span className="live-badge" title={t("inspector.liveBadge")}>
-            ● {t("inspector.liveBadge")}
+            <span className="live-dot" />
+            {t("inspector.liveBadge")}
           </span>
         )}
         <button className="btn small" title={t("inspector.alignToView")} onClick={alignToView}>
@@ -308,7 +311,7 @@ function CameraInspector() {
           disabled={doc.cameras.length <= 1}
           onClick={() => removeCamera(camDesc.id)}
         >
-          🗑
+          <Trash2 size={12} />
         </button>
       </div>
       <div className="field">
@@ -327,7 +330,10 @@ function CameraInspector() {
         />
         <div className="insp-row">
           <Num value={ev.fov} step={1} min={1} max={179} onChange={(v) => commitCamera({ fov: v }, camDesc.id)} />
-          <span style={{ color: "var(--text-3)" }}>↔ {t("inspector.focal")}: </span>
+          <span style={{ color: "var(--text-3)", display: "inline-flex", alignItems: "center", gap: 3 }}>
+            <MoveHorizontal size={11} />
+            {t("inspector.focal")}:
+          </span>
           <Num
             value={focalInput ?? Math.round(focal)}
             step={1}
@@ -370,7 +376,8 @@ function CameraInspector() {
       </div>
       <div className="insp-row">
         <button className="btn small" onClick={() => setCameraKeyAtPlayhead(camDesc.id)}>
-          ◆ {t("timeline.setCameraKey")}
+          <Diamond size={11} />
+          {t("timeline.setCameraKey")}
         </button>
       </div>
       {/* Camera actions: pick the ACTIVE one; manage in the Action Editor. */}
@@ -390,7 +397,7 @@ function CameraInspector() {
           ))}
         </select>
         <button className="btn small" title={t("action.new")} onClick={() => createAction({ cameraId: camDesc.id })}>
-          ＋
+          <Plus size={12} />
         </button>
         <button
           className="btn small danger"
@@ -398,7 +405,7 @@ function CameraInspector() {
           disabled={!camAction}
           onClick={() => camAction && deleteAction(camAction.id)}
         >
-          🗑
+          <Trash2 size={12} />
         </button>
       </div>
       <div className="field">
@@ -465,7 +472,7 @@ function SceneInspector() {
             })
           }
         >
-          ＋
+          <Plus size={12} />
         </button>
       </h4>
       <div className="hint" style={{ color: "var(--text-3)" }}>{t("inspector.hookHint")}</div>
@@ -481,7 +488,7 @@ function SceneInspector() {
               {src.replace(/\s+/g, " ").slice(0, 64) || "…"}
             </code>
             <button className="btn small" onClick={() => setEditing(editing === i ? null : i)}>
-              ✎
+              <Pencil size={12} />
             </button>
             <button
               className="btn small danger"
@@ -493,7 +500,7 @@ function SceneInspector() {
                 setEditing(null);
               }}
             >
-              ✕
+              <X size={12} />
             </button>
           </div>
           {editing === i && (

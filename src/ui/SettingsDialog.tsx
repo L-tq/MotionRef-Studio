@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Bot, BookOpen, Check, Copy, Eye, EyeOff } from "lucide-react";
 import { useStore } from "../state/store";
 import { useT } from "../i18n";
 import { testConnection } from "../agent/llmClient";
@@ -57,20 +58,23 @@ function ExternalAgentsSection() {
 
   return (
     <details className="docs">
-      <summary>🤖 {t("studio.externalAgents")}</summary>
+      <summary>
+        <Bot size={12} />
+        {t("studio.externalAgents")}
+      </summary>
       <div className="field" style={{ marginTop: 8 }}>
         <label>{t("studio.mcpEndpoint")}</label>
         <div style={{ display: "flex", gap: 6 }}>
           <input readOnly value={url} style={{ flex: 1 }} onFocus={(e) => e.target.select()} />
           <button className="btn small" onClick={() => void copy("url", url)}>
-            {copied === "url" ? "✓" : "⧉"}
+            {copied === "url" ? <Check size={12} /> : <Copy size={12} />}
           </button>
         </div>
         <label style={{ marginTop: 8 }}>{t("studio.token")}</label>
         <div style={{ display: "flex", gap: 6 }}>
           <input readOnly value={tok} style={{ flex: 1 }} onFocus={(e) => e.target.select()} />
           <button className="btn small" onClick={() => void copy("tok", tok)}>
-            {copied === "tok" ? "✓" : "⧉"}
+            {copied === "tok" ? <Check size={12} /> : <Copy size={12} />}
           </button>
         </div>
         <span className="hint">{t("studio.tokenHint")}</span>
@@ -80,7 +84,7 @@ function ExternalAgentsSection() {
           <label>
             {s.label}{" "}
             <button className="btn small" style={{ marginLeft: 6 }} onClick={() => void copy(s.key, s.code)}>
-              {copied === s.key ? "✓" : "⧉"}
+              {copied === s.key ? <Check size={12} /> : <Copy size={12} />}
             </button>
           </label>
           <pre style={{ margin: 0, userSelect: "text" }}>{s.code}</pre>
@@ -176,7 +180,7 @@ export function SettingsDialog({ onboarding }: { onboarding?: boolean }) {
                     style={{ flex: 1 }}
                   />
                   <button className="btn small" onClick={() => setShowKey(!showKey)}>
-                    {showKey ? "🙈" : "👁"}
+                    {showKey ? <EyeOff size={12} /> : <Eye size={12} />}
                   </button>
                 </div>
                 <span className="hint">{t("settings.apiKeyHint")}</span>
@@ -235,7 +239,10 @@ export function SettingsDialog({ onboarding }: { onboarding?: boolean }) {
           <ExternalAgentsSection />
 
           <details className="docs" open={showGuide} onToggle={(e) => setShowGuide((e.target as HTMLDetailsElement).open)}>
-            <summary>📘 {t("settings.guidePreview")}</summary>
+            <summary>
+              <BookOpen size={12} />
+              {t("settings.guidePreview")}
+            </summary>
             <pre>{AGENT_SKILL_GUIDE[getLocale()]}</pre>
           </details>
         </div>
