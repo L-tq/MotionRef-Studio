@@ -10,6 +10,8 @@
  *   - with a browser connected, snapshot returns image content
  *   - single-writer lock: second agent busy-errors, user edits rejected,
  *     read-only tools unaffected, lock released on disconnect
+ *   - status display: [studio] transition lines when stdout is piped, ink
+ *     panel content with MOTIONREF_FORCE_TUI=1, presence carries mcpLabels
  *   - projects: save → file on disk in bundle format → new → reopen
  *
  *  Run: npx tsx smoke/server.test.mts */
@@ -32,6 +34,16 @@ const PORT = 9300 + Math.floor(Math.random() * 400);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Status-display output arrives asynchronously; poll the captured stdout. */
+async function waitForServerLine(re: RegExp, timeoutMs = 8_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (re.test(serverOut.join(""))) return;
+    if (Date.now() > deadline) throw new Error(`no [server] output matching ${re}`);
+    await sleep(100);
+  }
+}
+
 async function waitForHttp(url: string, timeoutMs = 15_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -52,6 +64,7 @@ function readToken(): string {
 }
 
 let server: ChildProcess | null = null;
+const serverOut: string[] = [];
 const cleanup: Array<() => void> = [];
 async function main(): Promise<void> {
   server = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
@@ -69,7 +82,10 @@ async function main(): Promise<void> {
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  server.stdout?.on("data", (d: Buffer) => process.stdout.write(`[server] ${d}`));
+  server.stdout?.on("data", (d: Buffer) => {
+    serverOut.push(String(d));
+    process.stdout.write(`[server] ${d}`);
+  });
   server.stderr?.on("data", (d: Buffer) => process.stderr.write(`[server:err] ${d}`));
   cleanup.push(() => server?.kill("SIGTERM"));
 
@@ -215,6 +231,20 @@ async function main(): Promise<void> {
   const update = await wsWait("doc.update");
   assert.equal((update as { doc?: { name?: string } }).doc?.name, "user edit");
 
+  // --- status display: line mode (stdout piped) ---------------------------------------
+  // Lock transitions appear as one timestamped [studio] line each.
+  ws1.send(JSON.stringify({ type: "lock.acquire", label: "smoke-turn" }));
+  await waitForServerLine(/lock acquired — smoke-turn \(agent\)/);
+  ws1.send(JSON.stringify({ type: "lock.release" }));
+  await waitForServerLine(/lock released — smoke-turn \(agent\)/);
+  // presence now carries the connected agents' names, not just a count.
+  {
+    const found = wsMsgs.find(
+      (m) => m.type === "presence" && Array.isArray(m.mcpLabels) && (m.mcpLabels as string[]).includes("smoke-agent"),
+    );
+    assert.ok(found, "presence message carries mcpLabels");
+  }
+
   // With a browser connected, snapshot succeeds via the render relay.
   const tinyJpeg =
     "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwcJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPDIzNP/AABEIAAEAAQMBIgACEQEDEQH/xAAfAAABBQEBAQEBAQAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscHRJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2dri4+Tl5ufo6ery8/T19vf4+fr/2gAMAwEAAhEDEQA/AJQA/9k=";
@@ -324,6 +354,55 @@ async function main(): Promise<void> {
     assert.ok(!autoSnap.isError, `auto-open snapshot ok: ${JSON.stringify(autoSnap.content)}`);
     const autoContent = autoSnap.content as Array<{ type: string; data?: string }>;
     assert.ok(autoContent.some((c) => c.type === "image"), "auto-opened browser rendered the snapshot");
+  }
+
+  // --- status TUI: MOTIONREF_FORCE_TUI renders the panel even when piped ---------------
+  {
+    const PORT3 = 9700 + Math.floor(Math.random() * 200);
+    const out3: string[] = [];
+    const server3 = spawn(process.execPath, ["--import", "tsx", "server/index.ts"], {
+      cwd: REPO,
+      env: {
+        ...process.env,
+        HOME,
+        USERPROFILE: HOME,
+        MOTIONREF_PORT: String(PORT3),
+        MOTIONREF_WORKSPACE: WORKSPACE,
+        MOTIONREF_NO_OPEN_BROWSER: "1",
+        MOTIONREF_FORCE_TUI: "1",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    cleanup.push(() => server3.kill("SIGTERM"));
+    server3.stdout?.on("data", (d: Buffer) => out3.push(String(d)));
+    server3.stderr?.on("data", (d: Buffer) => process.stderr.write(`[server3:err] ${d}`));
+    const base3 = `http://127.0.0.1:${PORT3}`;
+    await waitForHttp(`${base3}/studio/info`);
+    // A browser tab first (so the panel has a baseline state), then the MCP
+    // agent — its connect event must appear in the rendered feed.
+    const ws3 = new WebSocket(`ws://127.0.0.1:${PORT3}/ws?token=${token}`);
+    cleanup.push(() => ws3.close());
+    await new Promise((r) => ws3.on("open", r));
+    ws3.send(JSON.stringify({ type: "hello", clientId: "tui-browser", version: "test" }));
+    await sleep(300);
+    const c3 = await mkClientAt(base3, token);
+    cleanup.push(() => c3.client.close().catch(() => {}));
+    const added = await c3.client.callTool({
+      name: "add_object",
+      arguments: { object: { type: "sphere", name: "TuiBall", position: [0, 0, 0] } },
+    });
+    assert.ok(!added.isError, `add_object on TUI server ok: ${JSON.stringify(added.content)}`);
+    // The panel header + event feed (agent name is contiguous within one
+    // rendered cell run, so it survives the ANSI framing).
+    const deadline = Date.now() + 8_000;
+    for (;;) {
+      const all = out3.join("");
+      if (/MotionRef Studio/.test(all) && /MCP agent connected — smoke-agent/.test(all)) break;
+      if (Date.now() > deadline) {
+        throw new Error(`FORCE_TUI panel never rendered; tail: ${JSON.stringify(all.slice(-1200))}`);
+      }
+      await sleep(100);
+    }
   }
 
   console.log("smoke/server.test: ALL PASS");

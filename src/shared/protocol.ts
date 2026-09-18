@@ -49,6 +49,8 @@ export interface WelcomeMsg {
   projects: ProjectInfo[];
   lock: LockHolder | null;
   mcpClients: number;
+  /** Connected external agent client names (best effort; mcpClients is the count). */
+  mcpLabels?: string[];
   browsers: number;
   canUndo: boolean;
   canRedo: boolean;
@@ -87,6 +89,8 @@ export interface LockStateMsg {
 export interface PresenceMsg {
   type: "presence";
   mcpClients: number;
+  /** Connected external agent client names (best effort; mcpClients is the count). */
+  mcpLabels?: string[];
   browsers: number;
 }
 

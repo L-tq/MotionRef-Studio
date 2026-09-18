@@ -391,6 +391,8 @@ export interface AppState {
     clientId: string;
     lock: LockHolder | null;
     mcpClients: number;
+    /** Connected external agent client names (when the server reports them). */
+    mcpLabels: string[];
     browsers: number;
     workspace: string;
     mcpUrl: string;
@@ -646,6 +648,7 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     clientId: "",
     lock: null,
     mcpClients: 0,
+    mcpLabels: [],
     browsers: 0,
     workspace: "",
     mcpUrl: "",

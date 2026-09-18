@@ -42,7 +42,8 @@ export interface StudioContext {
   token: string;
   version: string;
   browsers(): number;
-  setMcpClients(n: number): void;
+  /** Connected MCP agent client names (called on every session open/close). */
+  setMcpClients(labels: string[]): void;
   refreshProjects(): void;
   adoptWorkspace(cwd: string): boolean;
 }
@@ -59,6 +60,10 @@ const GUIDE_URI = "motionref://agent-guide";
 
 function actorFor(sessionId: string, label: string): Actor {
   return { kind: "mcp", id: `mcp:${sessionId}`, label };
+}
+
+function currentMcpLabels(): string[] {
+  return [...new Set([...sessions.values()].map((s) => s.actor.label))];
 }
 
 function buildServer(ctx: StudioContext, actor: Actor): Server {
@@ -318,7 +323,7 @@ export async function handleMcpRequest(req: IncomingMessage, res: ServerResponse
       if (sid && sessions.get(sid)) {
         sessions.delete(sid);
         ctx.lock.releaseOwner(actor.id);
-        ctx.setMcpClients(sessions.size);
+        ctx.setMcpClients(currentMcpLabels());
       }
     };
     await transport.handleRequest(req, res, body);
@@ -326,7 +331,7 @@ export async function handleMcpRequest(req: IncomingMessage, res: ServerResponse
     if (sid) {
       actor.id = `mcp:${sid}`;
       sessions.set(sid, { transport, server, actor });
-      ctx.setMcpClients(sessions.size);
+      ctx.setMcpClients(currentMcpLabels());
     }
     return;
   }

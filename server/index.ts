@@ -26,6 +26,7 @@ import { NodeSandbox } from "./sandboxNode";
 import { ProjectStore } from "./projects";
 import { RenderBroker, type RenderClient } from "./renderBroker";
 import { StudioSession } from "./session";
+import { createStatusDisplay } from "./statusTui";
 import { ToolService, type Actor } from "./toolRelay";
 import { DEFAULT_PORT, configDir, readConfig, resolveWorkspace, serverVersion, writeConfig } from "./util";
 import { serveStatic } from "./static";
@@ -71,12 +72,19 @@ function openSystemBrowser(url: string): void {
 let projects = new ProjectStore(workspace);
 const lock = new EditLock();
 const sandbox = new NodeSandbox();
+/** Origin of the latest doc commit — shown in the status display feed. */
+let lastEdit: { rev: number; label: string; source: string } | null = null;
 const session = new StudioSession({
   onDoc: (rev, doc, label, source) => {
+    lastEdit = { rev, label, source };
     broadcast({ type: "doc.update", rev, doc, label, source });
     scheduleAutosave();
+    statusDisplay.touch();
   },
-  onHistory: (canUndo, canRedo) => broadcast({ type: "history.state", canUndo, canRedo }),
+  onHistory: (canUndo, canRedo) => {
+    broadcast({ type: "history.state", canUndo, canRedo });
+    statusDisplay.touch();
+  },
 });
 
 // --- browser clients ------------------------------------------------------------------
@@ -107,12 +115,40 @@ const renderBroker = new RenderBroker(() => [...clients.values()], {
 });
 const toolService = new ToolService(session, lock, sandbox, renderBroker);
 
-// --- presence ----------------------------------------------------------------------
+// --- presence + status display ----------------------------------------------------------
 
-const presence = { mcp: 0 };
+const presence = { mcpLabels: [] as string[] };
 function broadcastPresence(): void {
-  broadcast({ type: "presence", mcpClients: presence.mcp, browsers: clients.size });
+  broadcast({
+    type: "presence",
+    mcpClients: presence.mcpLabels.length,
+    mcpLabels: presence.mcpLabels,
+    browsers: clients.size,
+  });
+  statusDisplay.touch();
 }
+
+const startedAt = Date.now();
+const statusDisplay = createStatusDisplay({
+  getSnapshot: () => ({
+    version,
+    uiUrl,
+    workspace,
+    project: session.project,
+    rev: session.getRev(),
+    canUndo: session.canUndo(),
+    canRedo: session.canRedo(),
+    lock: lock.current(),
+    heldSince: lock.heldSince(),
+    mcpLabels: presence.mcpLabels,
+    browsers: clients.size,
+    agentTurns: [...clients.values()].filter((c) => c.builtInAgentRunning).length,
+    lastEdit,
+  }),
+  onForceUnlock: () => lock.releaseAll(),
+  onOpenUi: () => openSystemBrowser(uiUrl),
+  onQuit: () => shutdown(),
+});
 
 // --- projects: autosave + broadcasts --------------------------------------------------
 
@@ -136,11 +172,15 @@ function broadcastProjects(): void {
       projects: projects.list(),
       currentId: session.project?.id ?? null,
     });
+    statusDisplay.touch();
   }, 50);
 }
 
 projects.onChange(() => broadcastProjects());
-lock.onChange((holder) => broadcast({ type: "lock.state", lock: holder }));
+lock.onChange((holder) => {
+  broadcast({ type: "lock.state", lock: holder });
+  statusDisplay.touch();
+});
 
 // Restore the most recent workspace project on boot.
 {
@@ -271,8 +311,8 @@ const studioContext: StudioContext = {
     return workspace;
   },
   browsers: () => clients.size,
-  setMcpClients: (n) => {
-    presence.mcp = n;
+  setMcpClients: (labels) => {
+    presence.mcpLabels = labels;
     broadcastPresence();
   },
   refreshProjects: () => broadcastProjects(),
@@ -414,7 +454,8 @@ function handleBrowserSocket(ws: WebSocket): void {
         project: session.project,
         projects: projects.list(),
         lock: lock.current(),
-        mcpClients: presence.mcp,
+        mcpClients: presence.mcpLabels.length,
+        mcpLabels: presence.mcpLabels,
         browsers: clients.size,
         canUndo: session.canUndo(),
         canRedo: session.canRedo(),
@@ -578,6 +619,7 @@ server.listen(port, "127.0.0.1", () => {
 });
 
 function shutdown(): void {
+  statusDisplay.stop();
   if (session.project) {
     try {
       projects.save(session.project, session.getDoc());

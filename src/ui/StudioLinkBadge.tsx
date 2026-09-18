@@ -25,11 +25,18 @@ export function StudioLinkBadge() {
   const holderName = (h: { kind: string; label: string }) =>
     h.label || (h.kind === "user" ? "Web UI" : h.kind === "mcp" ? "External agent" : "Agent");
 
+  /** Who is typing: external MCP agent, the tab's built-in agent, or a human. */
+  const holderIcon = (kind: string) => (kind === "mcp" ? "🤖" : kind === "agent" ? "🧠" : "👤");
+
+  const titleLines = [t("studio.title")];
+  if (studio.mcpLabels.length > 0) titleLines.push(`${t("studio.externalAgents")}: ${studio.mcpLabels.join(", ")}`);
+  if (holder) titleLines.push(`${holderIcon(holder.kind)} ${holderName(holder)}`);
+
   return (
     <div className="studio-badge-wrap" style={{ position: "relative" }}>
       <button
         className={`btn small ${open ? "active" : ""}`}
-        title={t("studio.title")}
+        title={titleLines.join("\n")}
         onClick={() => setOpen((v) => !v)}
       >
         <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 4, background: color, marginRight: 6 }} />
@@ -44,8 +51,17 @@ export function StudioLinkBadge() {
           <div>
             {t("studio.presence", { agents: studio.mcpClients, tabs: studio.browsers })}
           </div>
+          {studio.mcpLabels.length > 0 && (
+            <div style={{ marginTop: 4 }}>
+              <div style={{ color: "var(--text-3)", fontSize: 11 }}>{t("studio.externalAgents")}</div>
+              {studio.mcpLabels.map((label, i) => (
+                <div key={`${label}-${i}`}>🤖 {label}</div>
+              ))}
+            </div>
+          )}
           {holder && (
             <div style={{ marginTop: 4 }}>
+              {holderIcon(holder.kind)}{" "}
               {mine ? t("studio.youAreEditing", { name: holderName(holder) }) : t("studio.lockedBy", { name: holderName(holder) })}
             </div>
           )}

@@ -10,6 +10,7 @@ import { LOCK_TTL_MS, LOCK_WAIT_MS, type LockHolder, type LockKind } from "../sr
 
 export class EditLock {
   private holder: LockHolder | null = null;
+  private heldSinceAt = 0;
   private expiresAt = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private listeners = new Set<(holder: LockHolder | null) => void>();
@@ -30,6 +31,7 @@ export class EditLock {
   private tick(): void {
     this.timer = null;
     this.holder = null;
+    this.heldSinceAt = 0;
     this.expiresAt = 0;
     this.emit();
   }
@@ -45,6 +47,11 @@ export class EditLock {
     return this.holder;
   }
 
+  /** Epoch ms when the current holder acquired the lock (for status display). */
+  heldSince(): number | null {
+    return this.holder ? this.heldSinceAt || Date.now() : null;
+  }
+
   heldBy(id: string): boolean {
     return this.holder !== null && this.holder.id === id;
   }
@@ -52,6 +59,7 @@ export class EditLock {
   /** Acquire if free; returns false when another live holder owns it. */
   acquire(holder: LockHolder, ttlMs = LOCK_TTL_MS[holder.kind]): boolean {
     if (this.holder && this.holder.id !== holder.id && Date.now() < this.expiresAt) return false;
+    if (!this.holder || this.holder.id !== holder.id) this.heldSinceAt = Date.now();
     this.holder = holder;
     this.arm(ttlMs);
     this.emit();
@@ -70,6 +78,7 @@ export class EditLock {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     this.holder = null;
+    this.heldSinceAt = 0;
     this.expiresAt = 0;
     this.emit();
     return true;
@@ -81,6 +90,7 @@ export class EditLock {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     this.holder = null;
+    this.heldSinceAt = 0;
     this.expiresAt = 0;
     if (prev) this.emit();
     return prev;

@@ -138,7 +138,15 @@ function handleServerMessage(msg: ServerMsg): void {
   switch (msg.type) {
     case "welcome":
       useStore.setState({
-        studio: { ...useStore.getState().studio, status: "connected", clientId, lock: msg.lock, mcpClients: msg.mcpClients, browsers: msg.browsers },
+        studio: {
+          ...useStore.getState().studio,
+          status: "connected",
+          clientId,
+          lock: msg.lock,
+          mcpClients: msg.mcpClients,
+          mcpLabels: msg.mcpLabels ?? [],
+          browsers: msg.browsers,
+        },
       });
       serverRev = msg.rev - 1;
       applyRemoteDoc(msg.rev, msg.doc, "welcome");
@@ -162,7 +170,14 @@ function handleServerMessage(msg: ServerMsg): void {
       useStore.setState({ studio: { ...useStore.getState().studio, lock: msg.lock } });
       break;
     case "presence":
-      useStore.setState({ studio: { ...useStore.getState().studio, mcpClients: msg.mcpClients, browsers: msg.browsers } });
+      useStore.setState({
+        studio: {
+          ...useStore.getState().studio,
+          mcpClients: msg.mcpClients,
+          mcpLabels: msg.mcpLabels ?? [],
+          browsers: msg.browsers,
+        },
+      });
       break;
     case "projects.update": {
       const prev = useStore.getState().projectId;
