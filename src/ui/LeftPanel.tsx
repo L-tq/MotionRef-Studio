@@ -1,6 +1,6 @@
 import { useRef, useState, type DragEvent, type ReactElement } from "react";
 import { ChevronDown, ChevronRight, Copy, Diamond, Eye, EyeOff, Plus, X } from "lucide-react";
-import { GEOMETRY_CATALOG, type GeometryType, type ObjectDesc } from "../core/types";
+import { GEOMETRY_CATALOG, isDescendantOf, type GeometryType, type ObjectDesc } from "../core/types";
 import { useStore } from "../state/store";
 import { getLocale, useT } from "../i18n";
 
@@ -80,6 +80,18 @@ const ICONS: Record<GeometryType, ReactElement> = {
       <path d="M9 11c6 4 8 6 14 10M23 11c-6 4-8 6-14 10" />
     </svg>
   ),
+  empty: (
+    <svg viewBox="0 0 32 32" fill="none" strokeWidth="2.2">
+      <path d="M16 4v24M4 16h24" stroke="#ff5c7c" />
+      <path d="M16 16 6 6M16 16l10 10M16 16 26 6M16 16 6 26" stroke="#38bdf8" strokeWidth="1.6" />
+    </svg>
+  ),
+  instance: (
+    <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" strokeWidth="1.4">
+      <rect x="4" y="8" width="12" height="12" rx="2" />
+      <rect x="14" y="14" width="12" height="12" rx="2" strokeDasharray="3 2.5" />
+    </svg>
+  ),
 };
 
 /** Blender-style folder glyph for collection rows. */
@@ -105,6 +117,7 @@ export function LeftPanel() {
   const deleteCollection = useStore((s) => s.deleteCollection);
   const moveToCollection = useStore((s) => s.moveToCollection);
   const setCollectionVisible = useStore((s) => s.setCollectionVisible);
+  const setParent = useStore((s) => s.setParent);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renamingCol, setRenamingCol] = useState<string | null>(null);
   // Outliner tree state: root disclosure + per-collection collapse + the drop
@@ -132,13 +145,59 @@ export function LeftPanel() {
     setDropTarget(null);
   };
 
-  const renderObjectRow = (obj: ObjectDesc, inCollection: boolean) => (
+  /** Order a group's objects parent-first with child depth, so the outliner
+   *  shows the hierarchy as indentation (children of parents in ANOTHER group
+   *  stay in their own group at depth 0, with a parent hint). */
+  const layoutTree = (members: ObjectDesc[]): Array<{ obj: ObjectDesc; depth: number; crossGroupParent?: string }> => {
+    const inGroup = new Set(members.map((m) => m.id));
+    const byId = new Map(doc.objects.map((o) => [o.id, o] as const));
+    const out: Array<{ obj: ObjectDesc; depth: number; crossGroupParent?: string }> = [];
+    const emitted = new Set<string>();
+    const depthOf = (o: ObjectDesc, guard: Set<string>): number => {
+      if (!o.parentId || !inGroup.has(o.parentId) || guard.has(o.id)) return 0;
+      guard.add(o.id);
+      return 1 + (byId.get(o.parentId) ? depthOf(byId.get(o.parentId)!, guard) : 0);
+    };
+    const emitRec = (o: ObjectDesc, depth: number) => {
+      if (emitted.has(o.id)) return;
+      emitted.add(o.id);
+      const crossGroupParent = o.parentId && !inGroup.has(o.parentId) ? byId.get(o.parentId)?.name : undefined;
+      out.push({ obj: o, depth, crossGroupParent });
+      for (const child of members) if (child.parentId === o.id) emitRec(child, depth + 1);
+    };
+    for (const m of members) emitRec(m, depthOf(m, new Set()));
+    return out;
+  };
+
+  /** Drag-to-parent: dropping rows on an OBJECT row parents them to it
+   *  (keep-world). Drops that would create a cycle are ignored. */
+  const dropOnObject = (e: DragEvent, targetId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const ids = dragIds.current ?? [];
+    for (const id of ids) {
+      if (id === targetId || isDescendantOf(doc, targetId, id)) continue;
+      setParent(id, targetId, "world");
+    }
+    endDrag();
+  };
+
+  const renderObjectRow = (obj: ObjectDesc, inCollection: boolean, depth = 0, crossGroupParent?: string) => (
     <div
       key={obj.id}
-      className={`hrow ${inCollection ? "in-collection" : ""} ${selected.has(obj.id) ? "selected" : ""}`}
+      className={`hrow ${inCollection ? "in-collection" : ""} ${selected.has(obj.id) ? "selected" : ""} ${dropTarget === `p:${obj.id}` ? "drop-target" : ""}`}
+      style={depth ? { marginLeft: (inCollection ? 18 : 0) + depth * 14 } : undefined}
       draggable
       onDragStart={(e) => startDrag(e, obj)}
       onDragEnd={endDrag}
+      onDragOver={(e) => {
+        if (!dragIds.current) return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = "move";
+        if (dropTarget !== `p:${obj.id}`) setDropTarget(`p:${obj.id}`);
+      }}
+      onDrop={(e) => dropOnObject(e, obj.id)}
       onClick={(e) => select(obj.id, e.shiftKey || e.ctrlKey || e.metaKey)}
     >
       <span className="dot" style={{ background: obj.color, opacity: obj.visible ? 1 : 0.25 }} />
@@ -163,12 +222,15 @@ export function LeftPanel() {
       ) : (
         <span
           className="name"
+          title={crossGroupParent ? t("outliner.parentedIn", { name: crossGroupParent }) : undefined}
           onDoubleClick={(e) => {
             e.stopPropagation();
             setRenaming(obj.id);
           }}
         >
+          {obj.type === "instance" ? "⧉ " : ""}
           {obj.name}
+          {crossGroupParent ? <span className="dim"> → {crossGroupParent}</span> : null}
         </span>
       )}
       {doc.actions.some((a) => a.kind === "object" && a.objectId === obj.id && a.keys.length > 0) ? (
@@ -236,7 +298,7 @@ export function LeftPanel() {
         <span>{t("panel.addGeometry")}</span>
       </div>
       <div className="palette">
-        {GEOMETRY_CATALOG.map((spec) => (
+        {GEOMETRY_CATALOG.filter((spec) => !spec.pseudo).map((spec) => (
           <button
             key={spec.type}
             title={locale === "zh" ? spec.labelZh : spec.label}
@@ -304,7 +366,10 @@ export function LeftPanel() {
                 {doc.collections.map((col) => {
                   const members = doc.objects.filter((o) => o.collectionId === col.id);
                   const open = !collapsedCols.has(col.id);
-                  const anyVisible = members.some((m) => m.visible);
+                  // Collection visibility is the collection's own `hidden`
+                  // flag (view-layer exclusion) — instances still render
+                  // hidden collections' objects.
+                  const colHidden = col.hidden === true;
                   // Collections glow when they contain selected objects.
                   const anyMemberSelected = members.some((m) => selected.has(m.id));
                   return (
@@ -363,14 +428,14 @@ export function LeftPanel() {
                           </span>
                         )}
                         <button
-                          className={`icon-btn ${anyVisible ? "" : "hidden-eye"}`}
+                          className={`icon-btn ${colHidden ? "hidden-eye" : ""}`}
                           title={t("outliner.collectionVisibility")}
                           onClick={(e) => {
                             e.stopPropagation();
-                            setCollectionVisible(col.id, !anyVisible);
+                            setCollectionVisible(col.id, colHidden);
                           }}
                         >
-                          {anyVisible ? <Eye size={12} /> : <EyeOff size={12} />}
+                          {colHidden ? <EyeOff size={12} /> : <Eye size={12} />}
                         </button>
                         <button
                           className="icon-btn danger"
@@ -383,11 +448,11 @@ export function LeftPanel() {
                           <X size={12} />
                         </button>
                       </div>
-                      {open && members.map((o) => renderObjectRow(o, true))}
+                      {open && layoutTree(members).map(({ obj, depth, crossGroupParent }) => renderObjectRow(obj, true, depth, crossGroupParent))}
                     </div>
                   );
                 })}
-                {doc.objects.filter((o) => !o.collectionId).map((o) => renderObjectRow(o, false))}
+                {layoutTree(doc.objects.filter((o) => !o.collectionId)).map(({ obj, depth, crossGroupParent }) => renderObjectRow(obj, false, depth, crossGroupParent))}
               </>
             )}
           </div>

@@ -4,6 +4,11 @@
  *    1. Start from base object poses / base camera.
  *    2. Apply keyframe interpolation (each owner's ACTIVE action).
  *    3. Run onFrame overlay hooks in registration order (procedural motion).
+ *    4. Compose the parenting hierarchy and apply object constraints
+ *       (Blender order: animation first, constraints after).
+ *
+ *  Object poses are LOCAL (relative to the parent; == world for root objects);
+ *  the composed `world` pose and `worldMats` are filled by pass 4.
  *
  *  This module is THREE-free so it can also run inside the sandbox worker.
  */
@@ -11,18 +16,42 @@ import type {
   CameraDesc,
   CameraKey,
   CameraState,
+  ConstraintDesc,
+  ConstraintKey,
   Interp,
   SceneDocument,
   TransformKey,
   Vec3,
 } from "./types";
-import { activeCameraIdAt, cameraFarClip, cameraKeysOf, objectKeysOf, DEFAULT_FAR_CLIP } from "./types";
+import { activeCameraIdAt, cameraFarClip, cameraKeysOf, constraintChannels, objectKeysOf, DEFAULT_FAR_CLIP } from "./types";
+import {
+  axisQuat,
+  eulerFromQuat,
+  matDecompose,
+  matFromTRS,
+  matIdentity,
+  matInvert,
+  matMultiply,
+  quatConjugate,
+  quatFromEuler,
+  quatMultiply,
+  quatOfMat,
+  quatSlerp,
+  samplePolyline,
+  transformPoint,
+  vlerp,
+  type Mat4,
+} from "./xform";
 
 export interface EvaluatedObject {
   id: string;
+  /** LOCAL pose relative to the parent (== world for roots): what keys and
+   *  hooks produce and what constraints write. Keyframes record these. */
   position: Vec3;
   rotation: Vec3;
   scale: Vec3;
+  /** Composed WORLD pose (parent chain applied). Rendering uses this. */
+  world: { position: Vec3; rotation: Vec3; scale: Vec3 };
   color: string;
   visible: boolean;
 }
@@ -41,6 +70,12 @@ export interface EvaluatedState {
    *  channel is script-owned: the hook re-applies it on every evaluate, so
    *  manual edits to it can never stick (and must not be recorded as keys). */
   hooked: Map<string, Set<HookChan>>;
+  /** Object id -> channels constraints wrote at this time (same ownership
+   *  rule as `hooked`: re-applied every frame, not editable/keyable). */
+  constrained: Map<string, Set<HookChan>>;
+  /** World matrix per object (parent chain composed, constraints applied).
+   *  Used by the renderer (instance expansion) and gizmo world→local math. */
+  worldMats: Map<string, Mat4>;
 }
 
 // --- interpolation helpers ---------------------------------------------------
@@ -140,6 +175,11 @@ function evalObjectTrack(base: import("./types").ObjectDesc, rawKeys: TransformK
     position: [...base.position] as Vec3,
     rotation: [...base.rotation] as Vec3,
     scale: [...base.scale] as Vec3,
+    world: {
+      position: [...base.position] as Vec3,
+      rotation: [...base.rotation] as Vec3,
+      scale: [...base.scale] as Vec3,
+    },
     color: base.color,
     visible: base.visible,
   };
@@ -207,11 +247,13 @@ export interface FrameApiObjectPatch {
 }
 
 export interface FrameApi {
-  /** Read the currently evaluated state (before this hook's mutations). */
+  /** Read the currently evaluated state (before this hook's mutations).
+   *  Object position/rotation/scale are LOCAL to the object's parent; the
+   *  composed `world` pose is alongside. */
   get(): EvaluatedState;
   /** Find an object id by exact or partial name. */
   find(name: string): string | null;
-  /** Patch the evaluated pose of an object for THIS frame only. */
+  /** Patch the evaluated LOCAL pose of an object for THIS frame only. */
   update(id: string, patch: FrameApiObjectPatch): void;
   /** Patch the evaluated camera for THIS frame only. */
   camera(patch: Partial<CameraState>): void;
@@ -312,6 +354,246 @@ function runHooks(state: EvaluatedState, doc: SceneDocument, t: number): HookErr
   return errors;
 }
 
+// --- hierarchy + constraints (Blender order: animation, then constraints) --------
+
+/** Sample one channel of a constraint's mini key track (influence / u).
+ *  Returns null when no key defines the channel (use the static value). */
+function sampleConstraintChannel(keys: ConstraintKey[] | undefined, chan: "influence" | "u", t: number): number | null {
+  if (!keys?.length) return null;
+  const pts = keys.filter((k) => typeof k[chan] === "number") as Array<ConstraintKey & { influence: number; u: number }>;
+  if (!pts.length) return null;
+  const seg = segment(pts, t);
+  if (!seg) return null;
+  return lerp(seg.a[chan], seg.b[chan], seg.u);
+}
+
+const LIMIT_DEFAULTS: Record<"limit_location" | "limit_rotation" | "limit_scale", { min: Vec3; max: Vec3 }> = {
+  limit_location: { min: [-1, -1, -1], max: [1, 1, 1] },
+  limit_rotation: { min: [0, 0, 0], max: [Math.PI / 2, Math.PI / 2, Math.PI / 2] },
+  limit_scale: { min: [0.1, 0.1, 0.1], max: [1, 1, 1] },
+};
+
+interface SolveCtx {
+  state: EvaluatedState;
+  doc: SceneDocument;
+  t: number;
+  /** Working world matrices: final for objects already visited (topo order),
+   *  provisional (keys+hooks only) for objects not yet visited. */
+  worldMats: Map<string, Mat4>;
+}
+
+/** Read the target's current world matrix (final if already solved — e.g. an
+ *  ancestor —, provisional otherwise). Null when the target is missing. */
+function targetWorld(ctx: SolveCtx, c: ConstraintDesc): Mat4 | null {
+  if (!c.targetId) return null;
+  const m = ctx.worldMats.get(c.targetId);
+  if (!m) return null;
+  const holder = ctx.state.objects.get(c.targetId);
+  if (!holder) return null;
+  return m;
+}
+
+function influenceOf(c: ConstraintDesc, t: number): number {
+  return sampleConstraintChannel(c.keys, "influence", t) ?? c.influence ?? 1;
+}
+
+function matFromFlat16(flat: number[] | undefined): Mat4 {
+  if (!flat || flat.length !== 16) return matIdentity();
+  return flat;
+}
+
+/** Apply one constraint to the owner's LOCAL pose. `myWorld` is the owner's
+ *  world matrix BEFORE this constraint (recompose happens after the stack). */
+function applyConstraint(c: ConstraintDesc, ev: EvaluatedObject, parentWorld: Mat4, myWorld: Mat4, ctx: SolveCtx): void {
+  const p = c.params;
+  const influence = influenceOf(c, ctx.t);
+  if (influence <= 0) return;
+  const parentWorldInv = matInvert(parentWorld);
+  const parentQuat = quatOfMat(parentWorld);
+
+  switch (c.type) {
+    case "track_to": {
+      const tw = targetWorld(ctx, c);
+      if (!tw) return;
+      const myPos: Vec3 = [myWorld[12], myWorld[13], myWorld[14]];
+      const dir: Vec3 = [tw[12] - myPos[0], tw[13] - myPos[1], tw[14] - myPos[2]];
+      if (Math.hypot(dir[0], dir[1], dir[2]) < 1e-9) return;
+      const desiredLocal = quatMultiply(quatConjugate(parentQuat), axisQuat(p.axis ?? "+z", dir, [0, 1, 0]));
+      ev.rotation = eulerFromQuat(quatSlerp(quatFromEuler(ev.rotation), desiredLocal, influence));
+      return;
+    }
+    case "follow_path": {
+      const pts = p.points;
+      if (!pts || pts.length < 2) return;
+      const u = sampleConstraintChannel(c.keys, "u", ctx.t) ?? p.u ?? 0;
+      const sample = samplePolyline(pts, u);
+      const localPos = transformPoint(parentWorldInv, sample.point);
+      ev.position = vlerp(ev.position, localPos, influence);
+      if (p.followRotation) {
+        const desiredLocal = quatMultiply(quatConjugate(parentQuat), axisQuat(p.axis ?? "+z", sample.tangent, [0, 1, 0]));
+        ev.rotation = eulerFromQuat(quatSlerp(quatFromEuler(ev.rotation), desiredLocal, influence));
+      }
+      return;
+    }
+    case "child_of": {
+      const tw = targetWorld(ctx, c);
+      if (!tw) return;
+      const desiredWorld = matMultiply(matFromFlat16(p.inverse), tw);
+      const desired = matDecompose(matMultiply(parentWorldInv, desiredWorld));
+      if (p.useLoc !== false) ev.position = vlerp(ev.position, desired.position, influence);
+      if (p.useRot !== false) ev.rotation = eulerFromQuat(quatSlerp(quatFromEuler(ev.rotation), quatFromEuler(desired.rotation), influence));
+      if (p.useScale) ev.scale = vlerp(ev.scale, desired.scale, influence);
+      return;
+    }
+    case "limit_location":
+    case "limit_rotation":
+    case "limit_scale": {
+      const chan = c.type === "limit_location" ? "position" : c.type === "limit_rotation" ? "rotation" : "scale";
+      const defs = LIMIT_DEFAULTS[c.type];
+      const useMin = p.useMin ?? [true, true, true];
+      const useMax = p.useMax ?? [true, true, true];
+      const out = [...ev[chan]] as Vec3;
+      for (let i = 0; i < 3; i++) {
+        const lo = Math.min(p.min?.[i] ?? defs.min[i], p.max?.[i] ?? defs.max[i]);
+        const hi = Math.max(p.min?.[i] ?? defs.min[i], p.max?.[i] ?? defs.max[i]);
+        let v = out[i];
+        if (useMin[i]) v = Math.max(v, lo);
+        if (useMax[i]) v = Math.min(v, hi);
+        out[i] = lerp(out[i], v, influence);
+      }
+      ev[chan] = out;
+      return;
+    }
+    case "copy_location":
+    case "copy_rotation":
+    case "copy_scale": {
+      const tw = targetWorld(ctx, c);
+      if (!tw) return;
+      const chan = c.type === "copy_location" ? "position" : c.type === "copy_rotation" ? "rotation" : "scale";
+      const axes = p.axes ?? [true, true, true];
+      const invert = p.invert ? -1 : 1;
+      const mine = matDecompose(myWorld);
+      const theirs = matDecompose(tw);
+      if (chan === "rotation") {
+        // Euler-component blend in world space, then back to local.
+        const blended: Vec3 = [0, 0, 0];
+        for (let i = 0; i < 3; i++) {
+          const want = axes[i] ? theirs.rotation[i] * invert : mine.rotation[i];
+          blended[i] = lerp(mine.rotation[i], want, influence);
+        }
+        const localQuat = quatMultiply(quatConjugate(parentQuat), quatFromEuler(blended));
+        ev.rotation = eulerFromQuat(localQuat);
+      } else {
+        const worldVals = [...(chan === "position" ? mine.position : mine.scale)] as Vec3;
+        for (let i = 0; i < 3; i++) {
+          const theirsV = (chan === "position" ? theirs.position : theirs.scale)[i];
+          const want = axes[i] ? theirsV * invert : worldVals[i];
+          worldVals[i] = lerp(worldVals[i], want, influence);
+        }
+        if (chan === "position") {
+          ev.position = transformPoint(parentWorldInv, worldVals);
+        } else {
+          // Scale blends in local space directly (world scale == local scale
+          // for uniform parent scales; good enough for blockout references).
+          ev.scale = worldVals;
+        }
+      }
+      return;
+    }
+    case "transformation": {
+      const tv = targetLocalChannel(ctx, c, p.from ?? "position.x");
+      if (tv === null) return;
+      const to = p.to ?? "position.y";
+      const [comp, axisStr] = to.split(".") as ["position" | "rotation" | "scale", string];
+      const axis = axisStr === "x" ? 0 : axisStr === "y" ? 1 : 2;
+      const want = (p.offset ?? 0) + (p.factor ?? 1) * tv;
+      const out = [...ev[comp]] as Vec3;
+      out[axis] = lerp(out[axis], want, influence);
+      ev[comp] = out;
+      return;
+    }
+  }
+}
+
+/** LOCAL channel value of the constraint target (post keys/hooks, and post
+ *  constraints when the target was visited earlier in topo order). */
+function targetLocalChannel(ctx: SolveCtx, c: ConstraintDesc, address: string): number | null {
+  if (!c.targetId) return null;
+  const target = ctx.state.objects.get(c.targetId);
+  if (!target) return null;
+  const [comp, axisStr] = address.split(".") as ["position" | "rotation" | "scale", string];
+  const axis = axisStr === "x" ? 0 : axisStr === "y" ? 1 : 2;
+  return target[comp][axis];
+}
+
+/** Compose the parent hierarchy and apply every object's constraint stack.
+ *  Single pass in topological (parent-first) order: an object always reads
+ *  its parent's FINAL world matrix; constraint targets later in the order
+ *  still carry their provisional (pre-constraint) matrices — avoid mutually
+ *  constrained pairs (same caveat as Blender's dependency graph, simplified). */
+function solveHierarchy(state: EvaluatedState, doc: SceneDocument, t: number): void {
+  const byId = new Map(doc.objects.map((o) => [o.id, o] as const));
+  // Topological order: emit an object only after its parent chain.
+  const order: import("./types").ObjectDesc[] = [];
+  const emitted = new Set<string>();
+  const emit = (o: import("./types").ObjectDesc, guard: Set<string>) => {
+    if (emitted.has(o.id) || guard.has(o.id)) return; // guard: cyclic docs
+    guard.add(o.id);
+    const parent = o.parentId ? byId.get(o.parentId) : undefined;
+    if (parent) emit(parent, guard);
+    emitted.add(o.id);
+    order.push(o);
+  };
+  for (const o of doc.objects) emit(o, new Set());
+
+  const worldMats = state.worldMats;
+  const constrained = state.constrained;
+  const mark = (id: string, chans: Array<"position" | "rotation" | "scale">) => {
+    let set = constrained.get(id);
+    if (!set) constrained.set(id, (set = new Set()));
+    for (const ch of chans) set.add(ch);
+  };
+
+  // Provisional pass: world matrices from keys+hooks only, for EVERY object,
+  // so a constraint can read a target that appears later in the order.
+  for (const obj of order) {
+    const ev = state.objects.get(obj.id);
+    if (!ev) continue;
+    const localMat = matFromTRS(ev.position, ev.rotation, ev.scale);
+    const parentWorld = obj.parentId ? worldMats.get(obj.parentId) : undefined;
+    worldMats.set(obj.id, parentWorld ? matMultiply(parentWorld, localMat) : localMat);
+  }
+
+  // Constraint pass (topo order): each object reads its parent's FINAL matrix
+  // and its targets' current (final-or-provisional) matrices.
+  for (const obj of order) {
+    const ev = state.objects.get(obj.id);
+    if (!ev) continue;
+    const parentWorld = obj.parentId ? worldMats.get(obj.parentId) : undefined;
+
+    if (obj.constraints?.some((c) => c.enabled !== false)) {
+      for (const c of obj.constraints ?? []) {
+        if (c.enabled === false) continue;
+        applyConstraint(c, ev, parentWorld ?? matIdentity(), worldMats.get(obj.id)!, { state, doc, t, worldMats });
+        mark(obj.id, constraintChannels(c));
+      }
+      // Recompose after the stack so descendants and the stored world matrix
+      // reflect the constrained pose.
+      const localMat = matFromTRS(ev.position, ev.rotation, ev.scale);
+      const world = parentWorld ? matMultiply(parentWorld, localMat) : localMat;
+      worldMats.set(obj.id, world);
+    }
+
+    const world = worldMats.get(obj.id)!;
+    if (parentWorld) {
+      const d = matDecompose(world);
+      ev.world = { position: d.position, rotation: d.rotation, scale: d.scale };
+    } else {
+      ev.world = { position: ev.position, rotation: ev.rotation, scale: ev.scale };
+    }
+  }
+}
+
 // --- main entry ----------------------------------------------------------------
 
 export function evaluate(doc: SceneDocument, time: number, errorsOut?: HookError[]): EvaluatedState {
@@ -323,12 +605,15 @@ export function evaluate(doc: SceneDocument, time: number, errorsOut?: HookError
     camera: evalCameraById(doc, cameraId, t),
     cameraId,
     hooked: new Map(),
+    constrained: new Map(),
+    worldMats: new Map(),
   };
   for (const obj of doc.objects) {
     state.objects.set(obj.id, evalObjectTrack(obj, objectKeysOf(doc, obj.id), t));
   }
   const errors = runHooks(state, doc, t);
   if (errorsOut) errorsOut.push(...errors);
+  solveHierarchy(state, doc, t);
   return state;
 }
 

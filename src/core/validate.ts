@@ -1,7 +1,7 @@
 /** Strict validation for SceneDocuments coming from untrusted sources
  *  (agent tool calls, JSON imports). Returns a normalized document or a
  *  human-readable error string. */
-import { createEmptyDocument, isGeometryType, newId, specOf, DEFAULT_CAMERA_ID, clampFarClip, type ActionDesc, type CameraActionDesc, type CameraDesc, type CameraKey, type CollectionDesc, type KeyVec3, type ObjectActionDesc, type ObjectDesc, type SceneDocument, type TransformKey, type Vec3 } from "./types";
+import { CONSTRAINT_NEEDS_TARGET, CONSTRAINT_TYPES, createEmptyDocument, isGeometryType, newId, specOf, DEFAULT_CAMERA_ID, clampFarClip, type ActionDesc, type CameraActionDesc, type CameraDesc, type CameraKey, type CollectionDesc, type ConstraintDesc, type ConstraintKey, type ConstraintParams, type KeyVec3, type ObjectActionDesc, type ObjectDesc, type SceneDocument, type TrackAxis, type TransformKey, type Vec3 } from "./types";
 import { clampAspect } from "./cameraMath";
 
 /** Marker strings written at the top of exported files so an importer can
@@ -48,6 +48,137 @@ function cameraFarClipOf(v: unknown, what: string): number | undefined | string 
   if (v === undefined) return undefined;
   if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) return `${what} must be a number > 0`;
   return clampFarClip(v);
+}
+
+// --- constraints -------------------------------------------------------------------
+
+const TRACK_AXES = ["+x", "-x", "+y", "-y", "+z", "-z"];
+const CHAN_RE = /^(position|rotation|scale)\.[xyz]$/;
+const MAX_CONSTRAINTS_PER_OBJECT = 32;
+const MAX_CONSTRAINT_KEYS = 256;
+const MAX_PATH_POINTS = 256;
+
+function bool3(v: unknown): [boolean, boolean, boolean] | null {
+  if (!Array.isArray(v) || v.length !== 3 || !v.every((x) => typeof x === "boolean")) return null;
+  return [!!v[0], !!v[1], !!v[2]];
+}
+
+function fin(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
+/** Normalize one constraint. Target existence is checked in a later pass
+ *  (targets may be declared after the owner in the objects array). */
+function cleanConstraint(input: unknown, what: string): ConstraintDesc | string {
+  if (!input || typeof input !== "object") return `${what} must be an object`;
+  const c = input as Record<string, unknown>;
+  const type = String(c.type);
+  if (!CONSTRAINT_TYPES.includes(type as ConstraintDesc["type"])) return `${what}.type "${type}" is not a known constraint`;
+  const params: ConstraintParams = {};
+  const p = (c.params ?? {}) as Record<string, unknown>;
+  if (p.axis !== undefined && !TRACK_AXES.includes(String(p.axis))) return `${what}.params.axis must be one of ${TRACK_AXES.join(", ")}`;
+  if (p.axis !== undefined) params.axis = p.axis as TrackAxis;
+  if (p.points !== undefined) {
+    if (!Array.isArray(p.points) || p.points.length < 2) return `${what}.params.points needs at least 2 waypoints`;
+    if (p.points.length > MAX_PATH_POINTS) return `${what}.params.points: too many waypoints (max ${MAX_PATH_POINTS})`;
+    const pts: Vec3[] = [];
+    for (const [i, pt] of (p.points as unknown[]).entries()) {
+      const v = asVec3(pt, `${what}.params.points[${i}]`);
+      if (typeof v === "string") return v;
+      pts.push(v);
+    }
+    params.points = pts;
+  }
+  const u = fin(p.u);
+  if (p.u !== undefined && u === undefined) return `${what}.params.u must be a number`;
+  if (u !== undefined) params.u = u;
+  if (p.followRotation !== undefined) params.followRotation = !!p.followRotation;
+  if (p.inverse !== undefined) {
+    if (Array.isArray(p.inverse) && p.inverse.length === 16 && p.inverse.every((n) => typeof n === "number" && Number.isFinite(n))) {
+      params.inverse = p.inverse.map((n) => n as number);
+    } // else: malformed → solver falls back to identity
+  }
+  if (p.useLoc !== undefined) params.useLoc = !!p.useLoc;
+  if (p.useRot !== undefined) params.useRot = !!p.useRot;
+  if (p.useScale !== undefined) params.useScale = !!p.useScale;
+  for (const key of ["min", "max"] as const) {
+    if (p[key] !== undefined) {
+      const v = asVec3(p[key], `${what}.params.${key}`);
+      if (typeof v === "string") return v;
+      params[key] = v;
+    }
+  }
+  if (p.useMin !== undefined) {
+    const b = bool3(p.useMin);
+    if (!b) return `${what}.params.useMin must be [bool, bool, bool]`;
+    params.useMin = b;
+  }
+  if (p.useMax !== undefined) {
+    const b = bool3(p.useMax);
+    if (!b) return `${what}.params.useMax must be [bool, bool, bool]`;
+    params.useMax = b;
+  }
+  if (p.axes !== undefined) {
+    const b = bool3(p.axes);
+    if (!b) return `${what}.params.axes must be [bool, bool, bool]`;
+    params.axes = b;
+  }
+  if (p.invert !== undefined) params.invert = !!p.invert;
+  for (const key of ["from", "to"] as const) {
+    if (p[key] !== undefined) {
+      const s = String(p[key]);
+      if (!CHAN_RE.test(s)) return `${what}.params.${key} must look like "position.y" / "rotation.x" / "scale.z"`;
+      params[key] = s;
+    }
+  }
+  const factor = fin(p.factor);
+  if (p.factor !== undefined && factor === undefined) return `${what}.params.factor must be a number`;
+  if (factor !== undefined) params.factor = factor;
+  const offset = fin(p.offset);
+  if (p.offset !== undefined && offset === undefined) return `${what}.params.offset must be a number`;
+  if (offset !== undefined) params.offset = offset;
+
+  let influence = 1;
+  if (c.influence !== undefined) {
+    const v = fin(c.influence);
+    if (v === undefined) return `${what}.influence must be a number`;
+    influence = Math.min(1, Math.max(0, v));
+  }
+  let keys: ConstraintKey[] | undefined;
+  if (c.keys !== undefined) {
+    if (!Array.isArray(c.keys)) return `${what}.keys must be an array`;
+    if (c.keys.length > MAX_CONSTRAINT_KEYS) return `${what}.keys: too many keys (max ${MAX_CONSTRAINT_KEYS})`;
+    keys = [];
+    for (const [i, k] of (c.keys as unknown[]).entries()) {
+      if (!k || typeof k !== "object") return `${what}.keys[${i}] must be an object`;
+      const kk = k as Record<string, unknown>;
+      const t = fin(kk.t);
+      if (t === undefined || t < 0) return `${what}.keys[${i}].t must be a number >= 0`;
+      const entry: ConstraintKey = { t, interp: INTERPS.includes(String(kk.interp)) ? (kk.interp as "linear") : "linear" };
+      if (kk.influence !== undefined) {
+        const v = fin(kk.influence);
+        if (v === undefined) return `${what}.keys[${i}].influence must be a number`;
+        entry.influence = Math.min(1, Math.max(0, v));
+      }
+      if (kk.u !== undefined) {
+        const v = fin(kk.u);
+        if (v === undefined) return `${what}.keys[${i}].u must be a number`;
+        entry.u = v;
+      }
+      keys.push(entry);
+    }
+    keys.sort((a, b) => a.t - b.t);
+  }
+  return {
+    id: typeof c.id === "string" && c.id ? c.id.slice(0, 64) : newId("cst"),
+    type: type as ConstraintDesc["type"],
+    name: typeof c.name === "string" && c.name.trim() ? c.name.slice(0, 80) : undefined,
+    enabled: c.enabled === undefined ? true : !!c.enabled,
+    influence,
+    targetId: typeof c.targetId === "string" && c.targetId ? c.targetId : undefined,
+    params,
+    keys,
+  };
 }
 
 /** Normalize one object keyframe; returns the key or an error string. */
@@ -209,6 +340,7 @@ export function validateSceneDocument(input: unknown): { doc: SceneDocument } | 
       collections.push({
         id,
         name: typeof col.name === "string" && col.name.trim() ? col.name.slice(0, 80) : `Collection ${i + 1}`,
+        hidden: col.hidden === true ? true : undefined,
       });
     }
   }
@@ -255,11 +387,76 @@ export function validateSceneDocument(input: unknown): { doc: SceneDocument } | 
       if (typeof obj.collectionId === "string" && collectionIds.has(obj.collectionId)) {
         od.collectionId = obj.collectionId;
       }
+      if (typeof obj.parentId === "string" && obj.parentId) od.parentId = obj.parentId.slice(0, 64);
+      if (typeof obj.instanceOf === "string" && obj.instanceOf) od.instanceOf = obj.instanceOf.slice(0, 64);
+      if (obj.constraints !== undefined) {
+        if (!Array.isArray(obj.constraints)) return { error: `objects[${i}].constraints must be an array` };
+        if (obj.constraints.length > MAX_CONSTRAINTS_PER_OBJECT) {
+          return { error: `objects[${i}].constraints: too many (max ${MAX_CONSTRAINTS_PER_OBJECT})` };
+        }
+        const constraints: ConstraintDesc[] = [];
+        for (const [j, c] of obj.constraints.entries()) {
+          const cleaned = cleanConstraint(c, `objects[${i}].constraints[${j}]`);
+          if (typeof cleaned === "string") return { error: cleaned };
+          constraints.push(cleaned);
+        }
+        if (constraints.length) od.constraints = constraints;
+      }
       doc.objects.push(od);
     }
   }
 
+  // Hierarchy / instance / constraint resolution (targets may be declared
+  // after their referrer, so this runs once every object id is known):
+  //  - a type:"instance" object survives only with a valid, non-recursive
+  //    collection target; invalid ones are dropped whole (actions owned by
+  //    them and references to them cascade below);
+  //  - parentId must reference another object through an acyclic chain of
+  //    depth <= 64, else the object is re-rooted;
+  //  - constraints whose target object is gone are dropped silently, like
+  //    orphan actions.
+  const instanceTargetsValid = (inst: ObjectDesc): boolean => {
+    if (!inst.instanceOf || !collectionIds.has(inst.instanceOf)) return false;
+    // Recursive instancing is not supported: the instanced collection must
+    // not contain instance objects.
+    return !doc.objects.some((m) => m.type === "instance" && m.collectionId === inst.instanceOf);
+  };
+  for (let i = doc.objects.length - 1; i >= 0; i--) {
+    if (doc.objects[i].type === "instance" && !instanceTargetsValid(doc.objects[i])) doc.objects.splice(i, 1);
+  }
   const objectIds = new Set(doc.objects.map((o) => o.id));
+  for (const o of doc.objects) {
+    if (o.parentId) {
+      if (!objectIds.has(o.parentId) || o.parentId === o.id) {
+        delete o.parentId;
+      } else {
+        // Walk the chain: a cycle or an over-deep chain re-roots the object.
+        const byId = new Map(doc.objects.map((x) => [x.id, x] as const));
+        let cur = byId.get(o.parentId);
+        let depth = 1;
+        let cyclic = false;
+        const seen = new Set<string>([o.id]);
+        while (cur?.parentId) {
+          if (seen.has(cur.id)) {
+            cyclic = true;
+            break;
+          }
+          seen.add(cur.id);
+          depth += 1;
+          if (depth > 64) {
+            cyclic = true;
+            break;
+          }
+          cur = byId.get(cur.parentId);
+        }
+        if (cyclic) delete o.parentId;
+      }
+    }
+    if (o.constraints?.length) {
+      o.constraints = o.constraints.filter((c) => !(CONSTRAINT_NEEDS_TARGET.includes(c.type) && (!c.targetId || !objectIds.has(c.targetId))));
+      if (!o.constraints.length) delete o.constraints;
+    }
+  }
 
   // Actions (Blender-style): named keyframe groups, each owned by exactly one
   // object or camera; an owner's ACTIVE action is what evaluates. Legacy

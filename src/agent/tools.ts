@@ -117,8 +117,8 @@ export function buildTools(): AgentTool[] {
     {
       name: "add_object",
       description: {
-        en: "Add one geometry object. object: {type, name?, params?, position?, rotation? (radians XYZ), scale?, color? (#rrggbb), visible?, collectionId? (Outliner collection, see get_scene_state → collections)}. Returns the new id.",
-        zh: "添加一个几何体。object: {type, name?, params?, position?, rotation?（弧度 XYZ）, scale?, color?（#rrggbb）, visible?, collectionId?（大纲集合，见 get_scene_state → collections）}。返回新 id。",
+        en: "Add one object. object: {type, name?, params?, position?, rotation? (radians XYZ), scale?, color? (#rrggbb), visible?, collectionId?, parentId? (parent object — pose is LOCAL to it), instanceOf? (for type:\"instance\": collection id to copy)}. Types: 13 geometries + \"empty\" (non-rendering transform anchor) + \"instance\" (placed copy of a whole collection). Returns the new id.",
+        zh: "添加一个对象。object: {type, name?, params?, position?, rotation?（弧度 XYZ）, scale?, color?（#rrggbb）, visible?, collectionId?, parentId?（父对象——位姿为相对父对象的局部坐标）, instanceOf?（type:\"instance\" 时：要复制的集合 id）}。类型：13 种几何体 + \"empty\"（不渲染的变换锚点）+ \"instance\"（整个集合的实例副本）。返回新 id。",
       },
       parameters: {
         type: "object",
@@ -126,7 +126,7 @@ export function buildTools(): AgentTool[] {
           object: {
             type: "object",
             properties: {
-              type: { type: "string", enum: ["box", "sphere", "cylinder", "cone", "torus", "plane", "capsule", "ring", "tetrahedron", "octahedron", "dodecahedron", "icosahedron", "torusKnot"] },
+              type: { type: "string", enum: ["box", "sphere", "cylinder", "cone", "torus", "plane", "capsule", "ring", "tetrahedron", "octahedron", "dodecahedron", "icosahedron", "torusKnot", "empty", "instance"] },
               name: { type: "string" },
               params: { type: "object", additionalProperties: { type: "number" } },
               position: { type: "array", items: { type: "number" }, minItems: 3, maxItems: 3 },
@@ -135,6 +135,8 @@ export function buildTools(): AgentTool[] {
               color: { type: "string" },
               visible: { type: "boolean" },
               collectionId: { type: "string", description: "Outliner collection id to file the object under" },
+              parentId: { type: "string", description: "Parent object id — position/rotation/scale become LOCAL to the parent (world = parent.world × local)" },
+              instanceOf: { type: "string", description: "type:\"instance\" only: collection id whose objects are copied under this instance's transform" },
             },
             required: ["type"],
           },
@@ -201,6 +203,119 @@ export function buildTools(): AgentTool[] {
         });
         if (result.isError) return result;
         return ok("Removed.");
+      },
+    },
+    {
+      name: "set_parent",
+      description: {
+        en: "Parent an object to another (Blender Ctrl+P) or unparent it (parentId null/omitted). Keyframes stay LOCAL, so local animation (spin, wobble) keeps working while the parent carries the global path. keep: \"world\" (default) re-bakes the child's local TRS so nothing moves; \"local\" keeps the stored local values (the child jumps). Typical layering: Root_Global empty (path) → Local_Turbulence empty (wobble) → mesh parts.",
+        zh: "把对象设为另一个对象的子级（Blender Ctrl+P），或解除父级（parentId 为 null 或省略）。关键帧保持局部，因此局部动画（自转、晃动）照常播放，父级承载全局路径。keep: \"world\"（默认）会重算子级局部变换使其不动；\"local\" 保留原局部值（子级会跳位）。典型分层：Root_Global 空物体（路径）→ Local_Turbulence 空物体（颠簸）→ 网格部件。",
+      },
+      parameters: {
+        type: "object",
+        properties: {
+          childId: { type: "string", description: "Object to parent/unparent" },
+          parentId: { type: "string", description: "New parent object id; null/omitted = move to scene root" },
+          keep: { type: "string", enum: ["world", "local"], description: "Keep the child's world pose (default) or its raw local values" },
+        },
+        required: ["childId"],
+        additionalProperties: false,
+      },
+      async handler(args, ctx) {
+        const child = ctx.getDoc().objects.find((o) => o.id === args.childId);
+        if (!child) return err(`set_parent: no object with id "${String(args.childId)}"`);
+        const parentName = args.parentId ? ctx.getDoc().objects.find((o) => o.id === args.parentId)?.name : null;
+        const result = withDoc(ctx, "agent:set_parent", (target) => {
+          target.setParent(args.childId as string, (args.parentId as string | undefined) ?? null, (args.keep as "world" | "local") ?? "world");
+        });
+        if (result.isError) return result;
+        return ok(
+          args.parentId
+            ? `Parented "${child.name}" → "${parentName ?? String(args.parentId)}" (keep ${args.keep ?? "world"}; its keyframes are now local to the parent).`
+            : `Unparented "${child.name}" (keep ${args.keep ?? "world"}).`,
+        );
+      },
+    },
+    {
+      name: "manage_constraint",
+      description: {
+        en: "Manage an object's constraint stack (evaluated every frame AFTER keyframes — a constraint's channels override that object's keyframes). op \"add\" needs type + objectId, returns the constraint id. Types: track_to {targetId, params.axis \"+x|-x|+y|-y|+z|-z\" = local axis aimed at the target (default \"+z\")}, follow_path {params.points [[x,y,z],…] ≥ 2 world-space waypoints, params.u 0..1 position along the path, params.followRotation}, child_of {targetId — dynamic parenting; influence 0→1 attaches; inverse auto-baked so no jump}, limit_location/limit_rotation/limit_scale {params.min/max [x,y,z], params.useMin/useMax [b,b,b]}, copy_location/copy_rotation/copy_scale {targetId, params.axes [b,b,b], params.invert}, transformation {targetId, params.from/\"position.x\"-style channel, params.to, params.factor, params.offset}. op \"update\": patch {name?, enabled?, influence? (0..1), targetId?, params?} (+ setInverse for child_of). op \"setKeys\": keys [{t, influence?, u?, interp?}] — animates influence (e.g. child_of attach at t) or u (follow_path traversal). op \"delete\" removes it.",
+        zh: "管理对象的约束栈（每帧在关键帧之后求值——约束写入的通道会覆盖该对象的关键帧）。op \"add\" 需要 type + objectId，返回约束 id。类型：track_to {targetId, params.axis \"+x|-x|+y|-y|+z|-z\" 指向目标的局部轴（默认 \"+z\"）}、follow_path {params.points [[x,y,z],…] ≥ 2 个世界空间路径点, params.u 0..1 沿路径位置, params.followRotation}、child_of {targetId 动态父级；influence 0→1 完成吸附；自动烘焙偏移不会跳位}、limit_location/limit_rotation/limit_scale {params.min/max [x,y,z], params.useMin/useMax [b,b,b]}、copy_location/copy_rotation/copy_scale {targetId, params.axes [b,b,b], params.invert}、transformation {targetId, params.from 形如 \"position.x\" 的通道, params.to, params.factor, params.offset}。op \"update\"：patch {name?, enabled?, influence? (0..1), targetId?, params?}（child_of 可加 setInverse）。op \"setKeys\"：keys [{t, influence?, u?, interp?}] —— 动画化 influence（如 child_of 在 t 时刻吸附）或 u（follow_path 行进）。op \"delete\" 删除约束。",
+      },
+      parameters: {
+        type: "object",
+        properties: {
+          op: { type: "string", enum: ["add", "update", "delete", "setKeys", "setInverse"] },
+          objectId: { type: "string", description: "Owner object id" },
+          id: { type: "string", description: "Constraint id (everything but add)" },
+          type: { type: "string", enum: ["track_to", "follow_path", "child_of", "limit_location", "limit_rotation", "limit_scale", "copy_location", "copy_rotation", "copy_scale", "transformation"] },
+          name: { type: "string" },
+          enabled: { type: "boolean", description: "update: enable/disable the constraint" },
+          targetId: { type: "string", description: "Target object id (an empty works well as a target)" },
+          influence: { type: "number", description: "0..1 blend (default 1)" },
+          params: { type: "object", description: "Per-type params, see the tool description" },
+          keys: {
+            type: "array",
+            description: "setKeys: [{t, influence?, u?, interp?}] (replaces the track)",
+            items: {
+              type: "object",
+              properties: {
+                t: { type: "number" },
+                influence: { type: "number" },
+                u: { type: "number" },
+                interp: { type: "string", enum: ["linear", "step", "smooth"] },
+              },
+              required: ["t"],
+            },
+          },
+          setInverse: { type: "boolean", description: "update: re-bake the child_of offset from the current poses" },
+        },
+        required: ["op", "objectId"],
+        additionalProperties: false,
+      },
+      async handler(args, ctx) {
+        const op = String(args.op);
+        let createdId = "";
+        const result = withDoc(ctx, "agent:manage_constraint", (target) => {
+          const objectId = args.objectId as string;
+          switch (op) {
+            case "add":
+              createdId = target.addConstraint(objectId, {
+                type: args.type as Parameters<typeof target.addConstraint>[1]["type"],
+                name: args.name as string | undefined,
+                targetId: args.targetId as string | undefined,
+                influence: args.influence as number | undefined,
+                params: (args.params ?? {}) as Parameters<typeof target.addConstraint>[1]["params"],
+              });
+              break;
+            case "update":
+              target.updateConstraint(
+                objectId,
+                args.id as string,
+                {
+                  name: args.name as string | undefined,
+                  enabled: args.enabled as boolean | undefined,
+                  influence: args.influence as number | undefined,
+                  targetId: args.targetId as string | undefined,
+                  params: (args.params ?? {}) as Parameters<typeof target.updateConstraint>[2]["params"],
+                },
+                args.setInverse === true,
+              );
+              break;
+            case "setKeys":
+              target.constraintKeys(objectId, args.id as string, (args.keys ?? []) as Parameters<typeof target.constraintKeys>[2]);
+              break;
+            case "setInverse":
+              target.updateConstraint(objectId, args.id as string, {}, true);
+              break;
+            case "delete":
+              target.removeConstraint(objectId, args.id as string);
+              break;
+          }
+        });
+        if (result.isError) return result;
+        if (op === "add") return ok(`Added ${String(args.type)} constraint id "${createdId}"${args.targetId ? ` → target "${args.targetId}"` : ""}.`);
+        return ok(`Constraint ${op} OK.`);
       },
     },
     {
@@ -551,8 +666,8 @@ export function buildTools(): AgentTool[] {
     {
       name: "execute_code",
       description: {
-        en: "Run JavaScript in the sandbox to build/animate the scene. Global `api`: add/update/remove/clear/addCollection(name)/get/find/list/keyframes(id,keys,actionId?)/setCamera/addCamera/addCameraKeys(keys,cameraId?,actionId?)/setActiveCamera/updateCamera/removeCamera/addMarker({t,cameraId,name?})/updateMarker(id,patch)/removeMarker(id)/createAction(owner,name?)/renameAction/duplicateAction/removeAction/setActiveAction/setDuration/setFps/setAspect(ratio)/onFrame(fn)/log/params/uniqueName. See the Skill Guide for the full reference. No DOM/network/imports; 5s timeout.",
-        zh: "在沙箱中运行 JavaScript 来搭建/动画化场景。全局 `api`：add/update/remove/clear/addCollection(name)/get/find/list/keyframes(id,keys,actionId?)/setCamera/addCamera/addCameraKeys(keys,cameraId?,actionId?)/setActiveCamera/updateCamera/removeCamera/addMarker({t,cameraId,name?})/updateMarker(id,patch)/removeMarker(id)/createAction(owner,name?)/renameAction/duplicateAction/removeAction/setActiveAction/setDuration/setFps/setAspect(比例)/onFrame(fn)/log/params/uniqueName。完整参考见技能指南。无 DOM/网络/导入；5 秒超时。",
+        en: "Run JavaScript in the sandbox to build/animate the scene. Global `api`: add/update/remove/clear/setParent(childId,parentId|null,keep?)/addConstraint(objectId,{type,targetId?,influence?,params?})/updateConstraint/constraintKeys(objectId,id,keys)/removeConstraint/addCollection(name)/get/find/list/keyframes(id,keys,actionId?)/setCamera/addCamera/addCameraKeys(keys,cameraId?,actionId?)/setActiveCamera/updateCamera/removeCamera/addMarker({t,cameraId,name?})/updateMarker(id,patch)/removeMarker(id)/createAction(owner,name?)/renameAction/duplicateAction/removeAction/setActiveAction/setDuration/setFps/setAspect(ratio)/onFrame(fn)/log/params/uniqueName. See the Skill Guide for the full reference. No DOM/network/imports; 5s timeout.",
+        zh: "在沙箱中运行 JavaScript 来搭建/动画化场景。全局 `api`：add/update/remove/clear/setParent(子id,父id|null,keep?)/addConstraint(对象id,{type,targetId?,influence?,params?})/updateConstraint/constraintKeys(对象id,约束id,keys)/removeConstraint/addCollection(name)/get/find/list/keyframes(id,keys,actionId?)/setCamera/addCamera/addCameraKeys(keys,cameraId?,actionId?)/setActiveCamera/updateCamera/removeCamera/addMarker({t,cameraId,name?})/updateMarker(id,patch)/removeMarker(id)/createAction(owner,name?)/renameAction/duplicateAction/removeAction/setActiveAction/setDuration/setFps/setAspect(比例)/onFrame(fn)/log/params/uniqueName。完整参考见技能指南。无 DOM/网络/导入；5 秒超时。",
       },
       parameters: {
         type: "object",

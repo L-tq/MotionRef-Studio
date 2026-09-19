@@ -7,8 +7,9 @@
  *   - persistent (worker / script console): mutations write the SceneDocument.
  *   - overlay: created by animation.ts FrameApi during evaluation instead.
  */
-import type { ActionOwner, CameraState, GeometryType, KeyVec3, SceneDocument, TransformKey, Vec3 } from "./types";
-import { activeActionOfOwner, activeCameraOf, defaultActionName, defaultCollectionName, defaultMarkerName, isGeometryType, newId, specOf, type ActionDesc, type CameraActionDesc, type ObjectActionDesc } from "./types";
+import type { ActionOwner, CameraState, ConstraintDesc, ConstraintKey, ConstraintParams, ConstraintType, GeometryType, KeyVec3, SceneDocument, TransformKey, Vec3 } from "./types";
+import { CONSTRAINT_TYPES, activeActionOfOwner, activeCameraOf, defaultActionName, defaultCollectionName, defaultMarkerName, isDescendantOf, isGeometryType, newId, specOf, type ActionDesc, type CameraActionDesc, type ObjectActionDesc } from "./types";
+import { baseWorldOf, matDecompose, matFromTRS, matInvert, matMultiply } from "./xform";
 
 export interface ScriptTarget {
   /** Mutating handles over a SceneDocument owned by the caller. */
@@ -16,6 +17,7 @@ export interface ScriptTarget {
     type: GeometryType;
     name?: string;
     params?: Record<string, number>;
+    /** LOCAL pose (relative to parentId when given; world for root objects). */
     position?: Vec3;
     rotation?: Vec3;
     scale?: Vec3;
@@ -23,6 +25,10 @@ export interface ScriptTarget {
     visible?: boolean;
     /** Outliner collection (must exist, see addCollection). */
     collectionId?: string;
+    /** Parent object (Blender parenting); the new object's pose is LOCAL to it. */
+    parentId?: string;
+    /** Collection to instance (type:"instance" only; must exist). */
+    instanceOf?: string;
   }): string;
   update(
     id: string,
@@ -41,6 +47,30 @@ export interface ScriptTarget {
   remove(id: string): void;
   clear(): void;
   get(): SceneDocument;
+  /** Parent an object (Blender Ctrl+P). keep:"world" (default) re-bakes the
+   *  child's local TRS from the base poses so nothing moves; keep:"local"
+   *  keeps the stored local pose (the child jumps into the parent's space).
+   *  parentId null unparents (same keep rule). */
+  setParent(childId: string, parentId: string | null, keep?: "world" | "local"): void;
+  /** Add a constraint to an object's stack (evaluated every frame after
+   *  animation). child_of bakes its inverse from the current base poses.
+   *  Returns the constraint id. */
+  addConstraint(
+    objectId: string,
+    c: { type: ConstraintType; name?: string; targetId?: string; influence?: number; params?: ConstraintParams },
+  ): string;
+  /** Patch a constraint (name/enabled/influence/targetId/params overlay).
+   *  setInverse re-bakes a child_of offset from the current base poses. */
+  updateConstraint(
+    objectId: string,
+    id: string,
+    patch: { name?: string; enabled?: boolean; influence?: number; targetId?: string; params?: ConstraintParams },
+    setInverse?: boolean,
+  ): void;
+  /** Replace a constraint's influence/u key track. */
+  constraintKeys(objectId: string, id: string, keys: ConstraintKey[]): void;
+  /** Remove a constraint from an object's stack. */
+  removeConstraint(objectId: string, id: string): void;
   /** Create an Outliner collection (Blender-style grouping); returns its id. */
   addCollection(name?: string): string;
   /** Patch the ACTIVE camera's base pose. */
@@ -114,7 +144,9 @@ export function createScriptingAPI(target: ScriptTarget, log: (...args: unknown[
     target.get().objects.filter((o) => o.type === type).length + 1;
 
   const api = {
-    /** Add an object; returns its id. */
+    /** Add an object; returns its id. Position/rotation/scale are LOCAL to
+     *  parentId when given (world otherwise). type:"empty" adds a non-rendering
+     *  anchor; type:"instance" duplicates a whole collection (instanceOf). */
     add(opts: {
       type: GeometryType;
       name?: string;
@@ -125,6 +157,8 @@ export function createScriptingAPI(target: ScriptTarget, log: (...args: unknown[
       color?: string;
       visible?: boolean;
       collectionId?: string;
+      parentId?: string;
+      instanceOf?: string;
     }): string {
       if (!opts || typeof opts !== "object") throw new Error("api.add expects an options object");
       if (!isGeometryType(opts.type))
@@ -135,6 +169,10 @@ export function createScriptingAPI(target: ScriptTarget, log: (...args: unknown[
       if (opts.color) checkColor(opts.color);
       if (opts.collectionId !== undefined && typeof opts.collectionId !== "string")
         throw new Error("collectionId must be a collection id string (see api.addCollection)");
+      if (opts.parentId !== undefined && typeof opts.parentId !== "string")
+        throw new Error("parentId must be an object id string");
+      if (opts.instanceOf !== undefined && typeof opts.instanceOf !== "string")
+        throw new Error("instanceOf must be a collection id string");
       return target.add(opts);
     },
 
@@ -170,6 +208,76 @@ export function createScriptingAPI(target: ScriptTarget, log: (...args: unknown[
     /** Remove all objects, keyframes and camera keys. */
     clear(): void {
       target.clear();
+    },
+
+    /** Parent an object to another (Blender Ctrl+P) or unparent (null).
+     *  keep:"world" (default) keeps the object where it is by re-baking its
+     *  local TRS; keep:"local" keeps the stored local values (it jumps). */
+    setParent(childId: string, parentId: string | null, keep?: "world" | "local"): void {
+      if (typeof childId !== "string") throw new Error("api.setParent expects (childId, parentId|null, keep?)");
+      if (parentId !== null && typeof parentId !== "string") throw new Error("api.setParent: parentId must be an id string or null");
+      if (keep !== undefined && keep !== "world" && keep !== "local") throw new Error('keep must be "world" or "local"');
+      target.setParent(childId, parentId, keep);
+    },
+
+    /** Add a constraint to an object's stack (applied every frame after
+     *  keyframes/hooks). Constraint types: track_to {axis}, follow_path
+     *  {points, u, followRotation}, child_of, limit_location/rotation/scale
+     *  {min, max, useMin, useMax}, copy_location/rotation/scale {axes,
+     *  invert}, transformation {from, to, factor, offset}. Returns its id. */
+    addConstraint(
+      objectId: string,
+      c: { type: string; name?: string; targetId?: string; influence?: number; params?: ConstraintParams },
+    ): string {
+      if (typeof objectId !== "string" || !c || typeof c !== "object") throw new Error("api.addConstraint expects (objectId, { type, ... })");
+      if (typeof c.type !== "string" || !CONSTRAINT_TYPES.includes(c.type as ConstraintType)) {
+        throw new Error(`Unknown constraint type "${String(c.type)}" — use one of ${CONSTRAINT_TYPES.join(", ")}`);
+      }
+      if (c.influence !== undefined && (typeof c.influence !== "number" || c.influence < 0 || c.influence > 1)) {
+        throw new Error("influence must be a number in [0, 1]");
+      }
+      return target.addConstraint(objectId, {
+        type: c.type as ConstraintType,
+        name: typeof c.name === "string" ? c.name : undefined,
+        targetId: typeof c.targetId === "string" ? c.targetId : undefined,
+        influence: typeof c.influence === "number" ? c.influence : undefined,
+        params: c.params ?? {},
+      });
+    },
+
+    /** Patch a constraint: {name?, enabled?, influence?, targetId?, params?}.
+     *  setInverse re-bakes a child_of offset from the current base poses. */
+    updateConstraint(
+      objectId: string,
+      id: string,
+      patch: { name?: string; enabled?: boolean; influence?: number; targetId?: string; params?: ConstraintParams },
+      setInverse?: boolean,
+    ): void {
+      if (typeof objectId !== "string" || typeof id !== "string" || !patch || typeof patch !== "object")
+        throw new Error("api.updateConstraint expects (objectId, id, patch, setInverse?)");
+      if (patch.influence !== undefined && (typeof patch.influence !== "number" || patch.influence < 0 || patch.influence > 1)) {
+        throw new Error("influence must be a number in [0, 1]");
+      }
+      target.updateConstraint(objectId, id, patch, setInverse);
+    },
+
+    /** Replace a constraint's key track: [{t, influence?, u?, interp?}].
+     *  influence animates any constraint (e.g. child_of attach/detach);
+     *  u animates follow_path traversal (0..1 along the path). */
+    constraintKeys(objectId: string, id: string, keys: ConstraintKey[]): void {
+      if (typeof objectId !== "string" || typeof id !== "string" || !Array.isArray(keys))
+        throw new Error("api.constraintKeys expects (objectId, id, keys[])");
+      for (const k of keys) {
+        if (typeof k?.t !== "number" || !Number.isFinite(k.t) || k.t < 0)
+          throw new Error(`Constraint key needs a numeric t >= 0, got ${String(k?.t)}`);
+      }
+      target.constraintKeys(objectId, id, keys);
+    },
+
+    /** Remove a constraint by id. */
+    removeConstraint(objectId: string, id: string): void {
+      if (typeof objectId !== "string" || typeof id !== "string") throw new Error("api.removeConstraint expects (objectId, id)");
+      target.removeConstraint(objectId, id);
     },
 
     /** Create an Outliner collection (Blender-style grouping) and return its
@@ -453,8 +561,31 @@ export function createScriptTarget(doc: SceneDocument): ScriptTarget {
     if (!doc.cameras.some((c) => c.id === id)) throw new Error(`No camera with id "${id}"`);
     return id;
   };
+  /** Bake a child_of offset matrix from the current base poses:
+   *  inverse = ownerWorld × targetWorld⁻¹ (Blender "Set Inverse" — attaching
+   *  does not move the owner; it follows the target's motion from now on). */
+  const bakeChildOfInverse = (ownerId: string, targetId: string): number[] =>
+    matMultiply(baseWorldOf(doc, ownerId), matInvert(baseWorldOf(doc, targetId)));
+  const assertConstraint = (objectId: string, id: string): ConstraintDesc => {
+    const obj = assertObj(objectId);
+    const c = obj.constraints?.find((x) => x.id === id);
+    if (!c) throw new Error(`No constraint with id "${id}" on object "${obj.name}"`);
+    return c;
+  };
+  const MAX_CONSTRAINTS = 32;
   return {
     add(opts) {
+      if (opts.type === "instance") {
+        if (!opts.instanceOf || !doc.collections.some((c) => c.id === opts.instanceOf)) {
+          throw new Error("api.add({type:\"instance\"}) needs instanceOf: an existing collection id (see api.get().collections)");
+        }
+        if (doc.objects.some((m) => m.type === "instance" && m.collectionId === opts.instanceOf)) {
+          throw new Error("Cannot instance a collection that itself contains an instance (no recursive instancing)");
+        }
+      }
+      if (opts.parentId !== undefined && opts.parentId !== null && !doc.objects.some((o) => o.id === opts.parentId)) {
+        throw new Error(`parentId: no object with id "${opts.parentId}"`);
+      }
       const spec = specOf(opts.type);
       const id = newId();
       const created = {
@@ -472,6 +603,8 @@ export function createScriptTarget(doc: SceneDocument): ScriptTarget {
         assertCollection(opts.collectionId);
         created.collectionId = opts.collectionId;
       }
+      if (opts.parentId) created.parentId = opts.parentId;
+      if (opts.instanceOf) created.instanceOf = opts.instanceOf;
       doc.objects.push(created);
       return id;
     },
@@ -489,11 +622,119 @@ export function createScriptTarget(doc: SceneDocument): ScriptTarget {
         else obj.collectionId = assertCollection(patch.collectionId).id;
       }
     },
+    setParent(childId, parentId, keep = "world") {
+      const child = assertObj(childId);
+      if (parentId === childId) throw new Error("An object cannot be its own parent");
+      if (parentId) {
+        const parent = assertObj(parentId);
+        if (isDescendantOf(doc, parentId, childId)) {
+          throw new Error(`Cannot parent to "${parent.name}" — it is a descendant of "${child.name}" (cycle)`);
+        }
+      }
+      const childWorld = keep === "world" ? baseWorldOf(doc, childId) : null;
+      if (parentId) {
+        child.parentId = parentId;
+        if (childWorld) {
+          const local = matDecompose(matMultiply(matInvert(baseWorldOf(doc, parentId)), childWorld));
+          child.position = local.position;
+          child.rotation = local.rotation;
+          child.scale = local.scale;
+        }
+      } else {
+        if (childWorld && child.parentId) {
+          const world = matDecompose(childWorld);
+          child.position = world.position;
+          child.rotation = world.rotation;
+          child.scale = world.scale;
+        }
+        delete child.parentId;
+      }
+    },
+    addConstraint(objectId, c) {
+      const obj = assertObj(objectId);
+      if (!CONSTRAINT_TYPES.includes(c.type)) {
+        throw new Error(`Unknown constraint type "${String(c.type)}" — use one of ${CONSTRAINT_TYPES.join(", ")}`);
+      }
+      if (c.targetId !== undefined && !doc.objects.some((o) => o.id === c.targetId)) {
+        throw new Error(`targetId: no object with id "${String(c.targetId)}"`);
+      }
+      if ((obj.constraints?.length ?? 0) >= MAX_CONSTRAINTS) {
+        throw new Error(`Object "${obj.name}" already has ${MAX_CONSTRAINTS} constraints (max)`);
+      }
+      const created: ConstraintDesc = {
+        id: newId("cst"),
+        type: c.type,
+        name: c.name,
+        enabled: true,
+        influence: c.influence ?? 1,
+        targetId: c.targetId,
+        params: { ...(c.params ?? {}) },
+      };
+      if (c.type === "child_of" && c.targetId) {
+        created.params.inverse = bakeChildOfInverse(objectId, c.targetId);
+      }
+      obj.constraints = [...(obj.constraints ?? []), created];
+      return created.id;
+    },
+    updateConstraint(objectId, id, patch, setInverse) {
+      const c = assertConstraint(objectId, id);
+      if (patch.name !== undefined) c.name = String(patch.name);
+      if (patch.enabled !== undefined) c.enabled = !!patch.enabled;
+      if (patch.influence !== undefined) c.influence = Math.min(1, Math.max(0, patch.influence));
+      if (patch.targetId !== undefined) {
+        if (!doc.objects.some((o) => o.id === patch.targetId)) {
+          throw new Error(`targetId: no object with id "${patch.targetId}"`);
+        }
+        c.targetId = patch.targetId;
+      }
+      if (patch.params) c.params = { ...c.params, ...patch.params };
+      if (setInverse) {
+        if (c.type !== "child_of") throw new Error("setInverse applies to child_of constraints only");
+        if (!c.targetId) throw new Error("child_of needs a targetId before setting the inverse");
+        c.params.inverse = bakeChildOfInverse(objectId, c.targetId);
+      }
+    },
+    constraintKeys(objectId, id, keys) {
+      const c = assertConstraint(objectId, id);
+      if (keys.length > 256) throw new Error("A constraint can hold at most 256 keys");
+      const clean = keys
+        .filter((k) => typeof k.t === "number" && Number.isFinite(k.t) && k.t >= 0)
+        .map((k) => ({
+          t: k.t,
+          influence: typeof k.influence === "number" ? Math.min(1, Math.max(0, k.influence)) : undefined,
+          u: typeof k.u === "number" && Number.isFinite(k.u) ? k.u : undefined,
+          interp: k.interp ?? "linear",
+        }))
+        .sort((a, b) => a.t - b.t);
+      c.keys = clean.length ? clean : undefined;
+    },
+    removeConstraint(objectId, id) {
+      const obj = assertObj(objectId);
+      if (!obj.constraints?.some((x) => x.id === id)) throw new Error(`No constraint with id "${id}" on object "${obj.name}"`);
+      obj.constraints = obj.constraints.filter((x) => x.id !== id);
+      if (!obj.constraints.length) delete obj.constraints;
+    },
     remove(id) {
-      const n = doc.objects.length;
+      const gone = doc.objects.find((o) => o.id === id);
+      if (!gone) throw new Error(`No object with id "${id}"`);
+      // Blender-like: children move up to the deleted object's parent,
+      // keep-world (they must not jump to the scene origin).
+      const byId = new Map(doc.objects.map((o) => [o.id, o] as const));
+      for (const child of doc.objects) {
+        if (child.parentId !== id) continue;
+        const childWorld = baseWorldOf(doc, child.id);
+        const newParent = gone.parentId && byId.has(gone.parentId) ? gone.parentId : null;
+        const local = newParent
+          ? matDecompose(matMultiply(matInvert(baseWorldOf(doc, newParent)), childWorld))
+          : matDecompose(childWorld);
+        child.position = local.position;
+        child.rotation = local.rotation;
+        child.scale = local.scale;
+        if (newParent) child.parentId = newParent;
+        else delete child.parentId;
+      }
       doc.objects = doc.objects.filter((o) => o.id !== id);
       doc.actions = doc.actions.filter((a) => !(a.kind === "object" && a.objectId === id));
-      if (doc.objects.length === n) throw new Error(`No object with id "${id}"`);
     },
     clear() {
       doc.objects = [];

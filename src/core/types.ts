@@ -20,7 +20,13 @@ export type GeometryType =
   | "octahedron"
   | "dodecahedron"
   | "icosahedron"
-  | "torusKnot";
+  | "torusKnot"
+  /** Non-rendering transform anchor (Blender empty): drives children and
+   *  constraints; shows as an editor/snapshot axis cross, never in exports. */
+  | "empty"
+  /** A placed copy of a whole collection (`instanceOf`); keyframe/parent it
+   *  like any object — the members' own animation replays inside every copy. */
+  | "instance";
 
 export type Interp = "linear" | "step" | "smooth";
 
@@ -30,17 +36,187 @@ export interface ObjectDesc {
   type: GeometryType;
   /** Per-geometry size parameters, see geometryCatalog. */
   params: Record<string, number>;
+  /** LOCAL position relative to the parent (== world for root objects):
+   *  world = parent.world × local TRS. */
   position: Vec3;
-  /** Euler XYZ, radians. */
+  /** LOCAL Euler XYZ, radians. */
   rotation: Vec3;
   scale: Vec3;
   /** Hex color, e.g. "#ff8800". */
   color: string;
   visible: boolean;
+  /** Parent object (Blender-style parenting). Absent/null = scene root. The
+   *  parent chain must be acyclic (the validator enforces it). */
+  parentId?: string;
+  /** Collection instanced by a type:"instance" object (doc.collections id). */
+  instanceOf?: string;
+  /** Constraint stack, applied top to bottom every evaluated frame AFTER
+   *  keyframes/hooks; written channels override keyframes (like hook-owned
+   *  channels) and cannot be hand-edited or auto-keyed. */
+  constraints?: ConstraintDesc[];
   /** Which of this object's actions is ACTIVE (evaluated/edited). */
   activeActionId?: string;
   /** Collection this object lives in (Outliner grouping); absent = scene root. */
   collectionId?: string;
+}
+
+// --- constraints (Blender-style motion bridges) ---------------------------------
+
+export type ConstraintType =
+  | "track_to"
+  | "follow_path"
+  | "child_of"
+  | "limit_location"
+  | "limit_rotation"
+  | "limit_scale"
+  | "copy_location"
+  | "copy_rotation"
+  | "copy_scale"
+  | "transformation";
+
+/** The constraint whitelist (single source for validator + scripting). */
+export const CONSTRAINT_TYPES: readonly ConstraintType[] = [
+  "track_to",
+  "follow_path",
+  "child_of",
+  "limit_location",
+  "limit_rotation",
+  "limit_scale",
+  "copy_location",
+  "copy_rotation",
+  "copy_scale",
+  "transformation",
+];
+
+/** Constraint types that need a target object (the rest are self-contained). */
+export const CONSTRAINT_NEEDS_TARGET: readonly ConstraintType[] = [
+  "track_to",
+  "child_of",
+  "copy_location",
+  "copy_rotation",
+  "copy_scale",
+  "transformation",
+];
+
+/** Aim axis for track_to. */
+export type TrackAxis = "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
+
+/** Transform channel address used by the transformation constraint, e.g.
+ *  "position.y", "rotation.x", "scale.z" (LOCAL channels of the target). */
+export type ChanAddress = string;
+
+export interface ConstraintParams {
+  /** track_to: local axis aimed at the target (default "+z"). */
+  axis?: TrackAxis;
+  /** follow_path: world-space waypoints (>= 2), sampled as a Catmull-Rom
+   *  spline parameterized by arc length. */
+  points?: Vec3[];
+  /** follow_path: position along the path, 0..1 (keyframable via keys.u). */
+  u?: number;
+  /** follow_path: also orient the aim axis along the path tangent. */
+  followRotation?: boolean;
+  /** child_of: offset matrix baked at add/"set inverse" time
+   *  (column-major 16 numbers; desired world = inverse × target world). */
+  inverse?: number[];
+  /** child_of: which channels follow the target (defaults loc+rot, no scale). */
+  useLoc?: boolean;
+  useRot?: boolean;
+  useScale?: boolean;
+  /** limit_*: inclusive per-axis bounds in LOCAL space (default -1..1). */
+  min?: Vec3;
+  max?: Vec3;
+  /** limit_*: whether each axis's min/max bound is enforced. */
+  useMin?: [boolean, boolean, boolean];
+  useMax?: [boolean, boolean, boolean];
+  /** copy_*: which axes copy (default all). */
+  axes?: [boolean, boolean, boolean];
+  /** copy_*: negate the copied value per axis. */
+  invert?: boolean;
+  /** transformation: source channel on the target, e.g. "rotation.x". */
+  from?: ChanAddress;
+  /** transformation: destination channel on the owner, e.g. "position.y". */
+  to?: ChanAddress;
+  /** transformation: destination = offset + factor × source (default 1 / 0). */
+  factor?: number;
+  offset?: number;
+}
+
+/** Per-constraint mini keyframe track: `influence` animates every constraint
+ *  (e.g. child_of attach/detach), `u` animates follow_path traversal. */
+export interface ConstraintKey {
+  t: number;
+  influence?: number;
+  u?: number;
+  interp?: Interp;
+}
+
+export interface ConstraintDesc {
+  id: string;
+  type: ConstraintType;
+  name?: string;
+  /** Disabled constraints are skipped (default true). */
+  enabled?: boolean;
+  /** Static influence 0..1 (default 1); overridden by keyed influence. */
+  influence?: number;
+  /** Target object (empty-friendly) — required by track_to / child_of /
+   *  copy_* / transformation. */
+  targetId?: string;
+  params: ConstraintParams;
+  keys?: ConstraintKey[];
+}
+
+/** Transform channels a constraint writes on its owner (used to mark channels
+ *  un-editable, mirroring the onFrame-hook channel ownership). */
+export function constraintChannels(c: ConstraintDesc): Array<"position" | "rotation" | "scale"> {
+  const p = c.params;
+  switch (c.type) {
+    case "track_to":
+      return ["rotation"];
+    case "follow_path":
+      return p.followRotation ? ["position", "rotation"] : ["position"];
+    case "child_of": {
+      const out: Array<"position" | "rotation" | "scale"> = [];
+      if (p.useLoc !== false) out.push("position");
+      if (p.useRot !== false) out.push("rotation");
+      if (p.useScale) out.push("scale");
+      return out;
+    }
+    case "limit_location":
+      return ["position"];
+    case "limit_rotation":
+      return ["rotation"];
+    case "limit_scale":
+      return ["scale"];
+    case "copy_location":
+      return ["position"];
+    case "copy_rotation":
+      return ["rotation"];
+    case "copy_scale":
+      return ["scale"];
+    case "transformation":
+      return [(p.to?.split(".")[0] ?? "position") as "position" | "rotation" | "scale"];
+  }
+}
+
+/** Objects whose parentId is `id`, in document order. */
+export function childrenOf(doc: SceneDocument, id: string): ObjectDesc[] {
+  return doc.objects.filter((o) => o.parentId === id);
+}
+
+/** True when `ancestorId` is `childId` itself or appears anywhere in its
+ *  parent chain (used to reject cyclic parenting). */
+export function isDescendantOf(doc: SceneDocument, childId: string, ancestorId: string): boolean {
+  if (childId === ancestorId) return true;
+  const byId = new Map(doc.objects.map((o) => [o.id, o] as const));
+  let cur = byId.get(childId);
+  const seen = new Set<string>();
+  while (cur?.parentId) {
+    if (seen.has(cur.id)) return false; // defensive: cyclic doc
+    seen.add(cur.id);
+    if (cur.parentId === ancestorId) return true;
+    cur = byId.get(cur.parentId);
+  }
+  return false;
 }
 
 /** A keyframe for one object. Only the properties present are keyed; within a
@@ -125,6 +301,10 @@ export interface CameraDesc {
 export interface CollectionDesc {
   id: string;
   name: string;
+  /** View-layer exclusion (Blender): a hidden collection renders none of its
+   *  objects directly, but collection INSTANCES still render them — that is
+   *  how a master assembly is kept out of the picture while its copies show. */
+  hidden?: boolean;
 }
 
 /** A timeline marker bound to a scene camera (Blender-style camera cut):
@@ -373,6 +553,8 @@ export interface GeometrySpec {
   labelZh: string;
   params: GeometryParamSpec[];
   defaults: Record<string, number>;
+  /** Hidden from the geometry palette (added through tools/UI instead). */
+  pseudo?: boolean;
 }
 
 export const GEOMETRY_CATALOG: GeometrySpec[] = [
@@ -492,6 +674,21 @@ export const GEOMETRY_CATALOG: GeometrySpec[] = [
       { key: "tube", label: "Tube", labelZh: "管径", min: 0.01, max: 10, step: 0.05 },
     ],
     defaults: { radius: 0.6, tube: 0.2 },
+  },
+  {
+    type: "empty",
+    label: "Empty",
+    labelZh: "空物体",
+    params: [{ key: "size", label: "Display size", labelZh: "显示大小", min: 0.05, max: 20, step: 0.1 }],
+    defaults: { size: 1 },
+  },
+  {
+    type: "instance",
+    label: "Collection Instance",
+    labelZh: "集合实例",
+    params: [],
+    defaults: {},
+    pseudo: true,
   },
 ];
 

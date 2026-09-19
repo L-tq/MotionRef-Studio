@@ -10,6 +10,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { evaluate, evalCameraById, type EvaluatedState, type HookError } from "./animation";
 import { docAspect, defaultCameraDesc, activeCameraIdAt, DEFAULT_FAR_CLIP, clampFarClip, type ObjectDesc, type PivotMode, type SceneDocument } from "./types";
+import { samplePolyline } from "./xform";
 
 export type GizmoMode = "select" | "translate" | "rotate" | "scale";
 
@@ -185,10 +186,20 @@ function buildGeometry(obj: ObjectDesc): THREE.BufferGeometry {
 export class DocScene {
   readonly scene = new THREE.Scene();
   readonly sceneCamera = new THREE.PerspectiveCamera(45, 16 / 9, 0.1, DEFAULT_FAR_CLIP);
+  /** Real meshes plus invisible pick/gizmo anchors for empties and instances. */
   private meshes = new Map<string, THREE.Mesh>();
+  /** Instance copies, keyed `${instanceId}::${memberId}`. */
+  private instanceMeshes = new Map<string, THREE.Mesh>();
   private lastSignature = new Map<string, string>();
+  /** Editor/snapshot helper layer: empty axis crosses + follow-path lines.
+   *  Enabled for viewport + agent snapshots, never for video export. */
+  private helpers = new THREE.Group();
+  private helperObjects = new Map<string, THREE.Object3D>();
+  private helpersEnabled: boolean;
+  private helpersVisible = true;
 
-  constructor(doc: SceneDocument) {
+  constructor(doc: SceneDocument, opts?: { helpers?: boolean }) {
+    this.helpersEnabled = !!opts?.helpers;
     this.scene.add(new THREE.AmbientLight(0xffffff, 1.35));
     const dir = new THREE.DirectionalLight(0xffffff, 1.6);
     dir.position.set(6, 10, 8);
@@ -196,7 +207,22 @@ export class DocScene {
     const dir2 = new THREE.DirectionalLight(0xffffff, 0.5);
     dir2.position.set(-6, 4, -8);
     this.scene.add(dir2);
+    this.scene.add(this.helpers);
     this.sync(doc, evaluate(doc, 0));
+  }
+
+  /** Show/hide the helper layer (e.g. camera preview mirrors the export). */
+  setHelpersVisible(v: boolean): void {
+    this.helpersVisible = v;
+    this.helpers.visible = v && this.helpersEnabled;
+  }
+
+  private disposeHelper(h: THREE.Object3D): void {
+    const lh = h as THREE.LineSegments;
+    lh.geometry?.dispose();
+    const mat = lh.material as THREE.Material | THREE.Material[] | undefined;
+    if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+    else mat?.dispose();
   }
 
   /** skipIds keeps some meshes untouched (a gizmo drag holds the whole
@@ -205,25 +231,38 @@ export class DocScene {
   sync(doc: SceneDocument, state: EvaluatedState, skipIds?: ReadonlySet<string> | ReadonlyMap<string, unknown>): void {
     this.scene.background = new THREE.Color(doc.background);
 
+    const isAnchor = (type: string) => type === "empty" || type === "instance";
     const alive = new Set<string>();
     for (const obj of doc.objects) {
       alive.add(obj.id);
       let mesh = this.meshes.get(obj.id);
-      const signature = `${obj.type}|${JSON.stringify(obj.params)}`;
+      const signature = isAnchor(obj.type)
+        ? `${obj.type}|${obj.type === "empty" ? obj.params.size ?? 1 : obj.instanceOf ?? ""}`
+        : `${obj.type}|${JSON.stringify(obj.params)}`;
       if (!mesh || this.lastSignature.get(obj.id) !== signature) {
         if (mesh) {
           mesh.geometry.dispose();
-          (mesh.material as THREE.MeshStandardMaterial).dispose();
+          (mesh.material as THREE.Material).dispose();
           this.scene.remove(mesh);
         }
-        const material = new THREE.MeshStandardMaterial({
-          color: new THREE.Color(obj.color),
-          roughness: 0.65,
-          metalness: 0.05,
-          flatShading: FLAT_SHADING.has(obj.type),
-          side: DOUBLE_SIDED.has(obj.type) ? THREE.DoubleSide : THREE.FrontSide,
-        });
-        mesh = new THREE.Mesh(buildGeometry(obj), material);
+        if (isAnchor(obj.type)) {
+          // Empties/instances render nothing themselves; an invisible
+          // raycastable sphere stands in for picking, the gizmo and the
+          // selection box (same trick as the camera pick spheres).
+          mesh = new THREE.Mesh(
+            new THREE.SphereGeometry((obj.params.size ?? 1) * 0.16, 8, 8),
+            new THREE.MeshBasicMaterial({ visible: false }),
+          );
+        } else {
+          const material = new THREE.MeshStandardMaterial({
+            color: new THREE.Color(obj.color),
+            roughness: 0.65,
+            metalness: 0.05,
+            flatShading: FLAT_SHADING.has(obj.type),
+            side: DOUBLE_SIDED.has(obj.type) ? THREE.DoubleSide : THREE.FrontSide,
+          });
+          mesh = new THREE.Mesh(buildGeometry(obj), material);
+        }
         mesh.userData.id = obj.id;
         this.scene.add(mesh);
         this.meshes.set(obj.id, mesh);
@@ -235,25 +274,93 @@ export class DocScene {
     for (const [id, mesh] of this.meshes) {
       if (!alive.has(id)) {
         mesh.geometry.dispose();
-        (mesh.material as THREE.MeshStandardMaterial).dispose();
+        (mesh.material as THREE.Material).dispose();
         this.scene.remove(mesh);
         this.meshes.delete(id);
         this.lastSignature.delete(id);
       }
     }
 
-    // Apply evaluated poses.
+    // Apply evaluated WORLD poses (the evaluator composed parent chains and
+    // constraints already; the three.js scene stays flat). Objects of a
+    // HIDDEN collection render nothing directly — but collection instances
+    // further below still copy them (Blender view-layer exclusion).
+    const hiddenCols = new Set(doc.collections.filter((c) => c.hidden).map((c) => c.id));
     for (const obj of doc.objects) {
       if (skipIds?.has(obj.id)) continue;
       const mesh = this.meshes.get(obj.id);
       const ev = state.objects.get(obj.id);
       if (!mesh || !ev) continue;
-      mesh.position.set(ev.position[0], ev.position[1], ev.position[2]);
-      mesh.rotation.set(ev.rotation[0], ev.rotation[1], ev.rotation[2]);
-      mesh.scale.set(ev.scale[0], ev.scale[1], ev.scale[2]);
-      mesh.visible = ev.visible;
-      (mesh.material as THREE.MeshStandardMaterial).color.set(ev.color);
+      mesh.position.set(ev.world.position[0], ev.world.position[1], ev.world.position[2]);
+      mesh.rotation.set(ev.world.rotation[0], ev.world.rotation[1], ev.world.rotation[2]);
+      mesh.scale.set(ev.world.scale[0], ev.world.scale[1], ev.world.scale[2]);
+      mesh.visible = ev.visible && !(obj.collectionId && hiddenCols.has(obj.collectionId));
+      if (!isAnchor(obj.type)) (mesh.material as THREE.MeshStandardMaterial).color.set(ev.color);
     }
+
+    // Collection instances: every member of the target collection is copied
+    // under the instance's world transform (copy = instance × member). The
+    // members' own animation (keys/hooks/constraints) replays in every copy;
+    // masters usually stay hidden (visible:false) or live off to the side.
+    const instancesAlive = new Set<string>();
+    for (const inst of doc.objects) {
+      if (inst.type !== "instance" || !inst.instanceOf) continue;
+      const instEv = state.objects.get(inst.id);
+      const instMat = state.worldMats.get(inst.id);
+      if (!instEv || !instMat) continue;
+      for (const member of doc.objects) {
+        if (member.collectionId !== inst.instanceOf || isAnchor(member.type)) continue;
+        const memberEv = state.objects.get(member.id);
+        const memberMat = state.worldMats.get(member.id);
+        if (!memberEv || !memberMat) continue;
+        const key = `${inst.id}::${member.id}`;
+        instancesAlive.add(key);
+        const signature = `${member.type}|${JSON.stringify(member.params)}`;
+        let mesh = this.instanceMeshes.get(key);
+        if (!mesh || this.lastSignature.get(key) !== signature) {
+          if (mesh) {
+            mesh.geometry.dispose();
+            (mesh.material as THREE.Material).dispose();
+            this.scene.remove(mesh);
+          }
+          mesh = new THREE.Mesh(
+            buildGeometry(member),
+            new THREE.MeshStandardMaterial({
+              color: new THREE.Color(memberEv.color),
+              roughness: 0.65,
+              metalness: 0.05,
+              flatShading: FLAT_SHADING.has(member.type),
+              side: DOUBLE_SIDED.has(member.type) ? THREE.DoubleSide : THREE.FrontSide,
+            }),
+          );
+          // Clicking a copy selects the INSTANCE as a whole (Blender-like:
+          // instance internals are edited on the master collection).
+          mesh.userData.id = inst.id;
+          this.scene.add(mesh);
+          this.instanceMeshes.set(key, mesh);
+          this.lastSignature.set(key, signature);
+        }
+        const m = new THREE.Matrix4()
+          .fromArray(instMat)
+          .multiply(new THREE.Matrix4().fromArray(memberMat));
+        m.decompose(mesh.position, mesh.quaternion, mesh.scale);
+        mesh.visible = instEv.visible && memberEv.visible;
+        (mesh.material as THREE.MeshStandardMaterial).color.set(memberEv.color);
+      }
+    }
+    for (const [key, mesh] of this.instanceMeshes) {
+      if (!instancesAlive.has(key)) {
+        mesh.geometry.dispose();
+        (mesh.material as THREE.Material).dispose();
+        this.scene.remove(mesh);
+        this.instanceMeshes.delete(key);
+        this.lastSignature.delete(key);
+      }
+    }
+
+    // Helpers: empty axis crosses + follow-path polylines (viewport + agent
+    // snapshots only — the video export builds DocScenes without them).
+    if (this.helpersEnabled) this.syncHelpers(doc, state);
 
     // Scene camera.
     const cam = state.camera;
@@ -269,20 +376,111 @@ export class DocScene {
     }
   }
 
+  private syncHelpers(doc: SceneDocument, state: EvaluatedState): void {
+    const alive = new Set<string>();
+    for (const obj of doc.objects) {
+      const ev = state.objects.get(obj.id);
+      if (!ev) continue;
+      if (obj.type === "empty") {
+        alive.add(obj.id);
+        let cross = this.helperObjects.get(obj.id) as THREE.LineSegments | undefined;
+        const size = obj.params.size ?? 1;
+        if (!cross || this.lastSignature.get(`helper:${obj.id}`) !== String(size)) {
+          if (cross) {
+            cross.geometry.dispose();
+            (cross.material as THREE.Material).dispose();
+            this.helpers.remove(cross);
+          }
+          const s = size * 0.5;
+          const g = new THREE.BufferGeometry();
+          g.setAttribute(
+            "position",
+            new THREE.Float32BufferAttribute(
+              [0, 0, 0, s, 0, 0, 0, 0, 0, -s, 0, 0, 0, 0, 0, 0, s, 0, 0, 0, 0, 0, -s, 0, 0, 0, 0, 0, 0, s, 0, 0, 0, 0, 0, -s],
+              3,
+            ),
+          );
+          const colors = new Float32Array(12 * 3);
+          const axis = (i: number, r: number, g2: number, b: number) => {
+            for (const k of [i * 2, i * 2 + 1]) {
+              colors[k * 3] = r;
+              colors[k * 3 + 1] = g2;
+              colors[k * 3 + 2] = b;
+            }
+          };
+          axis(0, 0.95, 0.3, 0.35); // X red
+          axis(1, 0.4, 0.9, 0.45); // Y green
+          axis(2, 0.35, 0.6, 1.0); // Z blue
+          g.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+          cross = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ vertexColors: true }));
+          this.helpers.add(cross);
+          this.helperObjects.set(obj.id, cross);
+          this.lastSignature.set(`helper:${obj.id}`, String(size));
+        }
+        cross.position.set(ev.world.position[0], ev.world.position[1], ev.world.position[2]);
+        cross.rotation.set(ev.world.rotation[0], ev.world.rotation[1], ev.world.rotation[2]);
+        cross.scale.set(ev.world.scale[0], ev.world.scale[1], ev.world.scale[2]);
+        cross.visible = ev.visible;
+      }
+      for (const c of obj.constraints ?? []) {
+        if (c.type !== "follow_path" || c.enabled === false || !c.params.points || c.params.points.length < 2) continue;
+        const key = `path:${obj.id}:${c.id}`;
+        alive.add(key);
+        const json = JSON.stringify(c.params.points);
+        let line = this.helperObjects.get(key) as THREE.Line | undefined;
+        if (!line || this.lastSignature.get(key) !== json) {
+          if (line) {
+            line.geometry.dispose();
+            (line.material as THREE.Material).dispose();
+            this.helpers.remove(line);
+          }
+          const pts: number[] = [];
+          const N = Math.max(24, c.params.points.length * 6);
+          for (let i = 0; i <= N; i++) {
+            const s = samplePolyline(c.params.points, i / N);
+            pts.push(s.point[0], s.point[1], s.point[2]);
+          }
+          const g = new THREE.BufferGeometry();
+          g.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+          line = new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0x8a93b0 }));
+          this.helpers.add(line);
+          this.helperObjects.set(key, line);
+          this.lastSignature.set(key, json);
+        }
+        line.visible = ev.visible;
+      }
+    }
+    for (const [key, obj3d] of this.helperObjects) {
+      if (!alive.has(key)) {
+        this.disposeHelper(obj3d);
+        this.helpers.remove(obj3d);
+        this.helperObjects.delete(key);
+        this.lastSignature.delete(key);
+      }
+    }
+  }
+
   meshFor(id: string): THREE.Mesh | undefined {
     return this.meshes.get(id);
   }
 
   get pickables(): THREE.Mesh[] {
-    return [...this.meshes.values()];
+    return [...this.meshes.values(), ...this.instanceMeshes.values()];
   }
 
   dispose(): void {
     for (const mesh of this.meshes.values()) {
       mesh.geometry.dispose();
-      (mesh.material as THREE.MeshStandardMaterial).dispose();
+      (mesh.material as THREE.Material).dispose();
     }
     this.meshes.clear();
+    for (const mesh of this.instanceMeshes.values()) {
+      mesh.geometry.dispose();
+      (mesh.material as THREE.Material).dispose();
+    }
+    this.instanceMeshes.clear();
+    for (const h of this.helperObjects.values()) this.disposeHelper(h);
+    this.helperObjects.clear();
   }
 }
 
@@ -311,19 +509,22 @@ export function disposeOffscreen(): void {
 }
 
 /** Render one deterministic frame of the doc at target size; returns the
- *  offscreen canvas (call canvas.toDataURL() afterwards if needed). */
+ *  offscreen canvas (call canvas.toDataURL() afterwards if needed).
+ *  opts.helpers adds the empty axis-crosses / follow-path lines — used by
+ *  agent snapshots for verification, never by the video export. */
 export function renderDocFrame(
   doc: SceneDocument,
   time: number,
   width: number,
   height: number,
   holder?: { docScene?: DocScene },
+  opts?: { helpers?: boolean },
 ): HTMLCanvasElement {
   const renderer = getOffscreenRenderer();
   renderer.setSize(width, height, false);
   let ds = holder?.docScene;
   if (!ds) {
-    ds = new DocScene(doc);
+    ds = new DocScene(doc, { helpers: opts?.helpers });
     if (holder) holder.docScene = ds;
   }
   ds.sceneCamera.aspect = width / height;
@@ -340,7 +541,9 @@ export function snapshotDataUrl(
   height = 576,
   format: "png" | "jpeg" = "png",
 ): string {
-  const canvas = renderDocFrame(doc, time, width, height);
+  // Helpers on: the snapshot is the agent's eyes — empties and paths show as
+  // axis crosses / polylines so placement and path shape are verifiable.
+  const canvas = renderDocFrame(doc, time, width, height, undefined, { helpers: true });
   return format === "jpeg"
     ? canvas.toDataURL("image/jpeg", 0.92)
     : canvas.toDataURL("image/png");
@@ -388,6 +591,11 @@ export class Engine {
   /** Channels the onFrame hooks overrode during the most recent evaluate
    *  (per object id) — the source of truth for script-owned transforms. */
   private lastHooked: EvaluatedState["hooked"] = new Map();
+  /** The most recent evaluate() result — world matrices feed gizmo
+   *  world→local conversion for parented objects. */
+  private lastState: EvaluatedState | null = null;
+  /** The doc belonging to lastState (parentId lookups). */
+  private lastDoc: SceneDocument | null = null;
   private disposed = false;
   private lastHookErrorAt = 0;
   private resizeObserver: ResizeObserver | null = null;
@@ -398,7 +606,7 @@ export class Engine {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
-    this.docScene = new DocScene({ version: 1, name: "", background: "#191922", duration: 1, fps: 30, aspect: 16 / 9, objects: [], collections: [], markers: [], cameras: [defaultCameraDesc()], activeCameraId: defaultCameraDesc().id, actions: [], onFrameScripts: [], cursor: [0, 0, 0] });
+    this.docScene = new DocScene({ version: 1, name: "", background: "#191922", duration: 1, fps: 30, aspect: 16 / 9, objects: [], collections: [], markers: [], cameras: [defaultCameraDesc()], activeCameraId: defaultCameraDesc().id, actions: [], onFrameScripts: [], cursor: [0, 0, 0] }, { helpers: true });
 
     this.editorCamera = new THREE.PerspectiveCamera(50, 1, 0.1, DEFAULT_FAR_CLIP);
     this.editorCamera.position.set(10, 8, 12);
@@ -493,12 +701,17 @@ export class Engine {
       const errors: HookError[] = [];
       const state = evaluate(frame.doc, frame.time, errors);
       this.lastHooked = state.hooked;
+      this.lastState = state;
+      this.lastDoc = frame.doc;
       if (errors.length && now - this.lastHookErrorAt > 2000) {
         this.lastHookErrorAt = now;
         this.callbacks.onHookErrors(errors);
       }
 
       this.docScene.sync(frame.doc, state, this.dragging ? this.dragStart : undefined);
+      // Camera preview mirrors the export — helpers (empty crosses, path
+      // lines) are editor/snapshot aids, not scene content.
+      this.docScene.setHelpersVisible(!frame.cameraPreview);
 
       this.grid.visible = frame.showGrid;
       this.axes.visible = frame.showGrid;
@@ -725,23 +938,27 @@ export class Engine {
       this.dragIndividual = (this.source()?.pivotMode ?? "median") === "individual";
       this.pivotProxy.quaternion.identity();
     }
-    // Warn once per drag when the gizmo's channel is script-owned: the hook
-    // re-applies it on the next evaluate, so the edit can never stick.
+    // Warn once per drag when the gizmo's channel is script- or
+    // constraint-owned: the next evaluate re-applies it, so the edit can
+    // never stick.
     const chan =
       this.transform.mode === "translate" ? "position" : this.transform.mode === "rotate" ? "rotation" : "scale";
     const affected = selection
-      .filter((id) => this.lastHooked.get(id)?.has(chan))
+      .filter((id) => this.lastHooked.get(id)?.has(chan) || this.lastState?.constrained.get(id)?.has(chan))
       .map((id) => ({ id, channels: this.scriptedChansOf(id) ?? [] }));
     if (affected.length) this.callbacks.onScriptedDragStart?.(affected);
   }
 
-  /** Transform channels an onFrame script drives for this object (undefined
-   *  when none — the common case). */
+  /** Transform channels an onFrame script OR a constraint drives for this
+   *  object (undefined when none — the common case). Such channels are
+   *  re-applied on every evaluate: edits cannot stick and must not be keyed. */
   private scriptedChansOf(id: string): string[] | undefined {
-    const set = this.lastHooked.get(id);
-    if (!set) return undefined;
-    const chans = [...set].filter((c) => c === "position" || c === "rotation" || c === "scale");
-    return chans.length ? chans : undefined;
+    const chans = new Set<string>([
+      ...(this.lastHooked.get(id) ?? []),
+      ...(this.lastState?.constrained.get(id) ?? []),
+    ]);
+    const transform = [...chans].filter((c) => c === "position" || c === "rotation" || c === "scale");
+    return transform.length ? transform : undefined;
   }
 
   private poseOf(m: THREE.Object3D): GizmoEdit["pose"] {
@@ -749,6 +966,41 @@ export class Engine {
       position: [m.position.x, m.position.y, m.position.z],
       rotation: [m.rotation.x, m.rotation.y, m.rotation.z],
       scale: [m.scale.x, m.scale.y, m.scale.z],
+    };
+  }
+
+  /** Convert a gizmo-driven WORLD pose into the object's LOCAL pose (the doc
+   *  stores local TRS; world = parent.world × local). When the parent itself
+   *  is dragged in the same gesture, its in-flight world pose is divided out
+   *  so parent+child multi-drags stay consistent. */
+  private toLocalPose(id: string, world: GizmoEdit["pose"], inFlight: ReadonlyMap<string, GizmoEdit["pose"]>): GizmoEdit["pose"] {
+    const parentId = this.lastDoc?.objects.find((o) => o.id === id)?.parentId;
+    if (!parentId) return world;
+    const m = new THREE.Matrix4();
+    const parentNew = inFlight.get(parentId);
+    if (parentNew) {
+      m.compose(
+        new THREE.Vector3(...parentNew.position),
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(...parentNew.rotation)),
+        new THREE.Vector3(...parentNew.scale),
+      );
+    } else {
+      const pm = this.lastState?.worldMats.get(parentId);
+      if (!pm) return world;
+      m.fromArray(pm);
+    }
+    const pQuat = new THREE.Quaternion();
+    const pScale = new THREE.Vector3();
+    m.decompose(new THREE.Vector3(), pQuat, pScale);
+    const pos = new THREE.Vector3(...world.position).applyMatrix4(m.clone().invert());
+    const quat = new THREE.Quaternion()
+      .setFromEuler(new THREE.Euler(...world.rotation))
+      .premultiply(pQuat.clone().invert());
+    const eul = new THREE.Euler().setFromQuaternion(quat, "XYZ");
+    return {
+      position: [pos.x, pos.y, pos.z],
+      rotation: [eul.x, eul.y, eul.z],
+      scale: [world.scale[0] / (pScale.x || 1), world.scale[1] / (pScale.y || 1), world.scale[2] / (pScale.z || 1)],
     };
   }
 
@@ -785,7 +1037,9 @@ export class Engine {
         edits.push({ id, pose: this.poseOf(mesh), scripted: this.scriptedChansOf(id) });
       }
     }
-    this.callbacks.onGizmoEdit(edits);
+    // The meshes above moved in WORLD space; the doc stores LOCAL poses.
+    const inFlight = new Map(edits.map((e) => [e.id, e.pose] as const));
+    this.callbacks.onGizmoEdit(edits.map((e) => ({ ...e, pose: this.toLocalPose(e.id, e.pose, inFlight) })));
   }
 
   /** Rotation via the pivot proxy: its quaternion (identity at drag start) is
@@ -805,7 +1059,8 @@ export class Engine {
       mesh.quaternion.multiplyQuaternions(dq, start.quat);
       edits.push({ id, pose: this.poseOf(mesh), scripted: this.scriptedChansOf(id) });
     }
-    if (edits.length) this.callbacks.onGizmoEdit(edits);
+    const inFlight = new Map(edits.map((e) => [e.id, e.pose] as const));
+    if (edits.length) this.callbacks.onGizmoEdit(edits.map((e) => ({ ...e, pose: this.toLocalPose(e.id, e.pose, inFlight) })));
   }
 
   // --- selection picking -----------------------------------------------------

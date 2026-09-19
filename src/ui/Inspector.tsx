@@ -1,6 +1,6 @@
 import { evalCameraById } from "../core/animation";
 import { ASPECT_PRESETS, aspectLabel, clampAspect, focalToFov, fovToFocal, FOCAL_PRESETS } from "../core/cameraMath";
-import { cameraFarClip, clampFarClip, docAspect, actionsOfOwner, activeActionOfOwner, activeCameraIdAt, specOf, type CameraDesc, type ObjectDesc, type Vec3 } from "../core/types";
+import { CONSTRAINT_NEEDS_TARGET, CONSTRAINT_TYPES, cameraFarClip, clampFarClip, docAspect, actionsOfOwner, activeActionOfOwner, activeCameraIdAt, isDescendantOf, specOf, type CameraDesc, type ConstraintType, type ObjectDesc, type Vec3 } from "../core/types";
 import { useStore } from "../state/store";
 import { getLocale, useT } from "../i18n";
 import { Diamond, MoveHorizontal, Pencil, Plus, Star, Trash2, X } from "lucide-react";
@@ -46,6 +46,10 @@ function ObjectInspector({ obj, ids }: { obj: ObjectDesc; ids: string[] }) {
   const createAction = useStore((s) => s.createAction);
   const deleteAction = useStore((s) => s.deleteAction);
   const setActiveAction = useStore((s) => s.setActiveAction);
+  const setParent = useStore((s) => s.setParent);
+  const addConstraint = useStore((s) => s.addConstraint);
+  const updateConstraint = useStore((s) => s.updateConstraint);
+  const removeConstraint = useStore((s) => s.removeConstraint);
   const doc = useStore((s) => s.doc);
   const actions = actionsOfOwner(doc, { objectId: obj.id });
   const action = activeActionOfOwner(doc, { objectId: obj.id });
@@ -102,6 +106,26 @@ function ObjectInspector({ obj, ids }: { obj: ObjectDesc; ids: string[] }) {
         <input type="text" value={obj.name} onChange={(e) => patch((o) => void (o.name = e.target.value), "rename")} />
       </div>
 
+      {!multi ? (
+        <div className="field">
+          <label>{t("inspector.parent")}</label>
+          <select
+            value={obj.parentId ?? ""}
+            onChange={(e) => setParent(obj.id, e.target.value || null, "world")}
+            title={t("inspector.parentHint")}
+          >
+            <option value="">{t("inspector.parentNone")}</option>
+            {doc.objects
+              .filter((o) => o.id !== obj.id && !isDescendantOf(doc, o.id, obj.id))
+              .map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.name}
+                </option>
+              ))}
+          </select>
+        </div>
+      ) : null}
+
       <div className="field">
         <label>{t("inspector.params")}</label>
         <div className="insp-grid">
@@ -121,7 +145,10 @@ function ObjectInspector({ obj, ids }: { obj: ObjectDesc; ids: string[] }) {
       </div>
 
       <div className="field">
-        <label>{t("inspector.position")}</label>
+        <label>
+          {t("inspector.position")}
+          {obj.parentId ? <span className="dim"> · {t("inspector.localPoseHint")}</span> : null}
+        </label>
         <Vec3Input value={obj.position} onChange={(v, axis) => commitAxisAll("position", axis, v)} />
       </div>
       <div className="field">
@@ -174,6 +201,77 @@ function ObjectInspector({ obj, ids }: { obj: ObjectDesc; ids: string[] }) {
           {t("common.delete")}
         </button>
       </div>
+      {/* Constraints (Blender-style stack, single selection). Full editing
+          lives in the agent tools; here: add/enable/target/influence/delete. */}
+      {!multi ? (
+        <div className="field">
+          <label>{t("inspector.constraints")}</label>
+          {obj.constraints?.length ? (
+            obj.constraints.map((c) => (
+              <div className="insp-row" key={c.id} style={{ gap: 4 }}>
+                <input
+                  type="checkbox"
+                  checked={c.enabled !== false}
+                  title={t("inspector.constraintEnabled")}
+                  onChange={(e) => updateConstraint(obj.id, c.id, { enabled: e.target.checked })}
+                />
+                <span
+                  style={{ flexShrink: 0 }}
+                  title={c.keys?.length ? t("inspector.constraintKeys", { n: c.keys.length }) : undefined}
+                >
+                  {t(`inspector.ct.${c.type}`)}
+                  {c.keys?.length ? <span className="dim"> ({c.keys.length})</span> : null}
+                </span>
+                {CONSTRAINT_NEEDS_TARGET.includes(c.type) ? (
+                  <select
+                    value={c.targetId ?? ""}
+                    style={{ flex: 1, minWidth: 0 }}
+                    onChange={(e) => updateConstraint(obj.id, c.id, { targetId: e.target.value || undefined })}
+                  >
+                    <option value="">—</option>
+                    {doc.objects
+                      .filter((o) => o.id !== obj.id)
+                      .map((o) => (
+                        <option key={o.id} value={o.id}>
+                          {o.name}
+                        </option>
+                      ))}
+                  </select>
+                ) : (
+                  <span className="spacer" style={{ flex: 1 }} />
+                )}
+                <Num
+                  value={c.influence ?? 1}
+                  step={0.05}
+                  min={0}
+                  max={1}
+                  onChange={(v) => updateConstraint(obj.id, c.id, { influence: v })}
+                />
+                <button className="btn small danger" title={t("common.delete")} onClick={() => removeConstraint(obj.id, c.id)}>
+                  <X size={11} />
+                </button>
+              </div>
+            ))
+          ) : (
+            <div className="hint" style={{ color: "var(--text-3)" }}>{t("inspector.noConstraints")}</div>
+          )}
+          <select
+            value=""
+            onChange={(e) => {
+              const type = e.target.value as ConstraintType;
+              if (type) addConstraint(obj.id, { type });
+            }}
+          >
+            <option value="">{t("inspector.addConstraint")}</option>
+            {CONSTRAINT_TYPES.map((ct) => (
+              <option key={ct} value={ct}>
+                {t(`inspector.ct.${ct}`)}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : null}
+
       {/* Actions (Blender-style): pick the ACTIVE one; manage in the Action Editor. */}
       <div className="insp-row" style={{ gap: 4 }}>
         <label style={{ flexShrink: 0 }}>{t("action.title")}</label>

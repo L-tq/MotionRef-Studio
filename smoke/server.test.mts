@@ -152,18 +152,19 @@ async function main(): Promise<void> {
     assert.ok(init.result?.instructions?.includes("Never claim success without a verifying snapshot"), "guide body shared verbatim");
   }
 
-  // 15 shared scene tools + 5 studio tools, same names as the registry.
+  // 17 shared scene tools + 5 studio tools, same names as the registry.
   const tools = await a.client.listTools();
   const names = tools.tools.map((t) => t.name);
   for (const expected of [
-    "get_scene_state", "set_scene", "add_object", "update_object", "remove_object", "set_camera",
+    "get_scene_state", "set_scene", "add_object", "update_object", "remove_object", "set_parent",
+    "manage_constraint", "set_camera",
     "add_camera", "set_active_camera", "manage_marker", "manage_action", "add_camera_keyframes",
     "add_keyframes", "set_timeline", "snapshot", "execute_code",
     "list_projects", "open_project", "save_project", "new_project", "get_status",
   ]) {
     assert.ok(names.includes(expected), `tool ${expected} present`);
   }
-  assert.equal(tools.tools.length, 20);
+  assert.equal(tools.tools.length, 22);
   const addTool = tools.tools.find((t) => t.name === "add_object")!;
   assert.deepEqual(addTool.inputSchema.type, "object");
 

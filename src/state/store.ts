@@ -18,6 +18,8 @@ import {
   type ActionDesc,
   type CameraActionDesc,
   type CameraKey,
+  type ConstraintParams,
+  type ConstraintType,
   type GeometryType,
   type KeyVec3,
   type ObjectActionDesc,
@@ -27,6 +29,7 @@ import {
   type Vec3,
 } from "../core/types";
 import { evaluate, evalCameraById } from "../core/animation";
+import { createScriptTarget } from "../core/scripting";
 import type { GizmoMode } from "../core/engine";
 import { validateSceneDocument, SCENE_FORMAT, PROJECT_FORMAT } from "../core/validate";
 import { clampAspect } from "../core/cameraMath";
@@ -416,6 +419,13 @@ export interface AppActions {
   deleteObjects(ids: string[]): void;
   /** Copy the given objects (and their actions); the copies become the selection. */
   duplicateObjects(ids: string[]): void;
+  /** Parent an object to another (Blender Ctrl+P) or unparent (null).
+   *  keep:"world" re-bakes the child's local TRS so nothing moves. */
+  setParent(childId: string, parentId: string | null, keep?: "world" | "local"): void;
+  /** Constraint stack management (Inspector; mirrors the agent tools). */
+  addConstraint(objectId: string, c: { type: ConstraintType; name?: string; targetId?: string; influence?: number; params?: ConstraintParams }): string;
+  updateConstraint(objectId: string, id: string, patch: { name?: string; enabled?: boolean; influence?: number; targetId?: string; params?: ConstraintParams }, setInverse?: boolean): void;
+  removeConstraint(objectId: string, id: string): void;
   /** Outliner collections (Blender-style). */
   addCollection(): void;
   renameCollection(id: string, name: string): void;
@@ -782,8 +792,17 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     if (!ids.length) return;
     const idSet = new Set(ids);
     get().mutateDoc("delete-object", (draft) => {
-      draft.objects = draft.objects.filter((o) => !idSet.has(o.id));
-      draft.actions = draft.actions.filter((a) => !(a.kind === "object" && idSet.has(a.objectId)));
+      // target.remove re-parents children of each deleted object to its
+      // parent (keep-world) and drops its actions — one code path shared
+      // with the agent tools and execute_code.
+      const target = createScriptTarget(draft);
+      for (const id of ids) {
+        try {
+          target.remove(id);
+        } catch {
+          /* already gone — multi-delete tolerance */
+        }
+      }
     });
     set((s) => ({ selection: s.selection.filter((id) => !idSet.has(id)) }));
   },
@@ -794,9 +813,11 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     if (!sources.length) return;
     const copyIds: string[] = [];
     get().mutateDoc("duplicate-object", (draft) => {
+      const oldToNew = new Map<string, string>();
       for (const src of sources) {
         const copyId = newId();
         copyIds.push(copyId);
+        oldToNew.set(src.id, copyId);
         const copy = JSON.parse(JSON.stringify(src)) as typeof src;
         copy.id = copyId;
         copy.name = `${src.name} copy`;
@@ -817,8 +838,50 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
         if (copyActiveId) copy.activeActionId = copyActiveId;
         else delete copy.activeActionId;
       }
+      // Hierarchy/constraints follow the copies: references into the
+      // duplicated set are remapped; references outside it keep pointing at
+      // the originals (Blender duplicate keeps such parents/targets).
+      for (const copyId of copyIds) {
+        const copy = draft.objects.find((o) => o.id === copyId);
+        if (!copy) continue;
+        if (copy.parentId) {
+          const remapped = oldToNew.get(copy.parentId);
+          if (remapped) copy.parentId = remapped;
+        }
+        for (const c of copy.constraints ?? []) {
+          if (c.targetId && oldToNew.has(c.targetId)) c.targetId = oldToNew.get(c.targetId)!;
+        }
+      }
     });
     set({ selection: copyIds });
+  },
+
+  setParent(childId, parentId, keep = "world") {
+    get().mutateDoc("set-parent", (draft) => {
+      createScriptTarget(draft).setParent(childId, parentId, keep);
+    });
+    // Selecting the moved object keeps the outliner stable while rows reorder.
+    set({ selection: [childId] });
+  },
+
+  addConstraint(objectId, c) {
+    let createdId = "";
+    get().mutateDoc("add-constraint", (draft) => {
+      createdId = createScriptTarget(draft).addConstraint(objectId, c);
+    });
+    return createdId;
+  },
+
+  updateConstraint(objectId, id, patch, setInverse) {
+    get().mutateDoc("update-constraint", (draft) => {
+      createScriptTarget(draft).updateConstraint(objectId, id, patch, setInverse);
+    });
+  },
+
+  removeConstraint(objectId, id) {
+    get().mutateDoc("remove-constraint", (draft) => {
+      createScriptTarget(draft).removeConstraint(objectId, id);
+    });
   },
 
   // --- Outliner collections (Blender-style) ----------------------------------
@@ -839,12 +902,18 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
   },
 
   /** Blender "Delete" on a collection: unlink it; members stay in the scene
-   *  root (objects are NOT deleted). */
+   *  root (objects are NOT deleted). Instances OF the collection are deleted
+   *  with it — they would render nothing without their target. */
   deleteCollection(id) {
     get().mutateDoc("delete-collection", (draft) => {
+      const deadInstances = new Set(draft.objects.filter((o) => o.type === "instance" && o.instanceOf === id).map((o) => o.id));
       draft.collections = draft.collections.filter((c) => c.id !== id);
       for (const o of draft.objects) {
         if (o.collectionId === id) delete o.collectionId;
+      }
+      if (deadInstances.size) {
+        draft.objects = draft.objects.filter((o) => !deadInstances.has(o.id));
+        draft.actions = draft.actions.filter((a) => !(a.kind === "object" && deadInstances.has(a.objectId)));
       }
     });
   },
@@ -863,13 +932,17 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     });
   },
 
-  /** Show/hide every member of a collection (writes object.visible, which is
-   *  what the viewport and render evaluate). */
+  /** Show/hide a collection (Blender view-layer exclusion): flips the
+   *  collection's `hidden` flag — hidden collections render none of their
+   *  objects directly, but INSTANCES of the collection still render them.
+   *  (Per-object eye toggles keep writing object.visible, which instances
+   *  also respect.) */
   setCollectionVisible(id, visible) {
     get().mutateDoc("collection-visibility", (draft) => {
-      for (const o of draft.objects) {
-        if (o.collectionId === id) o.visible = visible;
-      }
+      const col = draft.collections.find((c) => c.id === id);
+      if (!col) return;
+      if (visible) delete col.hidden;
+      else col.hidden = true;
     });
   },
 
