@@ -23,7 +23,7 @@ import {
   saveCurrentSessionId,
   type ChatSessionRecord,
 } from "../state/chatPersist";
-import { streamChatCompletion, userContent } from "./llmClient";
+import { LlmError, streamChatCompletion, userContent, type StreamResult } from "./llmClient";
 import { referencesBlock } from "./mentions";
 import { sandbox } from "./sandbox";
 import { runTool, type ToolContext, type ToolResult } from "./tools";
@@ -376,6 +376,45 @@ function prettify(argsJson: string): string {
 
 // --- real provider turn -------------------------------------------------------------
 
+// --- model-request retry policy -----------------------------------------------------
+//
+// A dropped connection mid-step is retried a couple of times before the turn
+// fails. Re-issuing the identical request is safe: the wire log only gains
+// entries AFTER a successful response (assistant message, tool replies), so
+// a failed request leaves no partial state in the provider history.
+
+const STREAM_MAX_ATTEMPTS = 3;
+
+/** Worth re-issuing: the request never reached the model (fetch failure) or
+ *  died mid-stream, or the provider asked us to back off (408/429/5xx).
+ *  Auth / bad-request / quota-exhausted errors fail fast. */
+function isRetryableLlmError(err: unknown): boolean {
+  if (!(err instanceof LlmError)) return false; // AbortError & everything else
+  if (err.status === undefined) return true;
+  return err.status === 408 || err.status === 429 || err.status >= 500;
+}
+
+/** Exponential backoff with jitter: ~0.8s, ~1.6s, … */
+function retryDelayMs(attempt: number): number {
+  const base = 800 * 2 ** (attempt - 1);
+  return Math.round(base * (0.75 + Math.random() * 0.5));
+}
+
+function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(new DOMException("aborted", "AbortError"));
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException("aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", onAbort);
+  });
+}
+
 async function runRealTurn(
   taskId: string,
   rt: TaskRuntime,
@@ -406,24 +445,43 @@ async function runRealTurn(
       if (reasoningPushed) useStore.getState().taskPatch(taskId, reasoningEventId, { text: streamedReasoning } as never);
     };
 
-    const result = await streamChatCompletion({
-      settings: useStore.getState().settings,
-      model,
-      messages: [{ role: "system", content: systemPrompt() }, ...rt.wireLog],
-      tools,
-      signal,
-      onDelta: (d) => {
-        if (d.reasoning) {
-          if (!reasoningPushed) {
-            reasoningPushed = true;
-            useStore.getState().taskPush(taskId, { id: reasoningEventId, type: "reasoning", text: "" });
-          }
-          streamedReasoning += d.reasoning;
+    const result = await (async (): Promise<StreamResult> => {
+      for (let attempt = 1; ; attempt++) {
+        try {
+          return await streamChatCompletion({
+            settings: useStore.getState().settings,
+            model,
+            messages: [{ role: "system", content: systemPrompt() }, ...rt.wireLog],
+            tools,
+            signal,
+            onDelta: (d) => {
+              if (d.reasoning) {
+                if (!reasoningPushed) {
+                  reasoningPushed = true;
+                  useStore.getState().taskPush(taskId, { id: reasoningEventId, type: "reasoning", text: "" });
+                }
+                streamedReasoning += d.reasoning;
+              }
+              if (d.content) streamedText += d.content;
+              flush();
+            },
+          });
+        } catch (err) {
+          if (signal.aborted || attempt >= STREAM_MAX_ATTEMPTS || !isRetryableLlmError(err)) throw err;
+          useStore.getState().taskPush(taskId, {
+            id: newId("e"),
+            type: "notice",
+            text: t("chat.retrying", { n: attempt + 1, max: STREAM_MAX_ATTEMPTS }),
+          });
+          await sleepWithAbort(retryDelayMs(attempt), signal);
+          // The retried attempt starts its answer from scratch — reset the
+          // streamed buffers so the transcript shows only what succeeded.
+          streamedText = "";
+          streamedReasoning = "";
+          flush(true);
         }
-        if (d.content) streamedText += d.content;
-        flush();
-      },
-    });
+      }
+    })();
     flush(true);
 
     if (!result.toolCalls.length) {
