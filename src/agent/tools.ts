@@ -311,6 +311,8 @@ export function buildTools(): AgentTool[] {
             case "delete":
               target.removeConstraint(objectId, args.id as string);
               break;
+            default:
+              throw new Error(`Unknown op "${op}" — use add, update, setKeys, setInverse or delete`);
           }
         });
         if (result.isError) return result;

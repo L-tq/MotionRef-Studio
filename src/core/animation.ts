@@ -316,10 +316,11 @@ function runHooks(state: EvaluatedState, doc: SceneDocument, t: number): HookErr
     const api: FrameApi = {
       get: () => state,
       find: (name) => {
+        // Exact matches win over partial ones, regardless of doc order —
+        // otherwise an early "arm" would shadow a later object named "a".
+        for (const obj of doc.objects) if (obj.name === name) return obj.id;
         const lower = name.toLowerCase();
-        for (const obj of doc.objects) {
-          if (obj.name === name || obj.name.toLowerCase().includes(lower)) return obj.id;
-        }
+        for (const obj of doc.objects) if (obj.name.toLowerCase().includes(lower)) return obj.id;
         return null;
       },
       update: (id, patch) => {
@@ -549,6 +550,7 @@ function solveHierarchy(state: EvaluatedState, doc: SceneDocument, t: number): v
   const worldMats = state.worldMats;
   const constrained = state.constrained;
   const mark = (id: string, chans: Array<"position" | "rotation" | "scale">) => {
+    if (!chans.length) return; // map presence means channels are owned
     let set = constrained.get(id);
     if (!set) constrained.set(id, (set = new Set()));
     for (const ch of chans) set.add(ch);
@@ -565,26 +567,30 @@ function solveHierarchy(state: EvaluatedState, doc: SceneDocument, t: number): v
   }
 
   // Constraint pass (topo order): each object reads its parent's FINAL matrix
-  // and its targets' current (final-or-provisional) matrices.
+  // and its targets' current (final-or-provisional) matrices. Every object
+  // recomposes at the end of its visit — not just constraint owners — so
+  // children of a constrained parent inherit the constrained pose.
   for (const obj of order) {
     const ev = state.objects.get(obj.id);
     if (!ev) continue;
     const parentWorld = obj.parentId ? worldMats.get(obj.parentId) : undefined;
-
-    if (obj.constraints?.some((c) => c.enabled !== false)) {
-      for (const c of obj.constraints ?? []) {
-        if (c.enabled === false) continue;
-        applyConstraint(c, ev, parentWorld ?? matIdentity(), worldMats.get(obj.id)!, { state, doc, t, worldMats });
-        mark(obj.id, constraintChannels(c));
-      }
-      // Recompose after the stack so descendants and the stored world matrix
-      // reflect the constrained pose.
+    const recompose = () => {
       const localMat = matFromTRS(ev.position, ev.rotation, ev.scale);
       const world = parentWorld ? matMultiply(parentWorld, localMat) : localMat;
       worldMats.set(obj.id, world);
+      return world;
+    };
+
+    for (const c of obj.constraints ?? []) {
+      if (c.enabled === false) continue;
+      // myWorld refreshes after each entry so later stack constraints see the
+      // pose the earlier ones produced (Blender stack semantics).
+      applyConstraint(c, ev, parentWorld ?? matIdentity(), worldMats.get(obj.id)!, { state, doc, t, worldMats });
+      mark(obj.id, constraintChannels(c));
+      recompose();
     }
 
-    const world = worldMats.get(obj.id)!;
+    const world = recompose();
     if (parentWorld) {
       const d = matDecompose(world);
       ev.world = { position: d.position, rotation: d.rotation, scale: d.scale };

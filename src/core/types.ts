@@ -195,6 +195,10 @@ export function constraintChannels(c: ConstraintDesc): Array<"position" | "rotat
       return ["scale"];
     case "transformation":
       return [(p.to?.split(".")[0] ?? "position") as "position" | "rotation" | "scale"];
+    default:
+      // Unknown type (possible in unvalidated docs): owns nothing — evaluate
+      // must never crash on a constraint it doesn't recognize.
+      return [];
   }
 }
 

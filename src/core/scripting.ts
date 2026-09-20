@@ -8,7 +8,7 @@
  *   - overlay: created by animation.ts FrameApi during evaluation instead.
  */
 import type { ActionOwner, CameraState, ConstraintDesc, ConstraintKey, ConstraintParams, ConstraintType, GeometryType, KeyVec3, SceneDocument, TransformKey, Vec3 } from "./types";
-import { CONSTRAINT_TYPES, activeActionOfOwner, activeCameraOf, defaultActionName, defaultCollectionName, defaultMarkerName, isDescendantOf, isGeometryType, newId, specOf, type ActionDesc, type CameraActionDesc, type ObjectActionDesc } from "./types";
+import { CONSTRAINT_NEEDS_TARGET, CONSTRAINT_TYPES, activeActionOfOwner, activeCameraOf, defaultActionName, defaultCollectionName, defaultMarkerName, isDescendantOf, isGeometryType, newId, specOf, type ActionDesc, type CameraActionDesc, type ObjectActionDesc } from "./types";
 import { baseWorldOf, matDecompose, matFromTRS, matInvert, matMultiply } from "./xform";
 
 export interface ScriptTarget {
@@ -623,6 +623,7 @@ export function createScriptTarget(doc: SceneDocument): ScriptTarget {
       }
     },
     setParent(childId, parentId, keep = "world") {
+      if (keep !== "world" && keep !== "local") throw new Error('keep must be "world" or "local"');
       const child = assertObj(childId);
       if (parentId === childId) throw new Error("An object cannot be its own parent");
       if (parentId) {
@@ -655,18 +656,25 @@ export function createScriptTarget(doc: SceneDocument): ScriptTarget {
       if (!CONSTRAINT_TYPES.includes(c.type)) {
         throw new Error(`Unknown constraint type "${String(c.type)}" — use one of ${CONSTRAINT_TYPES.join(", ")}`);
       }
+      if (CONSTRAINT_NEEDS_TARGET.includes(c.type) && !c.targetId) {
+        throw new Error(`${c.type} constraints need a targetId (the object to follow)`);
+      }
       if (c.targetId !== undefined && !doc.objects.some((o) => o.id === c.targetId)) {
         throw new Error(`targetId: no object with id "${String(c.targetId)}"`);
       }
       if ((obj.constraints?.length ?? 0) >= MAX_CONSTRAINTS) {
         throw new Error(`Object "${obj.name}" already has ${MAX_CONSTRAINTS} constraints (max)`);
       }
+      if (c.influence !== undefined && (typeof c.influence !== "number" || !Number.isFinite(c.influence))) {
+        throw new Error("influence must be a number in [0, 1]");
+      }
       const created: ConstraintDesc = {
         id: newId("cst"),
         type: c.type,
         name: c.name,
         enabled: true,
-        influence: c.influence ?? 1,
+        // Out-of-range values clamp, matching updateConstraint + validator.
+        influence: c.influence === undefined ? 1 : Math.min(1, Math.max(0, c.influence)),
         targetId: c.targetId,
         params: { ...(c.params ?? {}) },
       };
@@ -680,7 +688,12 @@ export function createScriptTarget(doc: SceneDocument): ScriptTarget {
       const c = assertConstraint(objectId, id);
       if (patch.name !== undefined) c.name = String(patch.name);
       if (patch.enabled !== undefined) c.enabled = !!patch.enabled;
-      if (patch.influence !== undefined) c.influence = Math.min(1, Math.max(0, patch.influence));
+      if (patch.influence !== undefined) {
+        if (typeof patch.influence !== "number" || !Number.isFinite(patch.influence)) {
+          throw new Error("influence must be a number in [0, 1]");
+        }
+        c.influence = Math.min(1, Math.max(0, patch.influence));
+      }
       if (patch.targetId !== undefined) {
         if (!doc.objects.some((o) => o.id === patch.targetId)) {
           throw new Error(`targetId: no object with id "${patch.targetId}"`);
@@ -698,10 +711,11 @@ export function createScriptTarget(doc: SceneDocument): ScriptTarget {
       const c = assertConstraint(objectId, id);
       if (keys.length > 256) throw new Error("A constraint can hold at most 256 keys");
       const clean = keys
-        .filter((k) => typeof k.t === "number" && Number.isFinite(k.t) && k.t >= 0)
+        .filter((k) => k && typeof k === "object" && typeof k.t === "number" && Number.isFinite(k.t) && k.t >= 0)
         .map((k) => ({
           t: k.t,
-          influence: typeof k.influence === "number" ? Math.min(1, Math.max(0, k.influence)) : undefined,
+          influence:
+            typeof k.influence === "number" && Number.isFinite(k.influence) ? Math.min(1, Math.max(0, k.influence)) : undefined,
           u: typeof k.u === "number" && Number.isFinite(k.u) ? k.u : undefined,
           interp: k.interp ?? "linear",
         }))

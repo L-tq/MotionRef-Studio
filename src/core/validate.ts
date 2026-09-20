@@ -348,10 +348,11 @@ export function validateSceneDocument(input: unknown): { doc: SceneDocument } | 
   const collectionIds = new Set(collections.map((c) => c.id));
 
   // Objects
-  if (raw.objects !== undefined) {
+    if (raw.objects !== undefined) {
     if (!Array.isArray(raw.objects)) return { error: "objects must be an array" };
     if (raw.objects.length > 2000) return { error: "too many objects (max 2000)" };
     const seen = new Set<string>();
+    const seenConstraintIds = new Set<string>();
     for (const [i, o] of raw.objects.entries()) {
       if (!o || typeof o !== "object") return { error: `objects[${i}] must be an object` };
       const obj = o as Record<string, unknown>;
@@ -398,6 +399,10 @@ export function validateSceneDocument(input: unknown): { doc: SceneDocument } | 
         for (const [j, c] of obj.constraints.entries()) {
           const cleaned = cleanConstraint(c, `objects[${i}].constraints[${j}]`);
           if (typeof cleaned === "string") return { error: cleaned };
+          // Constraint ids must stay unique (like every other entity): a
+          // duplicate would make update/remove address only the first match.
+          if (seenConstraintIds.has(cleaned.id)) cleaned.id = newId("cst");
+          seenConstraintIds.add(cleaned.id);
           constraints.push(cleaned);
         }
         if (constraints.length) od.constraints = constraints;
@@ -415,12 +420,15 @@ export function validateSceneDocument(input: unknown): { doc: SceneDocument } | 
   //    depth <= 64, else the object is re-rooted;
   //  - constraints whose target object is gone are dropped silently, like
   //    orphan actions.
-  const instanceTargetsValid = (inst: ObjectDesc): boolean => {
-    if (!inst.instanceOf || !collectionIds.has(inst.instanceOf)) return false;
-    // Recursive instancing is not supported: the instanced collection must
-    // not contain instance objects.
-    return !doc.objects.some((m) => m.type === "instance" && m.collectionId === inst.instanceOf);
-  };
+  // Decided against the ORIGINAL object list so the outcome never depends on
+  // doc order (the splice loop below must not see its own partial results).
+  const colsWithInstanceMember = new Set(
+    doc.objects.filter((m) => m.type === "instance" && m.collectionId).map((m) => m.collectionId as string),
+  );
+  const instanceTargetsValid = (inst: ObjectDesc): boolean =>
+    !!inst.instanceOf &&
+    collectionIds.has(inst.instanceOf) &&
+    !colsWithInstanceMember.has(inst.instanceOf);
   for (let i = doc.objects.length - 1; i >= 0; i--) {
     if (doc.objects[i].type === "instance" && !instanceTargetsValid(doc.objects[i])) doc.objects.splice(i, 1);
   }

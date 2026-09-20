@@ -12,6 +12,8 @@
     "studio:serve": "tsx server/index.ts",
     "studio:dev": "concurrently -n vite,studio -c blue,green \"vite\" \"tsx server/index.ts\"",
     "mcp": "tsx server/mcpStdio.ts",
+    "test": "tsx smoke/markers.test.mjs && tsx smoke/mentions.test.mjs && tsx smoke/hierarchy.test.mjs && tsx smoke/hierarchy-edge.test.mjs && tsx smoke/agent-tools.test.mjs",
+    "test:server": "tsx smoke/server.test.mts",
     "typecheck:server": "tsc -p tsconfig.server.json --noEmit"
   },
   "dependencies": {
