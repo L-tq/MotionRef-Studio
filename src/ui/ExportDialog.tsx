@@ -1,8 +1,8 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Clapperboard } from "lucide-react";
 import { useStore } from "../state/store";
 import { useT } from "../i18n";
-import { downloadBlob, exportVideo, pickVideoMime, validateDocForExport } from "../core/videoExport";
+import { downloadBlob, exportVideo, pickVideoMime, probeWebCodecsExport, validateDocForExport } from "../core/videoExport";
 import { aspectDims, aspectLabel } from "../core/cameraMath";
 import { docAspect } from "../core/types";
 
@@ -30,23 +30,40 @@ export function ExportDialog() {
   const [presetIdx, setPresetIdx] = useState(SCENE_IDX);
   const [fps, setFps] = useState(doc.fps);
   const [running, setRunning] = useState(false);
-  const [progress, setProgress] = useState<{ frame: number; total: number } | null>(null);
+  const [progress, setProgress] = useState<{ frame: number; total: number; etaSec: number | null } | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const exportStartRef = useRef(0);
 
   const picked = pickVideoMime();
   const preset = ALL_PRESETS[presetIdx] ?? SCENE_PRESET;
 
+  // Export runs through frame-exact WebCodecs (always .mp4) when the browser
+  // can encode H.264 at the chosen size/rate; MediaRecorder is the fallback.
+  const [webCodecsCodec, setWebCodecsCodec] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    probeWebCodecsExport(preset.w, preset.h, fps).then((codec) => {
+      if (alive) setWebCodecsCodec(codec);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [preset.w, preset.h, fps]);
+  const canExport = !!webCodecsCodec || !!picked;
+  const formatLabel = webCodecsCodec ? ".mp4" : picked ? `.${picked.ext}` : "—";
+
   const start = async () => {
-    if (!picked) return;
-    const warn = validateDocForExport(doc);
+    if (!canExport) return;
+    const warn = validateDocForExport(doc, fps);
     if (warn) {
       setWarning(warn);
       return;
     }
     setRunning(true);
     setWarning(null);
-    setProgress({ frame: 0, total: Math.round(doc.duration * fps) });
+    setProgress({ frame: 0, total: Math.round(doc.duration * fps), etaSec: null });
+    exportStartRef.current = performance.now();
     const controller = new AbortController();
     abortRef.current = controller;
     try {
@@ -55,7 +72,18 @@ export function ExportDialog() {
         height: preset.h,
         fps,
         signal: controller.signal,
-        onProgress: (frame, total) => setProgress({ frame, total }),
+        onProgress: (frame, total) => {
+          // Linear ETA from committed-frame throughput; shown once the rate
+          // estimate has a few samples to stand on.
+          const elapsedSec = (performance.now() - exportStartRef.current) / 1000;
+          const etaSec =
+            frame >= 3 && frame < total
+              ? Math.max(1, Math.round((elapsedSec / frame) * (total - frame)))
+              : frame >= total
+                ? 0
+                : null;
+          setProgress({ frame, total, etaSec });
+        },
       });
       const safeName = (doc.name || "animation").replace(/[^\w\u4e00-\u9fa5-]+/g, "_");
       downloadBlob(result.blob, `${safeName}.${result.ext}`);
@@ -110,11 +138,11 @@ export function ExportDialog() {
             </div>
             <div className="field">
               <label>{t("export.format")}</label>
-              <input type="text" value={picked ? `.${picked.ext}` : "—"} disabled />
+              <input type="text" value={formatLabel} disabled />
               <span className="hint">{t("export.formatAuto")}</span>
             </div>
           </div>
-          {!picked && <div className="msg error-banner">{t("export.noRecorder")}</div>}
+          {!canExport && <div className="msg error-banner">{t("export.noRecorder")}</div>}
           {warning && <div className="msg error-banner">{t("export.warning", { msg: warning })}</div>}
           {progress && (
             <div className="field">
@@ -124,7 +152,8 @@ export function ExportDialog() {
               <span className="hint">
                 {progress.frame >= progress.total
                   ? t("export.processing")
-                  : t("export.progress", { frame: progress.frame, total: progress.total })}
+                  : t("export.progress", { frame: progress.frame, total: progress.total }) +
+                    (progress.etaSec ? ` · ${t("export.eta", { sec: progress.etaSec })}` : "")}
               </span>
             </div>
           )}
@@ -139,7 +168,7 @@ export function ExportDialog() {
               <button className="btn" onClick={() => setUi("exportOpen", false)}>
                 {t("common.close")}
               </button>
-              <button className="btn primary" onClick={() => void start()} disabled={!picked}>
+              <button className="btn primary" onClick={() => void start()} disabled={!canExport}>
                 {t("export.start")}
               </button>
             </>

@@ -215,11 +215,12 @@ export const en: Record<string, string> = {
   "export.format": "Format",
   "export.formatAuto": "MP4 if supported, else WebM",
   "export.start": "Start export",
-  "export.progress": "Rendering frame {frame} / {total}…",
+  "export.progress": "Exporting frame {frame} / {total}…",
+  "export.eta": "~{sec}s left",
   "export.processing": "Encoding…",
   "export.done": "Video downloaded ({ext}, {frames} frames).",
   "export.aborted": "Export cancelled.",
-  "export.noRecorder": "This browser cannot record video (MediaRecorder unavailable).",
+  "export.noRecorder": "This browser cannot export video (no WebCodecs encoder and no MediaRecorder).",
   "export.warning": "Warning: {msg}",
 
   // Chat / agent

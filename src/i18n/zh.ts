@@ -215,11 +215,12 @@ export const zh: Record<string, string> = {
   "export.format": "格式",
   "export.formatAuto": "优先 MP4，不支持时使用 WebM",
   "export.start": "开始导出",
-  "export.progress": "正在渲染第 {frame} / {total} 帧…",
+  "export.progress": "正在导出第 {frame} / {total} 帧…",
+  "export.eta": "剩余约 {sec} 秒",
   "export.processing": "编码中…",
   "export.done": "视频已下载（{ext}，{frames} 帧）。",
   "export.aborted": "已取消导出。",
-  "export.noRecorder": "当前浏览器不支持视频录制（无 MediaRecorder）。",
+  "export.noRecorder": "当前浏览器不支持视频导出（无 WebCodecs 编码器，也无 MediaRecorder）。",
   "export.warning": "警告：{msg}",
 
   // Chat / agent
